@@ -1,15 +1,11 @@
-/// fff - A minimal file manager in Rust
+/// ff - A minimal file manager in Rust
 /// Main entry point for the file manager application
 
-/*
-fff is a minimal rust file manager
+/* Docs:
 
-
-like UMA or im
-
+ff is a minimal rust file manager
 
 A very minimal 'file manager', much more minimal than midnight commander.
-
 
 # Scope:
 1. no third party dependencies
@@ -53,8 +49,6 @@ with a known number of lines for offset and range for scrolling
 - select directory by number, that becomes next: like cd /dir
 - select file by number
 
-
-
 Size:
 - show file size in terms of b kb mb or gb depending on
 if the size is no more than 99 of that unit
@@ -73,7 +67,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::io::{self, Write};
 use std::collections::HashMap;
-
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 /// Formats a timestamp into a human-readable format
