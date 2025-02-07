@@ -192,22 +192,6 @@ fn format_file_size(size_in_bytes: u64) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_file_size() {
-        assert_eq!(format_file_size(0), "0 B");
-        assert_eq!(format_file_size(100), "100 B");
-        assert_eq!(format_file_size(1024), "1.0 KB");
-        assert_eq!(format_file_size(1536), "1.5 KB");
-        assert_eq!(format_file_size(10240), "10 KB");
-        assert_eq!(format_file_size(1048576), "1.0 MB");
-        assert_eq!(format_file_size(1073741824), "1.0 GB");
-    }
-}
-
 /// Represents possible navigation actions based on user input
 #[derive(Debug)]
 enum NavigationAction {
@@ -462,6 +446,17 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<F
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_format_file_size() {
+        assert_eq!(format_file_size(0), "0 B");
+        assert_eq!(format_file_size(100), "100 B");
+        assert_eq!(format_file_size(1024), "1.0 KB");
+        assert_eq!(format_file_size(1536), "1.5 KB");
+        assert_eq!(format_file_size(10240), "10 KB");
+        assert_eq!(format_file_size(1048576), "1.0 MB");
+        assert_eq!(format_file_size(1073741824), "1.0 GB");
+    }
+    
     #[test]
     fn test_format_timestamp() {
         let now = SystemTime::now();
