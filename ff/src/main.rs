@@ -143,7 +143,6 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
     (year, month, day)
 }
 
-
 /// Formats file size into human readable format
 /// 
 /// # Arguments
@@ -260,7 +259,6 @@ enum FileSystemItemType {
     Directory,
     File,
 }
-
 
 /// Represents a displayed item's information for lookup purposes
 #[derive(Debug)]
@@ -561,6 +559,44 @@ fn display_directory_contents(
     Ok(())
 }
 
+/// Opens a file using the system's default program
+/// 
+/// # Arguments
+/// * `file_path` - PathBuf of the file to open
+/// 
+/// # Returns
+/// * `io::Result<()>` - Success: () unit type
+///                      Error: IO error with description
+/// 
+/// # Platform-specific Implementation
+/// - Uses 'open' on macOS
+/// - Uses 'xdg-open' on Linux
+/// - Uses 'start' on Windows
+fn open_file(file_path: &PathBuf) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(file_path)
+            .spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(file_path)
+            .spawn()?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(file_path)
+            .spawn()?;
+    }
+    
+    Ok(())
+}
+
+
 // TODO update
 // /// Main entry point for the fff (minimal file manager) application
 // /// 
@@ -599,7 +635,6 @@ fn main() -> io::Result<()> {
         let mut user_input = String::new();
         io::stdin().read_line(&mut user_input)?;
 
-        // Process the input
         match process_user_input(&user_input, &nav_state)? {
             NavigationAction::ChangeDirectory(new_path) => {
                 current_directory_path = new_path;
@@ -609,10 +644,17 @@ fn main() -> io::Result<()> {
                     current_directory_path = parent.to_path_buf();
                 }
             }
-            NavigationAction::OpenFile(_path) => {
-                // TODO: Implement file opening in future step
-                println!("File opening not yet implemented");
-                let _ = io::stdin().read_line(&mut String::new());
+            NavigationAction::OpenFile(ref path) => {  // Note the 'ref' keyword here
+                match open_file(path) {
+                    Ok(_) => {
+                        println!("Opening file... Press Enter to continue");
+                        let _ = io::stdin().read_line(&mut String::new());
+                    }
+                    Err(e) => {
+                        println!("Error opening file: {}. Press Enter to continue", e);
+                        let _ = io::stdin().read_line(&mut String::new());
+                    }
+                }
             }
             NavigationAction::Quit => break,
             NavigationAction::Refresh => continue,
@@ -621,6 +663,29 @@ fn main() -> io::Result<()> {
                 let _ = io::stdin().read_line(&mut String::new());
             }
         }
+        
+        // // Process the input
+        // match process_user_input(&user_input, &nav_state)? {
+        //     NavigationAction::ChangeDirectory(new_path) => {
+        //         current_directory_path = new_path;
+        //     }
+        //     NavigationAction::ParentDirectory => {
+        //         if let Some(parent) = current_directory_path.parent() {
+        //             current_directory_path = parent.to_path_buf();
+        //         }
+        //     }
+        //     NavigationAction::OpenFile(_path) => {
+        //         // TODO: Implement file opening in future step
+        //         println!("File opening not yet implemented");
+        //         let _ = io::stdin().read_line(&mut String::new());
+        //     }
+        //     NavigationAction::Quit => break,
+        //     NavigationAction::Refresh => continue,
+        //     NavigationAction::Invalid => {
+        //         println!("Invalid input. Press Enter to continue...");
+        //         let _ = io::stdin().read_line(&mut String::new());
+        //     }
+        // }
     }
 
     Ok(())
