@@ -2,10 +2,10 @@
 /// Main entry point for the file manager application
 
 /* Docs:
-
 ff is a minimal rust file manager
 
-A very minimal 'file manager', much more minimal than midnight commander.
+
+A very minimal 'file manager', much more minimal than "midnight commander." 
 
 # Scope:
 1. no third party dependencies
@@ -15,7 +15,6 @@ A very minimal 'file manager', much more minimal than midnight commander.
 5. no unsafe code
 6. all errors to be handled
 7. terminal cli application
-
 
 # Main functions/features:
 1. (very) minimal text user interface
@@ -30,10 +29,15 @@ A very minimal 'file manager', much more minimal than midnight commander.
 7. use config.toml to store 'open a file by type' preference lists (e.g. which editor to use for a .txt file, .csv file)
 8. default to default program with another return/enter
 9. open file in new terminal
-10. last three items in numbered list are 'sort by size' ' 'sort by name' 'sort by last-modified'
-11. re-selecting a sort option reverses the order
-12. MVP: type 'r' to refresh (in future, check for changes and refresh if user not typing)
-13. 'q' for quit
+10. MVP: type 'r' to refresh (in future, check for changes and refresh if user not typing)
+11. single letter commands
+12. legend shows command 'words': use first letter 
+(q)uit (b)ack|term|files dirs|name size date|up down|wide narrow
+13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
+14. 'f' or 'd' to show only files or only directories
+
+?
+Open new terminal in cwd??
 
 # Scrolling
 1. MVP: a default terminal size will be the mvp,
@@ -49,17 +53,29 @@ with a known number of lines for offset and range for scrolling
 - select directory by number, that becomes next: like cd /dir
 - select file by number
 
-Size:
+## List-item Size:
 - show file size in terms of b kb mb or gb depending on
 if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
-## lookup table:
+## TUI Size:
+- 
+
+## directory contents lookup-table:
 - there should be a lookup table depending on how the cwd items are being displayed 
 - then advance to next directory could use that maybe
 - lookup table should be in navigation struct
 - this  may need to also include item-type, e.g. file or directory,
 when item is selected by number, the various fields (if only path and type) can be found, type can determine how to handle, e.g. go to directory path or file: handle open file
+- 
+
+quit back files dirs name size date up dwn wide narrow
+
+(future items, after mvp)
+
+#search:
+typing more than a single letter starts a search for an item name...
+
 - 
 */
 
@@ -143,6 +159,112 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
     (year, month, day)
 }
 
+/// Updated sort_directory_entries function
+fn sort_directory_entries(
+    entries: &mut Vec<FileSystemEntry>,
+    sort_method: DirectorySortingMethodEnum,
+) {
+    match sort_method {
+        DirectorySortingMethodEnum::Name(ascending) => {
+            entries.sort_by(|a, b| {
+                // Directories always first
+                match (a.is_directory, b.is_directory) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => {
+                        let cmp = a.file_system_item_name.cmp(&b.file_system_item_name);
+                        if ascending { cmp } else { cmp.reverse() }
+                    }
+                }
+            });
+        },
+        DirectorySortingMethodEnum::Size(ascending) => {
+            entries.sort_by(|a, b| {
+                match (a.is_directory, b.is_directory) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => {
+                        let cmp = a.file_system_item_size_in_bytes.cmp(&b.file_system_item_size_in_bytes);
+                        if ascending { cmp } else { cmp.reverse() }
+                    }
+                }
+            });
+        },
+        DirectorySortingMethodEnum::Modified(ascending) => {
+            entries.sort_by(|a, b| {
+                match (a.is_directory, b.is_directory) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => {
+                        let cmp = a.file_system_item_last_modified_time.cmp(&b.file_system_item_last_modified_time);
+                        if ascending { cmp } else { cmp.reverse() }
+                    }
+                }
+            });
+        },
+    }
+}
+
+/// Processes user input and returns the corresponding NavigationAction
+/// 
+/// # Arguments
+/// * `input` - The user's input string
+/// * `nav_state` - Current navigation state containing lookup table
+/// 
+/// # Returns
+/// * `io::Result<NavigationAction>` - The determined action to take
+fn process_user_input(
+    input: &str,
+    nav_state: &NavigationState,
+) -> io::Result<NavigationAction> {
+    match input.trim().to_lowercase().as_str() {
+        "q" => Ok(NavigationAction::Quit),
+        "b" => Ok(NavigationAction::ParentDirectory),
+        "" => Ok(NavigationAction::Refresh),
+        "n" | "s" | "m" => Ok(NavigationAction::Sort(input.chars().next().unwrap())),
+        input => {
+            // Existing number parsing logic...
+            match input.parse::<usize>() {
+                Ok(number) => {
+                    match nav_state.lookup_item(number) {
+                        Some(item_info) => {
+                            match item_info.item_type {
+                                FileSystemItemType::Directory => {
+                                    Ok(NavigationAction::ChangeDirectory(item_info.item_path.clone()))
+                                }
+                                FileSystemItemType::File => {
+                                    Ok(NavigationAction::OpenFile(item_info.item_path.clone()))
+                                }
+                            }
+                        }
+                        None => Ok(NavigationAction::Invalid)
+                    }
+                }
+                Err(_) => Ok(NavigationAction::Invalid)
+            }
+        }
+    }
+}
+
+/// Represents possible navigation actions based on user input
+#[derive(Debug)]
+enum NavigationAction {
+    /// Change to specified directory
+    ChangeDirectory(PathBuf),
+    /// Move back to parent directory
+    ParentDirectory,
+    /// Open specified file
+    OpenFile(PathBuf),
+    /// Quit the application
+    Quit,
+    /// Invalid or unrecognized input
+    Invalid,
+    /// Refresh current display
+    Refresh,
+    /// todo
+    Sort(char),
+}
+
 /// Formats file size into human readable format
 /// 
 /// # Arguments
@@ -191,68 +313,7 @@ fn format_file_size(size_in_bytes: u64) -> String {
     }
 }
 
-/// Represents possible navigation actions based on user input
-#[derive(Debug)]
-enum NavigationAction {
-    /// Change to specified directory
-    ChangeDirectory(PathBuf),
-    /// Move back to parent directory
-    ParentDirectory,
-    /// Open specified file
-    OpenFile(PathBuf),
-    /// Quit the application
-    Quit,
-    /// Invalid or unrecognized input
-    Invalid,
-    /// Refresh current display
-    Refresh,
-}
-
-/// Processes user input and returns the corresponding NavigationAction
-/// 
-/// # Arguments
-/// * `input` - The user's input string
-/// * `nav_state` - Current navigation state containing lookup table
-/// 
-/// # Returns
-/// * `io::Result<NavigationAction>` - The determined action to take
-fn process_user_input(
-    input: &str,
-    nav_state: &NavigationState,
-) -> io::Result<NavigationAction> {
-    match input.trim().to_lowercase().as_str() {
-        "q" => Ok(NavigationAction::Quit),
-        "b" => Ok(NavigationAction::ParentDirectory),
-        "" => Ok(NavigationAction::Refresh),
-        input => {
-            // Try to parse input as a number
-            match input.parse::<usize>() {
-                Ok(number) => {
-                    // Look up the selected item
-                    match nav_state.lookup_item(number) {
-                        Some(item_info) => {
-                            match item_info.item_type {
-                                FileSystemItemType::Directory => {
-                                    Ok(NavigationAction::ChangeDirectory(
-                                        item_info.item_path.clone()
-                                    ))
-                                }
-                                FileSystemItemType::File => {
-                                    Ok(NavigationAction::OpenFile(
-                                        item_info.item_path.clone()
-                                    ))
-                                }
-                            }
-                        }
-                        None => Ok(NavigationAction::Invalid)
-                    }
-                }
-                Err(_) => Ok(NavigationAction::Invalid)
-            }
-        }
-    }
-}
-
+// TODO doc string
 /// Represents an item's type in the file system
 #[derive(Debug, Clone, PartialEq)]
 enum FileSystemItemType {
@@ -260,6 +321,7 @@ enum FileSystemItemType {
     File,
 }
 
+// TODO doc string
 /// Represents a displayed item's information for lookup purposes
 #[derive(Debug)]
 struct DisplayedItemInfo {
@@ -300,6 +362,7 @@ struct FileSystemEntry {
     is_directory: bool,
 }
 
+// TODO doc string
 /// Represents the dimensions and navigation state of the terminal UI
 struct NavigationState {
     /// Height of terminal display area in rows
@@ -314,8 +377,11 @@ struct NavigationState {
     /// Key: displayed number (1-based index shown to user)
     /// Value: information about the item at that display position
     display_lookup_table: HashMap<usize, DisplayedItemInfo>,
+    current_sort_method: DirectorySortingMethodEnum,
+    last_sort_command: Option<char>,  // Tracks last sort command used
 }
 
+// TODO doc string
 impl NavigationState {
     /// Creates a new NavigationState with default terminal dimensions
     /// and empty lookup table
@@ -326,7 +392,51 @@ impl NavigationState {
             scroll_position: 0,
             available_display_rows: 20, // default visible rows
             display_lookup_table: HashMap::new(),
+            current_sort_method: DirectorySortingMethodEnum::Name(true),
+            last_sort_command: None,
         }
+    }
+
+
+    /// Toggle sort method based on input command
+    fn toggle_sort(&mut self, command: char) {
+        let new_sort_method = match command {
+            'n' => {
+                if self.last_sort_command == Some('n') {
+                    // If already sorting by name, toggle direction
+                    match self.current_sort_method {
+                        DirectorySortingMethodEnum::Name(ascending) => DirectorySortingMethodEnum::Name(!ascending),
+                        _ => DirectorySortingMethodEnum::Name(true),
+                    }
+                } else {
+                    DirectorySortingMethodEnum::Name(true)
+                }
+            },
+            's' => {
+                if self.last_sort_command == Some('s') {
+                    match self.current_sort_method {
+                        DirectorySortingMethodEnum::Size(ascending) => DirectorySortingMethodEnum::Size(!ascending),
+                        _ => DirectorySortingMethodEnum::Size(true),
+                    }
+                } else {
+                    DirectorySortingMethodEnum::Size(true)
+                }
+            },
+            'm' => {
+                if self.last_sort_command == Some('m') {
+                    match self.current_sort_method {
+                        DirectorySortingMethodEnum::Modified(ascending) => DirectorySortingMethodEnum::Modified(!ascending),
+                        _ => DirectorySortingMethodEnum::Modified(true),
+                    }
+                } else {
+                    DirectorySortingMethodEnum::Modified(true)
+                }
+            },
+            _ => return,
+        };
+
+        self.current_sort_method = new_sort_method;
+        self.last_sort_command = Some(command);
     }
 
     /// Updates the lookup table based on current directory contents
@@ -365,20 +475,16 @@ impl NavigationState {
     }
 }
 
-/// Specifies how directory contents should be sorted and in which direction
+// TODO doc string
+/// Simplified sort methods - just the three main types
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DirectorySortingMethodEnum {
-    /// Sort by file/directory name
-    NameAscending,
-    NameDescending,
-    /// Sort by file size (directories treated as size 0)
-    SizeAscending,
-    SizeDescending,
-    /// Sort by last modified timestamp
-    DateModifiedAscending,
-    DateModifiedDescending,
+    Name(bool),    // bool represents ascending (true) or descending (false)
+    Size(bool),
+    Modified(bool),
 }
 
+// TODO doc string
 /// Maintains current display information for the file manager
 struct DisplayState {
     /// Current directory being displayed
@@ -440,6 +546,7 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<F
     Ok(directory_entries_list)
 }
 
+// TODO doc string
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,7 +620,8 @@ fn display_directory_contents(
 ) -> io::Result<()> {
     print!("\x1B[2J\x1B[1;1H");
     println!(
-        "{}    #>go b>back q>quit\n",
+        // legens
+        "(q)uit (b)ack|term|files dirs|name size modified|up down|wide narrow\n{}\n",
         current_directory_path.display()
     );
 
@@ -596,46 +704,27 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
     Ok(())
 }
 
-
-// TODO update
-// /// Main entry point for the fff (minimal file manager) application
-// /// 
-// /// # Error Handling
-// /// - Handles directory access errors
-// /// - Handles display errors
-// /// - Handles input/output errors
-// /// 
-// /// # MVP Functionality
-// /// - Shows current directory contents
-// /// - Allows quitting with 'q'
-// /// - Handles basic error cases
-// /// 
-// /// # Future Functionality (not in MVP)
-// /// - Directory navigation
-// /// - File opening
-// /// - Sorting options
-
+// TODO doc string
 fn main() -> io::Result<()> {
     let mut current_directory_path = std::env::current_dir()?;
     let mut nav_state = NavigationState::new();
 
     loop {
-        // Read and process directory contents
-        let directory_entries = read_directory_contents(&current_directory_path)?;
-        
-        // Update the lookup table with current entries
+        let mut directory_entries = read_directory_contents(&current_directory_path)?;
+        sort_directory_entries(&mut directory_entries, nav_state.current_sort_method);
         nav_state.update_lookup_table(&directory_entries);
-        
-        // Display contents
         display_directory_contents(&directory_entries, &current_directory_path)?;
 
-        // Get user input
         print!("\n>> ");
         io::stdout().flush()?;
         let mut user_input = String::new();
         io::stdin().read_line(&mut user_input)?;
 
         match process_user_input(&user_input, &nav_state)? {
+            NavigationAction::Sort(command) => {
+                nav_state.toggle_sort(command);
+            },
+            // ... rest of the match arms remain the same ...
             NavigationAction::ChangeDirectory(new_path) => {
                 current_directory_path = new_path;
             }
@@ -644,7 +733,7 @@ fn main() -> io::Result<()> {
                     current_directory_path = parent.to_path_buf();
                 }
             }
-            NavigationAction::OpenFile(ref path) => {  // Note the 'ref' keyword here
+            NavigationAction::OpenFile(ref path) => {
                 match open_file(path) {
                     Ok(_) => {
                         println!("Opening file... Press Enter to continue");
@@ -663,29 +752,6 @@ fn main() -> io::Result<()> {
                 let _ = io::stdin().read_line(&mut String::new());
             }
         }
-        
-        // // Process the input
-        // match process_user_input(&user_input, &nav_state)? {
-        //     NavigationAction::ChangeDirectory(new_path) => {
-        //         current_directory_path = new_path;
-        //     }
-        //     NavigationAction::ParentDirectory => {
-        //         if let Some(parent) = current_directory_path.parent() {
-        //             current_directory_path = parent.to_path_buf();
-        //         }
-        //     }
-        //     NavigationAction::OpenFile(_path) => {
-        //         // TODO: Implement file opening in future step
-        //         println!("File opening not yet implemented");
-        //         let _ = io::stdin().read_line(&mut String::new());
-        //     }
-        //     NavigationAction::Quit => break,
-        //     NavigationAction::Refresh => continue,
-        //     NavigationAction::Invalid => {
-        //         println!("Invalid input. Press Enter to continue...");
-        //         let _ = io::stdin().read_line(&mut String::new());
-        //     }
-        // }
     }
 
     Ok(())
