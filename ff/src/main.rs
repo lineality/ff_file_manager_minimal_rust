@@ -58,8 +58,10 @@ with a known number of lines for offset and range for scrolling
 if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
-## TUI Size:
-- 
+### TUI Size:
+- or first MVP, set terminal size to actual default terminal size
+- for MVP...mouse to scroll up and down works fine for mvp
+- width should be fine too
 
 ## directory contents lookup-table:
 - there should be a lookup table depending on how the cwd items are being displayed 
@@ -73,8 +75,20 @@ quit back files dirs name size date up dwn wide narrow
 
 (future items, after mvp)
 
-#search:
+### search:
 typing more than a single letter starts a search for an item name...
+
+maybe scrolling but likely not needed
+
+### TUI Size:
+- or first MVP, set terminal size to actual default terminal size
+- start with standard terminal size
+- scroll / offset and range
+- optionally say how many rows off screen
+- use key commands to increase or decrease TUI display size
+- for MVP... only wide and narrow need to adjust... (mouse to scroll up and down works fine for mvp)
+- 
+
 
 - 
 */
@@ -618,18 +632,19 @@ fn display_directory_contents(
     directory_entries: &[FileSystemEntry],
     current_directory_path: &PathBuf,
 ) -> io::Result<()> {
+    // clear screen
     print!("\x1B[2J\x1B[1;1H");
     println!(
         // legens
-        "(q)uit (b)ack|term|files dirs|name size modified|up down|wide narrow\n{}\n",
+        "(q)uit back|terminal new|files dir|name size modified\n{}\n",
         current_directory_path.display()
     );
 
     println!(
-        "{:>4}  {:<30} {:>10} {:>12}",
+        "{:>4}  {:<40} {:>15} {:>15}",
         "Num", "Name", "Size", "Modified"
     );
-    println!("{}", "-".repeat(60));
+    println!(" {} ", "-".repeat(78));
 
     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
         let formatted_name = if directory_entry.is_directory {
@@ -654,7 +669,7 @@ fn display_directory_contents(
         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
 
         println!(
-            "{:>3}. {:<30} {:>10} {:>12}",
+            "{:>3}. {:<40} {:>15} {:>15}",
             entry_index + 1,
             display_name,
             size_display,
@@ -756,3 +771,4 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+
