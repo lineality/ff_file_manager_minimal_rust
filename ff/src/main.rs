@@ -219,6 +219,79 @@ fn sort_directory_entries(
     }
 }
 
+/// Opens a new terminal window at the specified directory
+/// 
+/// # Arguments
+/// * `directory_path` - PathBuf of the directory to open terminal in
+/// 
+/// # Returns
+/// * `io::Result<()>` - Success: () unit type
+///                      Error: IO error with description
+/// 
+/// # Platform-specific Implementation
+/// - Uses 'Terminal.app' on macOS
+/// - Uses 'gnome-terminal' or other terminals on Linux
+/// - Uses 'cmd.exe' on Windows
+/// Opens a new terminal window at the specified directory
+/// 
+/// # Arguments
+/// * `directory_path` - PathBuf of the directory to open terminal in
+/// 
+/// # Returns
+/// * `io::Result<()>` - Success: () unit type
+///                      Error: IO error with description
+fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(directory_path)
+            .spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try different terminal emulators in order of preference
+        let terminal_commands = [
+            ("gnome-terminal", vec!["--working-directory"]),
+            ("konsole", vec!["--workdir"]),
+            ("xfce4-terminal", vec!["--working-directory"]),
+            ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
+        ];
+
+        for (terminal, args) in terminal_commands.iter() {
+            let mut command = std::process::Command::new(terminal);
+            
+            if *terminal == "xterm" {
+                command.args(args)
+                    .arg(directory_path.to_string_lossy().to_string())
+                    .arg("&& bash");
+            } else {
+                command.args(args)
+                    .arg(directory_path);
+            }
+
+            match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(_) => continue,
+            }
+        }
+        
+        // Fixed error return with explicit type
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No supported terminal emulator found",
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "cmd.exe"])
+            .current_dir(directory_path)
+            .spawn()?;
+    }
+    
+    Ok(())
+}
 /// Processes user input and returns the corresponding NavigationAction
 /// 
 /// # Arguments
@@ -236,6 +309,8 @@ fn process_user_input(
         "b" => Ok(NavigationAction::ParentDirectory),
         "" => Ok(NavigationAction::Refresh),
         "n" | "s" | "m" => Ok(NavigationAction::Sort(input.chars().next().unwrap())),
+        "t" => Ok(NavigationAction::OpenNewTerminal),  
+        
         input => {
             // Existing number parsing logic...
             match input.parse::<usize>() {
@@ -277,6 +352,8 @@ enum NavigationAction {
     Refresh,
     /// todo
     Sort(char),
+    ///
+    OpenNewTerminal, 
 }
 
 /// Formats file size into human readable format
@@ -636,7 +713,7 @@ fn display_directory_contents(
     print!("\x1B[2J\x1B[1;1H");
     println!(
         // legens
-        "(q)uit back|terminal new|files dir|name size modified\n{}\n",
+        "(q)uit (b)ack|(t)erminal-new|(f)iles (d)ir|(n)ame (s)ize (m)odified\n{}\n",
         current_directory_path.display()
     );
 
@@ -739,6 +816,19 @@ fn main() -> io::Result<()> {
             NavigationAction::Sort(command) => {
                 nav_state.toggle_sort(command);
             },
+            NavigationAction::OpenNewTerminal => {
+                match open_new_terminal(&current_directory_path) {
+                    Ok(_) => {
+                        println!("Opening new terminal... Press Enter to continue");
+                        let _ = io::stdin().read_line(&mut String::new());
+                    }
+                    Err(e) => {
+                        println!("Error opening new terminal: {}. Press Enter to continue", e);
+                        let _ = io::stdin().read_line(&mut String::new());
+                    }
+                }
+            },
+            
             // ... rest of the match arms remain the same ...
             NavigationAction::ChangeDirectory(new_path) => {
                 current_directory_path = new_path;
