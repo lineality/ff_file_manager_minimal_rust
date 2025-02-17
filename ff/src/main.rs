@@ -21,33 +21,28 @@ A very minimal 'file manager', much more minimal than "midnight commander."
 - path, then numbered lines
 - like bash: ls, but list by number
 - show as columns: item number name size modified
-2. primarily number + enter/return input
+2. primarily int + enter/return for user-input
 3. select directory to go to by number
-4. enter (with no text) to scroll down
-5. 'b' to 'go back; first unscroll, then back-up directory path
-6. enter file to open by number
-7. use config.toml to store 'open a file by type' preference lists (e.g. which editor to use for a .txt file, .csv file)
-8. default to default program with another return/enter
-9. open file in new terminal
-10. MVP: type 'r' to refresh (in future, check for changes and refresh if user not typing)
+4. 'b' to go back; back-up directory path, go to parent directory
+5. enter file to open by number; use Q&A to use editor of choice
+6. default to default program with another return/enter
+7. open file in new terminal
+8. hit enter to refresh
 11. single letter commands
-12. legend shows command 'words': use first letter 
-(q)uit (b)ack|term|files dirs|name size date|up down|wide narrow
+12. legend shows command 'words': use first letter as command
+(q)uit (b)ack|(t)erminal|(f)iles (d)ir|(n)ame (s)ize (m)odified|str>search 
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
 14. Type a string for a partial match search.
-pending 15. 'f' or 'd' to show only files or only directories
+pending 
+(pending) 15. 'f' or 'd' to show only files or only directories
 
-?
-Open new terminal in cwd??
 
 # Scrolling
-1. MVP: a default terminal size will be the mvp,
-with a known number of lines for offset and range for scrolling
-2. in future a terminal size can be zoomed in or out and stored in struct for navigation_state
+1. MVP: use mouse wheel to scroll up and down
 
-# Example workflow:
+# Example daily workflow:
 - open terminal
-- type fff to start file manager/browser
+- type ff to start file manager/browser
 - see list of directories and files by number
   with sort/re-sort
 - select item by number
@@ -59,26 +54,16 @@ with a known number of lines for offset and range for scrolling
 if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
-### TUI Size:
-- or first MVP, set terminal size to actual default terminal size
+## TUI Size:
+- or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
-- width should be fine too
 
-## directory contents lookup-table:
-- there should be a lookup table depending on how the cwd items are being displayed 
-- then advance to next directory could use that maybe
-- lookup table should be in navigation struct
-- this  may need to also include item-type, e.g. file or directory,
-when item is selected by number, the various fields (if only path and type) can be found, type can determine how to handle, e.g. go to directory path or file: handle open file
-- 
-
-quit back files dirs name size date up dwn wide narrow
 
 (future items, after mvp)
 
-### search:
-typing more than a single letter starts a search for an item name...
+## show just files/dir
 
+## scroll
 maybe scrolling but likely not needed
 
 ### TUI Size:
@@ -88,10 +73,7 @@ maybe scrolling but likely not needed
 - optionally say how many rows off screen
 - use key commands to increase or decrease TUI display size
 - for MVP... only wide and narrow need to adjust... (mouse to scroll up and down works fine for mvp)
-- 
 
-
-- 
 */
 
 use std::fs;
@@ -201,7 +183,56 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
     (year, month, day)
 }
 
-/// Updated sort_directory_entries function
+/// Sorts directory entries based on specified method while maintaining directories at the top
+/// 
+/// # Arguments
+/// * `entries` - Mutable reference to vector of FileSystemEntry items to sort
+/// * `sort_method` - Enum specifying sort method and direction
+/// 
+/// # Sort Methods
+/// - Name: Alphabetical sort by filename
+/// - Size: Sort by file size in bytes
+/// - Modified: Sort by last modification timestamp
+/// 
+/// # Behavior Details
+/// 1. Directory Priority:
+///    - Directories always appear before files regardless of sort method
+///    - Directory-to-directory comparisons use the chosen sort method
+///    - File-to-file comparisons use the chosen sort method
+/// 
+/// 2. Sort Directions:
+///    - Ascending: (default) A-Z, smallest-largest, oldest-newest
+///    - Descending: Z-A, largest-smallest, newest-oldest
+/// 
+/// # Implementation Notes
+/// - Uses stable sort to maintain relative order of equal elements
+/// - Handles all three sort methods with consistent directory priority
+/// - Each sort criterion has its own comparison logic:
+///   * Name: String comparison of file_system_item_name
+///   * Size: Numeric comparison of file_system_item_size_in_bytes
+///   * Modified: DateTime comparison of file_system_item_last_modified_time
+/// 
+/// # Examples
+/// ```
+/// // Sort by name ascending
+/// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Name(true));
+/// 
+/// // Sort by size descending
+/// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Size(false));
+/// 
+/// // Sort by modification time ascending
+/// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Modified(true));
+/// ```
+/// 
+/// # Display Order Example
+/// ```text
+/// Sorting by size (ascending):
+/// 1. Directory1/           (directories always first)
+/// 2. Directory2/
+/// 3. small_file.txt       10 B
+/// 4. medium_file.doc      1 KB
+/// 5. large_file.pdf       1 MB
+/// ```
 fn sort_directory_entries(
     entries: &mut Vec<FileSystemEntry>,
     sort_method: DirectorySortingMethodEnum,
@@ -397,24 +428,104 @@ fn process_user_input(
     Ok(NavigationAction::Refresh)
 }
 
-/// Represents possible navigation actions based on user input
+/// Represents possible navigation actions based on user input in the file manager
+/// 
+/// # Purpose
+/// This enum centralizes all possible actions that can result from user input,
+/// providing a clear interface between input processing and action handling.
+/// 
+/// # Variants
+/// - `ChangeDirectory(PathBuf)` - Navigate into a specified directory
+/// - `ParentDirectory` - Move up one directory level
+/// - `OpenFile(PathBuf)` - Open a file with editor prompt
+/// - `Quit` - Exit the application
+/// - `Invalid` - Handle unrecognized or malformed input
+/// - `Refresh` - Reload current directory contents
+/// - `Sort(char)` - Change sort order based on command char
+/// - `OpenNewTerminal` - Open new terminal in current directory
+/// 
+/// # Command Characters
+/// Sort commands use specific characters:
+/// - 'n' - Sort by name
+/// - 's' - Sort by size
+/// - 'm' - Sort by modification time
+/// 
+/// # Usage Example
+/// ```rust
+/// match process_user_input(&input, &nav_state)? {
+///     NavigationAction::ChangeDirectory(path) => {
+///         current_directory = path;
+///     },
+///     NavigationAction::OpenFile(path) => {
+///         handle_file_open(&path)?;
+///     },
+///     NavigationAction::Sort('n') => {
+///         // Toggle name sorting
+///     },
+///     // ... other actions ...
+/// }
+/// ```
+/// 
+/// # Input Mapping
+/// - Numbers (1-N): Generate ChangeDirectory or OpenFile based on item type
+/// - Empty string: Generates Refresh
+/// - "q": Generates Quit
+/// - "b": Generates ParentDirectory
+/// - "t": Generates OpenNewTerminal
+/// - "n"/"s"/"m": Generate Sort with respective character
+/// - Invalid input: Generates Invalid
+/// 
+/// # Error Handling
+/// While the enum itself doesn't handle errors, actions using PathBuf
+/// should handle potential file system errors when executed.
 #[derive(Debug)]
 enum NavigationAction {
-    /// Change to specified directory
+    /// Change current directory to the specified path
+    /// 
+    /// Generated when user selects a directory by number
     ChangeDirectory(PathBuf),
-    /// Move back to parent directory
+
+    /// Move up one directory level to parent
+    /// 
+    /// Generated by 'b' command or when attempting to navigate
+    /// up from current directory
     ParentDirectory,
-    /// Open specified file
+
+    /// Open the specified file with editor prompt
+    /// 
+    /// Generated when user selects a file by number
+    /// Triggers editor selection prompt before opening
     OpenFile(PathBuf),
-    /// Quit the application
+
+    /// Exit the application cleanly
+    /// 
+    /// Generated by 'q' command
     Quit,
-    /// Invalid or unrecognized input
+
+    /// Handle unrecognized or malformed input
+    /// 
+    /// Generated when input doesn't match any valid command
+    /// or when selected item number is out of range
     Invalid,
-    /// Refresh current display
+
+    /// Reload and redisplay current directory contents
+    /// 
+    /// Generated by empty input (Enter key)
+    /// Also used after operations that modify directory contents
     Refresh,
-    /// todo
+
+    /// Change sort order of directory listings
+    /// 
+    /// Character parameter indicates sort type:
+    /// - 'n': Toggle name sort (ascending/descending)
+    /// - 's': Toggle size sort (ascending/descending)
+    /// - 'm': Toggle modification time sort (ascending/descending)
     Sort(char),
-    ///
+
+    /// Open a new terminal window in current directory
+    /// 
+    /// Generated by 't' command
+    /// Uses platform-specific terminal launching mechanism
     OpenNewTerminal, 
 }
 
@@ -951,138 +1062,6 @@ fn display_directory_contents(
     Ok(())
 }
 
-// /// Opens a file using the system's default program
-// /// 
-// /// # Arguments
-// /// * `file_path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success: () unit type
-// ///                      Error: IO error with description
-// /// 
-// /// # Platform-specific Implementation
-// /// - Uses 'open' on macOS
-// /// - Uses 'xdg-open' on Linux
-// /// - Uses 'start' on Windows
-// fn open_file(file_path: &PathBuf) -> io::Result<()> {
-//     #[cfg(target_os = "macos")]
-//     {
-//         std::process::Command::new("open")
-//             .arg(file_path)
-//             .spawn()?;
-//     }
-//     #[cfg(target_os = "linux")]
-//     {
-//         std::process::Command::new("xdg-open")
-//             .arg(file_path)
-//             .spawn()?;
-//     }
-//     #[cfg(target_os = "windows")]
-//     {
-//         std::process::Command::new("cmd")
-//             .args(["/C", "start", ""])
-//             .arg(file_path)
-//             .spawn()?;
-//     }
-    
-//     Ok(())
-// }
-
-// /// Opens a file with user-selected editor or system default
-// /// 
-// /// # Arguments
-// /// * `file_path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success or IO error
-// /// 
-// /// # Behavior
-// /// - Prompts user to select editor (e.g., nano, vim, code)
-// /// - Empty input uses system default opener
-// /// - Attempts to use specified editor command
-// /// - Falls back to system default if editor fails
-// /// 
-// /// # Example
-// /// ```text
-// /// Open with (enter for default, or type: nano/vim/code/etc): vim
-// /// ```
-// fn open_file(file_path: &PathBuf) -> io::Result<()> {
-//     print!("Open with (enter for default, or type: nano/vim/code/etc): ");
-//     io::stdout().flush()?;
-    
-//     let mut editor = String::new();
-//     io::stdin().read_line(&mut editor)?;
-//     let editor = editor.trim();
-
-//     if editor.is_empty() {
-//         // Use system default
-//         #[cfg(target_os = "macos")]
-//         {
-//             std::process::Command::new("open")
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//         #[cfg(target_os = "linux")]
-//         {
-//             std::process::Command::new("xdg-open")
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//         #[cfg(target_os = "windows")]
-//         {
-//             std::process::Command::new("cmd")
-//                 .args(["/C", "start", ""])
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//     } else {
-//         // Try user-specified editor
-//         match std::process::Command::new(editor)
-//             .arg(file_path)
-//             .spawn() 
-//         {
-//             Ok(_) => return Ok(()),
-//             Err(e) => {
-//                 println!("Error using {}: {}. Falling back to system default...", editor, e);
-//                 // Small pause to show error message
-//                 std::thread::sleep(std::time::Duration::from_secs(2));
-//                 // Recursive call with empty editor to use default
-//                 return open_file(file_path);
-//             }
-//         }
-//     }
-    
-//     Ok(())
-// }
-
-// /// Handles opening a file with optional editor selection
-// /// 
-// /// # Arguments
-// /// * `path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success or IO error
-// /// 
-// /// # Behavior
-// /// - Prompts for editor selection
-// /// - Handles editor errors
-// /// - Shows status messages
-// fn handle_file_open(path: &PathBuf) -> io::Result<()> {
-//     match open_file(path) {
-//         Ok(_) => {
-//             println!("Opening file... Press Enter to continue");
-//             let mut buf = String::new();
-//             io::stdin().read_line(&mut buf)?;
-//         }
-//         Err(e) => {
-//             println!("Error opening file: {}. Press Enter to continue", e);
-//             let mut buf = String::new();
-//             io::stdin().read_line(&mut buf)?;
-//         }
-//     }
-//     Ok(())
-// }
-
 /// Opens a file with user-selected editor in a new terminal window
 /// 
 /// # Arguments
@@ -1288,7 +1267,8 @@ Distance between '' and 'test' is 4
 Distance between 'test' and '' is 4
 */
 
-
+/// Vanilla home made pair compair levenshtein_distance
+/// e.g. for simple fuzzy search
 fn levenshtein_distance(s: &str, t: &str) -> usize {
     // Get the lengths of both strings
     let m = s.len();
@@ -1330,7 +1310,65 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     v0[n]
 }
 
-// TODO doc string
+/// Main entry point for the file manager application
+/// 
+/// # Overview
+/// Implements a terminal-based file manager with the following features:
+/// - Directory navigation and file operations
+/// - Numbered item selection interface
+/// - Multiple sort options (name, size, modified date)
+/// - Fuzzy search functionality
+/// - File opening with custom editor selection
+/// - New terminal window opening
+/// 
+/// # User Interface
+/// - Displays current directory path
+/// - Shows numbered list of files and directories
+/// - Command prompt (>>) for user input
+/// 
+/// # Commands
+/// - Numbers (1-N): Select file or directory
+/// - Single letters:
+///   * (q)uit: Exit application
+///   * (b)ack: Go to parent directory
+///   * (t)erminal: Open new terminal in current directory
+///   * (n)ame: Sort by name
+///   * (s)ize: Sort by size
+///   * (m)odified: Sort by modification date
+/// - Enter/Return: Refresh display
+/// - Text input: Fuzzy search through current directory
+/// 
+/// # Sort Behavior
+/// - Each sort command (n/s/m) toggles ascending/descending
+/// - Directories are always grouped together
+/// - Secondary sort maintains stable ordering
+/// 
+/// # Search Behavior
+/// - Any input longer than one character triggers fuzzy search
+/// - Shows matches within Levenshtein distance threshold
+/// - Searches both filenames and directories
+/// 
+/// # Error Handling
+/// - Handles IO errors gracefully
+/// - Provides user feedback for all operations
+/// - Maintains application state on recoverable errors
+/// 
+/// # Returns
+/// * `io::Result<()>` - Success or IO error
+/// 
+/// # Implementation Notes
+/// - Uses NavigationState to maintain UI state
+/// - Updates display after each operation
+/// - Handles platform-specific file operations
+/// - Implements clean shutdown on quit
+/// 
+/// # Example Usage
+/// ```text
+/// >> 5        # Select item number 5
+/// >> b        # Go back to parent directory
+/// >> cargo    # Search for items matching "cargo"
+/// >> q        # Quit application
+/// ```
 fn main() -> io::Result<()> {
     let mut current_directory_path = std::env::current_dir()?;
     let mut nav_state = NavigationState::new();
@@ -1377,18 +1415,6 @@ fn main() -> io::Result<()> {
             NavigationAction::OpenFile(ref path) => {
                 handle_file_open(path)?;
             }
-            // NavigationAction::OpenFile(ref path) => {
-            //     match open_file(path) {
-            //         Ok(_) => {
-            //             println!("Opening file... Press Enter to continue");
-            //             let _ = io::stdin().read_line(&mut String::new());
-            //         }
-            //         Err(e) => {
-            //             println!("Error opening file: {}. Press Enter to continue", e);
-            //             let _ = io::stdin().read_line(&mut String::new());
-            //         }
-            //     }
-            // }
             NavigationAction::Quit => break,
             NavigationAction::Refresh => continue,
             NavigationAction::Invalid => {
