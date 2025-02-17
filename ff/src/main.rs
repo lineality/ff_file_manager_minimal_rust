@@ -34,7 +34,8 @@ A very minimal 'file manager', much more minimal than "midnight commander."
 12. legend shows command 'words': use first letter 
 (q)uit (b)ack|term|files dirs|name size date|up down|wide narrow
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
-14. 'f' or 'd' to show only files or only directories
+14. Type a string for a partial match search.
+pending 15. 'f' or 'd' to show only files or only directories
 
 ?
 Open new terminal in cwd??
@@ -319,6 +320,7 @@ fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
     
     Ok(())
 }
+
 /// Processes user input and returns the corresponding NavigationAction
 /// 
 /// # Arguments
@@ -327,7 +329,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
 /// 
 /// # Returns
 /// * `io::Result<NavigationAction>` - The determined action to take
-
 /// Updated process_user_input to handle search
 fn process_user_input(
     input: &str,
@@ -395,41 +396,6 @@ fn process_user_input(
 
     Ok(NavigationAction::Refresh)
 }
-
-// fn process_user_input(
-//     input: &str,
-//     nav_state: &NavigationState,
-// ) -> io::Result<NavigationAction> {
-//     match input.trim().to_lowercase().as_str() {
-//         "q" => Ok(NavigationAction::Quit),
-//         "b" => Ok(NavigationAction::ParentDirectory),
-//         "" => Ok(NavigationAction::Refresh),
-//         "n" | "s" | "m" => Ok(NavigationAction::Sort(input.chars().next().unwrap())),
-//         "t" => Ok(NavigationAction::OpenNewTerminal),  
-        
-//         input => {
-//             // Existing number parsing logic...
-//             match input.parse::<usize>() {
-//                 Ok(number) => {
-//                     match nav_state.lookup_item(number) {
-//                         Some(item_info) => {
-//                             match item_info.item_type {
-//                                 FileSystemItemType::Directory => {
-//                                     Ok(NavigationAction::ChangeDirectory(item_info.item_path.clone()))
-//                                 }
-//                                 FileSystemItemType::File => {
-//                                     Ok(NavigationAction::OpenFile(item_info.item_path.clone()))
-//                                 }
-//                             }
-//                         }
-//                         None => Ok(NavigationAction::Invalid)
-//                     }
-//                 }
-//                 Err(_) => Ok(NavigationAction::Invalid)
-//             }
-//         }
-//     }
-// }
 
 /// Represents possible navigation actions based on user input
 #[derive(Debug)]
@@ -522,7 +488,6 @@ struct DisplayedItemInfo {
     original_index: usize,
 }
 
-
 /// FileSystemEntry represents a single item (file or directory) in the file system
 /// with its essential metadata for display and manipulation in the file manager.
 /// 
@@ -548,7 +513,6 @@ struct FileSystemEntry {
     /// Boolean flag indicating if this entry is a directory
     is_directory: bool,
 }
-
 
 /// Display search results in a formatted table
 /// Displays search results in a formatted table with clear headers
@@ -578,7 +542,8 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
         return Ok(());
     }
 
-    println!("\nSearch Results:");
+    print!("\x1B[2J\x1B[1;1H");
+    println!("\nSearch Results   (Levenshtein < 3)");
     println!("{:<5} {:<30} {:<10}", "Num", "Name", "Distance");
     println!("{}", "-".repeat(45));
 
@@ -715,100 +680,6 @@ impl NavigationState {
         
         results
     }
-
-    // /// Performs a fuzzy search on current directory contents
-    // /// 
-    // /// # Arguments
-    // /// * `search_term` - String to search for
-    // /// * `directory_entries` - Current directory contents
-    // /// 
-    // /// # Returns
-    // /// * Vec<SearchResult> - Matching items sorted by distance
-    // /// Performs a fuzzy text search on current directory contents using Levenshtein distance
-    // /// 
-    // /// # Arguments
-    // /// * `search_term` - The text to search for
-    // /// * `directory_entries` - Vector of current directory entries to search through
-    // /// 
-    // /// # Returns
-    // /// * `Vec<SearchResult>` - Vector of matching items sorted by Levenshtein distance
-    // /// 
-    // /// # Search Behavior
-    // /// - Searches both filenames and directories
-    // /// - Removes file extensions before comparing
-    // /// - Converts both search term and filenames to lowercase
-    // /// - Only includes results with distance <= MAX_SEARCH_DISTANCE
-    // /// - Results are sorted by distance (closest matches first)
-    // /// 
-    // /// # Example
-    // /// ```
-    // /// let results = nav_state.fuzzy_search("cargo", &directory_entries);
-    // /// // Will match files like:
-    // /// // - "Cargo.toml" (after extension removal)
-    // /// // - "cargo-debug"
-    // /// // - "carg"
-    // /// ```
-    // fn fuzzy_search(&self, search_term: &str, directory_entries: &[FileSystemEntry]) -> Vec<SearchResult> {
-    //     let mut results = Vec::new();
-    //     let search_term = search_term.to_lowercase();
-        
-    //     for (idx, entry) in directory_entries.iter().enumerate() {
-    //         // Remove file extension for comparison
-    //         let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
-    //             Some((name, _ext)) => name.to_string(),
-    //             None => entry.file_system_item_name.clone(),
-    //         };
-            
-    //         // Compare both with and without extension
-    //         let distance_with_ext = levenshtein_distance(
-    //             &entry.file_system_item_name.to_lowercase(), 
-    //             &search_term
-    //         );
-    //         let distance_without_ext = levenshtein_distance(
-    //             &name_without_ext.to_lowercase(),
-    //             &search_term
-    //         );
-            
-    //         // Use the better of the two distances
-    //         let distance = distance_with_ext.min(distance_without_ext);
-            
-    //         if distance <= MAX_SEARCH_DISTANCE {
-    //             results.push(SearchResult {
-    //                 item_name: entry.file_system_item_name.clone(),
-    //                 item_path: entry.file_system_item_path.clone(),
-    //                 distance,
-    //                 display_index: idx + 1,
-    //             });
-    //         }
-    //     }
-        
-    //     results.sort_by_key(|r| r.distance);
-    //     results
-    // }
-    
-    // fn fuzzy_search(&self, search_term: &str, directory_entries: &[FileSystemEntry]) -> Vec<SearchResult> {
-    //     let mut results = Vec::new();
-        
-    //     // Search through all entries
-    //     for (idx, entry) in directory_entries.iter().enumerate() {
-    //         let distance = levenshtein_distance(&entry.file_system_item_name.to_lowercase(), 
-    //                                           &search_term.to_lowercase());
-            
-    //         // Only include results within maximum distance
-    //         if distance <= MAX_SEARCH_DISTANCE {
-    //             results.push(SearchResult {
-    //                 item_name: entry.file_system_item_name.clone(),
-    //                 item_path: entry.file_system_item_path.clone(),
-    //                 distance,
-    //                 display_index: idx + 1, // 1-based index for display
-    //             });
-    //         }
-    //     }
-        
-    //     // Sort results by distance (closest matches first)
-    //     results.sort_by_key(|r| r.distance);
-    //     results
-    // }
 
     /// Toggle sort method based on input command
     fn toggle_sort(&mut self, command: char) {
@@ -1034,7 +905,7 @@ fn display_directory_contents(
     print!("\x1B[2J\x1B[1;1H");
     println!(
         // legens
-        "(q)uit (b)ack|(t)erminal-new|(f)iles (d)ir|(n)ame (s)ize (m)odified\n{}\n",
+        "(q)uit (b)ack|(t)erminal|(f)iles (d)ir|(n)ame (s)ize (m)odified|str>search \n{}\n",
         current_directory_path.display()
     );
 
@@ -1220,23 +1091,6 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     // Return final distance
     v0[n]
 }
-
-// fn main() {
-//     // Test cases
-//     let test_cases = [
-//         ("kitten", "sitting"),
-//         ("Saturday", "Sunday"),
-//         ("hello", "world"),
-//         ("rust", "dust"),
-//         ("", "test"),
-//         ("test", ""),
-//     ];
-
-//     for (s, t) in test_cases.iter() {
-//         let distance = levenshtein_distance(s, t);
-//         println!("Distance between '{}' and '{}' is {}", s, t, distance);
-//     }
-// }
 
 // TODO doc string
 fn main() -> io::Result<()> {
