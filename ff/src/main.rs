@@ -1,5 +1,5 @@
 /// ff - A minimal file manager in Rust
-/// Main entry point for the file manager application
+/// use -> cargo build --profile release-small 
 
 /* Docs:
 ff is a minimal rust file manager
