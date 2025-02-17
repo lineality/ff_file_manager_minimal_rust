@@ -951,40 +951,278 @@ fn display_directory_contents(
     Ok(())
 }
 
-/// Opens a file using the system's default program
+// /// Opens a file using the system's default program
+// /// 
+// /// # Arguments
+// /// * `file_path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success: () unit type
+// ///                      Error: IO error with description
+// /// 
+// /// # Platform-specific Implementation
+// /// - Uses 'open' on macOS
+// /// - Uses 'xdg-open' on Linux
+// /// - Uses 'start' on Windows
+// fn open_file(file_path: &PathBuf) -> io::Result<()> {
+//     #[cfg(target_os = "macos")]
+//     {
+//         std::process::Command::new("open")
+//             .arg(file_path)
+//             .spawn()?;
+//     }
+//     #[cfg(target_os = "linux")]
+//     {
+//         std::process::Command::new("xdg-open")
+//             .arg(file_path)
+//             .spawn()?;
+//     }
+//     #[cfg(target_os = "windows")]
+//     {
+//         std::process::Command::new("cmd")
+//             .args(["/C", "start", ""])
+//             .arg(file_path)
+//             .spawn()?;
+//     }
+    
+//     Ok(())
+// }
+
+// /// Opens a file with user-selected editor or system default
+// /// 
+// /// # Arguments
+// /// * `file_path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Behavior
+// /// - Prompts user to select editor (e.g., nano, vim, code)
+// /// - Empty input uses system default opener
+// /// - Attempts to use specified editor command
+// /// - Falls back to system default if editor fails
+// /// 
+// /// # Example
+// /// ```text
+// /// Open with (enter for default, or type: nano/vim/code/etc): vim
+// /// ```
+// fn open_file(file_path: &PathBuf) -> io::Result<()> {
+//     print!("Open with (enter for default, or type: nano/vim/code/etc): ");
+//     io::stdout().flush()?;
+    
+//     let mut editor = String::new();
+//     io::stdin().read_line(&mut editor)?;
+//     let editor = editor.trim();
+
+//     if editor.is_empty() {
+//         // Use system default
+//         #[cfg(target_os = "macos")]
+//         {
+//             std::process::Command::new("open")
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//         #[cfg(target_os = "linux")]
+//         {
+//             std::process::Command::new("xdg-open")
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//         #[cfg(target_os = "windows")]
+//         {
+//             std::process::Command::new("cmd")
+//                 .args(["/C", "start", ""])
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//     } else {
+//         // Try user-specified editor
+//         match std::process::Command::new(editor)
+//             .arg(file_path)
+//             .spawn() 
+//         {
+//             Ok(_) => return Ok(()),
+//             Err(e) => {
+//                 println!("Error using {}: {}. Falling back to system default...", editor, e);
+//                 // Small pause to show error message
+//                 std::thread::sleep(std::time::Duration::from_secs(2));
+//                 // Recursive call with empty editor to use default
+//                 return open_file(file_path);
+//             }
+//         }
+//     }
+    
+//     Ok(())
+// }
+
+// /// Handles opening a file with optional editor selection
+// /// 
+// /// # Arguments
+// /// * `path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Behavior
+// /// - Prompts for editor selection
+// /// - Handles editor errors
+// /// - Shows status messages
+// fn handle_file_open(path: &PathBuf) -> io::Result<()> {
+//     match open_file(path) {
+//         Ok(_) => {
+//             println!("Opening file... Press Enter to continue");
+//             let mut buf = String::new();
+//             io::stdin().read_line(&mut buf)?;
+//         }
+//         Err(e) => {
+//             println!("Error opening file: {}. Press Enter to continue", e);
+//             let mut buf = String::new();
+//             io::stdin().read_line(&mut buf)?;
+//         }
+//     }
+//     Ok(())
+// }
+
+/// Opens a file with user-selected editor in a new terminal window
 /// 
 /// # Arguments
 /// * `file_path` - PathBuf of the file to open
 /// 
 /// # Returns
-/// * `io::Result<()>` - Success: () unit type
-///                      Error: IO error with description
+/// * `io::Result<()>` - Success or IO error
 /// 
-/// # Platform-specific Implementation
-/// - Uses 'open' on macOS
-/// - Uses 'xdg-open' on Linux
-/// - Uses 'start' on Windows
+/// # Behavior
+/// - Prompts user to select editor (e.g., nano, vim, code)
+/// - Empty input uses system default opener
+/// - Terminal-based editors open in new terminal window
+/// - GUI editors (code, sublime, etc.) launch directly
+/// - Falls back to system default if editor fails
+/// 
+/// # Example
+/// ```text
+/// Open with (enter for default, or type: nano/vim/code/etc): vim
+/// ```
 fn open_file(file_path: &PathBuf) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(file_path)
-            .spawn()?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(file_path)
-            .spawn()?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", ""])
-            .arg(file_path)
-            .spawn()?;
+    print!("Open with... (hit enter for default, or enter your editor 'name': hx, lapce, vi, vim, nano, code, etc.): ");
+    io::stdout().flush()?;
+    
+    let mut editor = String::new();
+    io::stdin().read_line(&mut editor)?;
+    let editor = editor.trim();
+
+    if editor.is_empty() {
+        // Use system default
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg(file_path)
+                .spawn()?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new("xdg-open")
+                .arg(file_path)
+                .spawn()?;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(file_path)
+                .spawn()?;
+        }
+    } else {
+        // List of known GUI editors that shouldn't need a terminal
+        let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+        
+        if gui_editors.contains(&editor.to_lowercase().as_str()) {
+            // Launch GUI editors directly
+            match std::process::Command::new(editor)
+                .arg(file_path)
+                .spawn() 
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    println!("Error launching {}: {}. Falling back to system default...", editor, e);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    return open_file(file_path);
+                }
+            }
+        } else {
+            // Open terminal-based editors in new terminal window
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .args(["-a", "Terminal"])
+                    .arg(format!("{}; exit", editor))
+                    .spawn()?;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // Try different terminal emulators
+                let terminal_commands = [
+                    ("gnome-terminal", vec!["--", editor]),
+                    ("konsole", vec!["--e", editor]),
+                    ("xfce4-terminal", vec!["--command", editor]),
+                    ("xterm", vec!["-e", editor]),
+                ];
+
+                let mut success = false;
+                for (terminal, args) in terminal_commands.iter() {
+                    let mut cmd = std::process::Command::new(terminal);
+                    cmd.args(args).arg(file_path);
+                    
+                    if cmd.spawn().is_ok() {
+                        success = true;
+                        break;
+                    }
+                }
+
+                if !success {
+                    println!("No terminal available. Falling back to system default...");
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    return open_file(file_path);
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "cmd", "/C"])
+                    .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+                    .spawn()?;
+            }
+        }
     }
     
+    Ok(())
+}
+
+/// Handles opening a file with optional editor selection
+/// 
+/// # Arguments
+/// * `path` - PathBuf of the file to open
+/// 
+/// # Returns
+/// * `io::Result<()>` - Success or IO error
+/// 
+/// # Behavior
+/// - Prompts for editor selection
+/// - Opens terminal editors in new window
+/// - Launches GUI editors directly
+/// - Shows status messages
+fn handle_file_open(path: &PathBuf) -> io::Result<()> {
+    match open_file(path) {
+        Ok(_) => {
+            println!("Opening file... \n\nPress Enter to continue");
+            let mut buf = String::new();
+            io::stdin().read_line(&mut buf)?;
+        }
+        Err(e) => {
+            println!("Error opening file: {}. \nPress Enter to continue", e);
+            let mut buf = String::new();
+            io::stdin().read_line(&mut buf)?;
+        }
+    }
     Ok(())
 }
 
@@ -1137,17 +1375,20 @@ fn main() -> io::Result<()> {
                 }
             }
             NavigationAction::OpenFile(ref path) => {
-                match open_file(path) {
-                    Ok(_) => {
-                        println!("Opening file... Press Enter to continue");
-                        let _ = io::stdin().read_line(&mut String::new());
-                    }
-                    Err(e) => {
-                        println!("Error opening file: {}. Press Enter to continue", e);
-                        let _ = io::stdin().read_line(&mut String::new());
-                    }
-                }
+                handle_file_open(path)?;
             }
+            // NavigationAction::OpenFile(ref path) => {
+            //     match open_file(path) {
+            //         Ok(_) => {
+            //             println!("Opening file... Press Enter to continue");
+            //             let _ = io::stdin().read_line(&mut String::new());
+            //         }
+            //         Err(e) => {
+            //             println!("Error opening file: {}. Press Enter to continue", e);
+            //             let _ = io::stdin().read_line(&mut String::new());
+            //         }
+            //     }
+            // }
             NavigationAction::Quit => break,
             NavigationAction::Refresh => continue,
             NavigationAction::Invalid => {
