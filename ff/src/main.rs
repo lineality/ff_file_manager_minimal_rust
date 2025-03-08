@@ -1253,11 +1253,11 @@ fn display_directory_contents(
 ) -> io::Result<()> {
     // clear screen
     print!("\x1B[2J\x1B[1;1H");
-    
+
     // Add pagination info to legend if applicable
-    let legend = "(q)uit (b)ack|(t)erminal|(n)ame (s)ize (m)odified|(u)p (d)own|str>search";
+    let legend = "(q)uit (b)ack|(t)erminal|(n)ame (s)ize (m)odified|(w)up (s)down|str>search";
     let path_display = format!("{}", current_directory_path.display());
-    
+
     // // Show pagination info if provided
     // if let Some((current_page, total_pages)) = page_info {
     //     if total_pages > 1 {
@@ -1670,10 +1670,10 @@ fn main() -> io::Result<()> {
             
             // Handle pagination commands first
             let trimmed_input = user_input.trim();
-            if trimmed_input == "d" {
+            if trimmed_input == "s" {
                 dir_view.next_page();
                 continue; // Stay in inner loop, just change page
-            } else if trimmed_input == "u" {
+            } else if trimmed_input == "w" {
                 dir_view.prev_page();
                 continue; // Stay in inner loop, just change page
             }
