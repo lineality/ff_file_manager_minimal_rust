@@ -172,15 +172,39 @@ fn seconds_to_components(secs: u64) -> (u32, u32, u32, u32, u32) {
 
 /// Convert seconds since epoch to year, month, day
 fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
-    // This is a simplified version. For production code,
-    // consider using the chrono crate or implementing full
-    // calendar calculations including leap years
-    let days_since_epoch = (secs / (24 * 60 * 60)) as u32;
-    let year = 1970 + (days_since_epoch / 365);
-    let month = 1 + ((days_since_epoch % 365) / 30);
-    let day = 1 + ((days_since_epoch % 365) % 30);
+    // This simplified implementation doesn't handle leap years correctly
+    // Consider a more accurate algorithm or the chrono crate for production
     
-    (year, month, day)
+    let secs_per_day = 24 * 60 * 60;
+    let days_since_epoch = secs / secs_per_day;
+    
+    // Base date is 1970-01-01
+    let mut year = 1970;
+    let mut days_remaining = days_since_epoch;
+    
+    // Account for leap years
+    loop {
+        let days_in_year = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 366 } else { 365 };
+        if days_remaining < days_in_year as u64 {
+            break;
+        }
+        days_remaining -= days_in_year as u64;
+        year += 1;
+    }
+    
+    // Simplified month calculation
+    let days_in_month = [31, 
+        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 }, 
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    
+    let mut month = 0;
+    while month < 12 && days_remaining >= days_in_month[month] as u64 {
+        days_remaining -= days_in_month[month] as u64;
+        month += 1;
+    }
+    
+    // Add 1 to month (1-based) and day (1-based)
+    (year as u32, (month + 1) as u32, (days_remaining + 1) as u32)
 }
 
 /// Sorts directory entries based on specified method while maintaining directories at the top
@@ -596,16 +620,60 @@ fn format_file_size(size_in_bytes: u64) -> String {
     }
 }
 
-// TODO doc string
-/// Represents an item's type in the file system
+/// Represents the type of an item in the file system
+/// 
+/// # Variants
+/// - `Directory` - Represents a directory/folder
+/// - `File` - Represents a regular file
+/// 
+/// # Usage
+/// Used throughout the file manager to determine how to handle
+/// different types of file system entries, particularly for:
+/// - Display formatting (directories show trailing slash)
+/// - Navigation behavior (directories can be entered)
+/// - Operation selection (files can be opened)
+/// 
+/// # Example
+/// ```
+/// match item_info.item_type {
+///     FileSystemItemType::Directory => NavigationAction::ChangeDirectory(path),
+///     FileSystemItemType::File => NavigationAction::OpenFile(path),
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 enum FileSystemItemType {
     Directory,
     File,
 }
 
-// TODO doc string
-/// Represents a displayed item's information for lookup purposes
+/// Stores information about a displayed file system item for lookup by its display number
+/// 
+/// # Purpose
+/// This struct maintains the mapping between display numbers shown to the user
+/// and the actual file system items they represent, enabling selection by number.
+/// 
+/// # Fields
+/// * `item_path` - The full path to the file system item
+/// * `item_type` - Whether the item is a file or directory
+/// 
+/// # Usage
+/// Used in the NavigationState's display_lookup_table to enable quick lookup
+/// when a user selects an item by its display number.
+/// 
+/// # Example
+/// ```
+/// let item_info = display_lookup_table.get(&selected_number)?;
+/// match item_info.item_type {
+///     FileSystemItemType::Directory => {
+///         // Handle directory selection
+///         current_directory = item_info.item_path.clone();
+///     },
+///     FileSystemItemType::File => {
+///         // Handle file selection
+///         open_file(&item_info.item_path)?;
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 struct DisplayedItemInfo {
     /// The full path to the item
@@ -687,21 +755,75 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     Ok(())
 }
 
-// TODO full doc string
-/// Represents the dimensions and navigation state of the terminal UI
+/// Manages navigation state, lookup tables, and sort settings for the file manager
+/// 
+/// # Purpose
+/// `NavigationState` is the central component that tracks:
+/// - Display lookup tables to map list numbers to file system items
+/// - Current sort method and direction
+/// - Search and navigation history
+/// 
+/// # Fields
+/// * `display_lookup_table` - Maps displayed numbers to item information
+/// * `current_sort_method` - Current active sort method and direction
+/// * `last_sort_command` - Tracks last sort command for toggling direction
+/// 
+/// # Usage
+/// The `NavigationState` maintains the stateful aspects of the UI,
+/// allowing the application to map user input (numbers) to file system 
+/// operations, track sort preferences, and handle search functionality.
+/// 
+/// # Lifecycle
+/// 1. Created at application start with default values
+/// 2. Updated when directory contents change or sort preferences change
+/// 3. Consulted when processing user input to resolve actions
+/// 
+/// # Example
+/// ```
+/// let mut nav_state = NavigationState::new();
+/// // After reading directory contents:
+/// nav_state.update_lookup_table(&directory_entries);
+/// // When processing user input:
+/// if let Some(item_info) = nav_state.lookup_item(user_input_number) {
+///     // Perform action on the item
+/// }
+/// // When changing sort method:
+/// nav_state.toggle_sort('n'); // Toggle name sort
+/// ```
 struct NavigationState {
     /// Lookup table mapping displayed numbers to item information
     /// Key: displayed number (1-based index shown to user)
     /// Value: information about the item at that display position
     display_lookup_table: HashMap<usize, DisplayedItemInfo>,
+    
+    /// Current sort method and direction for directory contents
     current_sort_method: DirectorySortingMethodEnum,
-    last_sort_command: Option<char>,  // Tracks last sort command used
+    
+    /// Tracks last sort command used to handle toggles between ascending/descending
+    /// None if no sort command has been used yet
+    last_sort_command: Option<char>,
 }
 
-// TODO full doc string
+
 impl NavigationState {
-    /// Creates a new NavigationState with default terminal dimensions
-    /// and empty lookup table
+    /// Creates a new NavigationState with default settings
+    /// 
+    /// # Returns
+    /// * `NavigationState` - A new instance with:
+    ///   - Empty lookup table
+    ///   - Name sort in ascending order as default
+    ///   - No last sort command
+    /// 
+    /// # Default Configuration
+    /// - Sort by name in ascending order
+    /// - Empty lookup table (populated after directory read)
+    /// - No last sort command recorded
+    /// 
+    /// # Example
+    /// ```
+    /// let nav_state = NavigationState::new();
+    /// // nav_state is ready to be used with initial directory read
+    /// ```
     fn new() -> Self {
         NavigationState {
             display_lookup_table: HashMap::new(),
@@ -736,6 +858,12 @@ impl NavigationState {
     /// // "calendar.pdf" -> "cal"
     /// ```
     fn fuzzy_search(&self, search_term: &str, directory_entries: &[FileSystemEntry]) -> Vec<SearchResult> {
+        
+        // Early return for empty search term to avoid unnecessary processing
+        if search_term.is_empty() {
+            return Vec::new();
+        }
+        
         let mut results = Vec::new();
         let search_term = search_term.to_lowercase();
         let search_len = search_term.chars().count();
@@ -870,34 +998,45 @@ impl NavigationState {
     }
 }
 
-// TODO doc string
-/// Simplified sort methods - just the three main types
+/// Represents available sort methods and their directions for directory listings
+/// 
+/// # Variants
+/// 
+/// * `Name(bool)` - Sort by filename alphabetically
+///   - `true`: A-Z (ascending)
+///   - `false`: Z-A (descending)
+/// 
+/// * `Size(bool)` - Sort by file size
+///   - `true`: Smallest to largest (ascending)
+///   - `false`: Largest to smallest (descending)
+/// 
+/// * `Modified(bool)` - Sort by modification timestamp
+///   - `true`: Oldest to newest (ascending)
+///   - `false`: Newest to oldest (descending)
+/// 
+/// # Usage Example
+/// ```
+/// let name_ascending = DirectorySortingMethodEnum::Name(true);
+/// let size_descending = DirectorySortingMethodEnum::Size(false);
+/// let modified_ascending = DirectorySortingMethodEnum::Modified(true);
+/// ```
+/// 
+/// # Implementation Notes
+/// - Boolean parameter indicates direction (true=ascending, false=descending)
+/// - When sorting by any method, directories are always grouped before files
+/// - Used by `sort_directory_entries()` to determine sort behavior
+/// - Used by `NavigationState` to track current sort settings
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DirectorySortingMethodEnum {
-    Name(bool),    // bool represents ascending (true) or descending (false)
+    /// Sort alphabetically by filename (true=A-Z, false=Z-A)
+    Name(bool),
+    
+    /// Sort by file size in bytes (true=smallest first, false=largest first)
     Size(bool),
+    
+    /// Sort by last modification time (true=oldest first, false=newest first)
     Modified(bool),
 }
-
-// // TODO doc string
-// /// Maintains current display information for the file manager
-// struct DisplayState {
-//     /// Current directory being displayed
-//     current_directory_path: PathBuf,
-    
-//     /// Current list of files/directories to display
-//     directory_contents: Vec<FileSystemEntry>,
-    
-//     /// Display table for TUI (row,column format)
-//     /// [item_number, name, size, modified_date]
-//     display_table_rows: Vec<[String; 4]>,
-    
-//     /// Current sort method and direction for directory contents
-//     directory_sorting_method: DirectorySortingMethodEnum,
-
-//     /// Terminal display and navigation information
-//     navigation_state: NavigationState,
-// }
 
 /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
 /// 
@@ -941,7 +1080,30 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<F
     Ok(directory_entries_list)
 }
 
-// TODO doc string
+/// Test suite for file manager functionality
+/// 
+/// # Test Coverage
+/// 
+/// ## File Size Formatting Tests
+/// Verifies that `format_file_size()` correctly formats file sizes:
+/// - Zero bytes displays as "0 B"
+/// - Bytes display with B suffix (e.g., "100 B")
+/// - Kilobytes display with KB suffix and decimal precision for values < 10 (e.g., "1.0 KB")
+/// - Larger values use appropriate units (KB, MB, GB) with correct formatting
+/// 
+/// ## Timestamp Formatting Tests
+/// Verifies that `format_timestamp()` produces correctly formatted time strings:
+/// - Current day timestamps use HH:MM format
+/// - Recent timestamps (this year) use MM-DD HH:MM format
+/// - Older timestamps use YYYY-MM-DD format
+/// - Ensures consistent formatting with correct string lengths
+/// - Verifies epoch time (1970-01-01) is correctly formatted
+/// 
+/// # Usage Notes
+/// - These tests use deterministic inputs to verify consistent outputs
+/// - Time-based tests use relative offsets from current time
+/// - Some assertions check string length to verify format patterns
+/// - Specific edge cases (like epoch time) are explicitly tested
 #[cfg(test)]
 mod tests {
     use super::*;
