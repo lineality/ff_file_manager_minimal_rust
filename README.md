@@ -3,8 +3,13 @@
 
 
 ## linux: for small build, use (for me executible is 1.8mb)
+see https://github.com/lineality/rust_compile_optimizations_cheatsheet
 ```bash
 cargo build --profile release-small 
+```
+or 
+```bash
+cargo build --profile release-performance
 ```
 
 ## ~Install
