@@ -85,6 +85,67 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
 
+/// Handles paginated viewing of directory contents
+struct DirectoryView<'a> {
+    entries: &'a [FileSystemEntry],
+    current_page: usize,
+    items_per_page: usize,
+}
+
+impl<'a> DirectoryView<'a> {
+    /// Creates new directory view with pagination
+    fn new(entries: &'a [FileSystemEntry]) -> Self {
+        Self {
+            entries,
+            current_page: 0,
+            items_per_page: 16, // Show 25 items per page
+        }
+    }
+    
+    /// Returns only entries for current page
+    fn current_page_entries(&self) -> &[FileSystemEntry] {
+        let start = self.current_page * self.items_per_page;
+        let end = (start + self.items_per_page).min(self.entries.len());
+        &self.entries[start..end]
+    }
+    
+    /// Moves to next page, returns success
+    fn next_page(&mut self) -> bool {
+        let max_page = (self.entries.len() + self.items_per_page - 1) / self.items_per_page - 1;
+        if self.current_page < max_page {
+            self.current_page += 1;
+            true
+        } else {
+            false
+        }
+    }
+    
+    /// Moves to previous page, returns success
+    fn prev_page(&mut self) -> bool {
+        if self.current_page > 0 {
+            self.current_page -= 1;
+            true
+        } else {
+            false
+        }
+    }
+    
+    /// Gets total number of pages
+    fn total_pages(&self) -> usize {
+        (self.entries.len() + self.items_per_page - 1) / self.items_per_page
+    }
+    
+    /// Converts display index to actual entry index
+    fn get_actual_index(&self, display_index: usize) -> Option<usize> {
+        let actual_index = self.current_page * self.items_per_page + display_index - 1;
+        if actual_index < self.entries.len() {
+            Some(actual_index)
+        } else {
+            None
+        }
+    }
+}
+
 /// Represents a search result with its distance score
 /// Represents a search result with its Levenshtein distance score and item details
 /// 
@@ -417,6 +478,7 @@ fn process_user_input(
             "n" => return Ok(NavigationAction::Sort('n')),
             "s" => return Ok(NavigationAction::Sort('s')),
             "m" => return Ok(NavigationAction::Sort('m')),
+            // u and d are handled in main loop for pagination
             _ => {}
         }
     }
@@ -427,6 +489,7 @@ fn process_user_input(
     }
 
     // Try to parse as number for direct selection
+    // This will be used as a fallback when not handled by pagination
     if let Ok(number) = input.parse::<usize>() {
         if let Some(item_info) = nav_state.lookup_item(number) {
             return Ok(match item_info.item_type {
@@ -467,7 +530,6 @@ fn process_user_input(
         }
     }
 
-    // Ok(NavigationAction::Refresh)
     Ok(NavigationAction::Invalid)
 }
 
@@ -1179,26 +1241,47 @@ mod tests {
 /// Formats and displays directory contents as a numbered list with columns
 /// Formats and displays directory contents as a numbered list with columns
 /// Update display_directory_contents to use formatted timestamp
+// fn display_directory_contents(
+//     directory_entries: &[FileSystemEntry],
+//     current_directory_path: &PathBuf,
+// ) -> io::Result<()> {
+/// Formats and displays directory contents as a numbered list with columns
 fn display_directory_contents(
     directory_entries: &[FileSystemEntry],
     current_directory_path: &PathBuf,
+    page_info: Option<(usize, usize)>, // (current_page, total_pages)
 ) -> io::Result<()> {
     // clear screen
     print!("\x1B[2J\x1B[1;1H");
-    println!(
-        // legens
-        "(q)uit (b)ack|(t)erminal|(f)iles (d)ir|(n)ame (s)ize (m)odified|str>search \n{}\n",
-        current_directory_path.display()
-    );
+    
+    // Add pagination info to legend if applicable
+    let legend = "(q)uit (b)ack|(t)erminal|(n)ame (s)ize (m)odified|(u)p (d)own|str>search";
+    let path_display = format!("{}", current_directory_path.display());
+    
+    // // Show pagination info if provided
+    // if let Some((current_page, total_pages)) = page_info {
+    //     if total_pages > 1 {
+    //         // println!("{}\n{}\nPage {} of {}",
+    //         println!("{}\n{}",
+    //             // legend, path_display, current_page, total_pages
+    //             legend, path_display,
+    //             );
+    //     } else {
+    //         println!("{}\n{}", legend, path_display);
+    //     }
+    // } else {
+    //     println!("{}\n{}", legend, path_display);
+    // }
+    println!("{}\n{}", legend, path_display);
 
-    // this only prints the header
+    // Column headers
     println!(
-        // "{:>4}  {:<40} {:>18} {:>12}",
         "{:>4}  {:<53} {:>7} {:>11}",
         "Num", "Name", "Size", "Modified"
     );
     println!(" {} ", "-".repeat(78));
 
+    // Display entries
     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
         let formatted_name = if directory_entry.is_directory {
             format!("{}/", directory_entry.file_system_item_name)
@@ -1221,10 +1304,7 @@ fn display_directory_contents(
 
         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
 
-        // this spaces out each line, 
-        // confusingly, some are space-counted forwards others backwards
         println!(
-            // "{:>3}. {:<40} {:>19} {:>12}",
             "{:>3}. {:<55} {:>6} {:>11}",
             entry_index + 1,
             display_name,
@@ -1233,8 +1313,15 @@ fn display_directory_contents(
         );
     }
 
-    io::stdout().flush()?;
+    // Add pagination footer if applicable
+    if let Some((current_page, total_pages)) = page_info {
+        if total_pages > 1 {
+            println!("--- Page {} of {} (u: next page, d: previous page) ---", 
+                    current_page, total_pages);
+        }
+    }
 
+    io::stdout().flush()?;
     Ok(())
 }
 
@@ -1551,6 +1638,7 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
 /// >> cargo    # Search for items matching "cargo"
 /// >> q        # Quit application
 /// ```
+/// Main entry point for the file manager application
 fn main() -> io::Result<()> {
     let mut current_directory_path = std::env::current_dir()?;
     let mut nav_state = NavigationState::new();
@@ -1558,53 +1646,164 @@ fn main() -> io::Result<()> {
     loop {
         let mut directory_entries = read_directory_contents(&current_directory_path)?;
         sort_directory_entries(&mut directory_entries, nav_state.current_sort_method);
-        nav_state.update_lookup_table(&directory_entries);
-        display_directory_contents(&directory_entries, &current_directory_path)?;
-
-        print!("\n>> ");
-        io::stdout().flush()?;
-        let mut user_input = String::new();
-        io::stdin().read_line(&mut user_input)?;
-
-        // match process_user_input(&user_input, &nav_state)? {
-        match process_user_input(&user_input, &nav_state, &directory_entries)? {
-                    
-            NavigationAction::Sort(command) => {
-                nav_state.toggle_sort(command);
-            },
-            NavigationAction::OpenNewTerminal => {
-                match open_new_terminal(&current_directory_path) {
-                    Ok(_) => {
-                        println!("Opening new terminal... Press Enter to continue");
-                        let _ = io::stdin().read_line(&mut String::new());
-                    }
-                    Err(e) => {
-                        println!("Error opening new terminal: {}. Press Enter to continue", e);
-                        let _ = io::stdin().read_line(&mut String::new());
-                    }
-                }
-            },
+        
+        // Create paginated view
+        let mut dir_view = DirectoryView::new(&directory_entries);
+        
+        // Inner loop for pagination within the same directory
+        loop {
+            // Get current page entries
+            let page_entries = dir_view.current_page_entries();
+            nav_state.update_lookup_table(page_entries);
             
-            // ... rest of the match arms remain the same ...
-            NavigationAction::ChangeDirectory(new_path) => {
-                current_directory_path = new_path;
+            // Display with pagination info
+            display_directory_contents(
+                page_entries, 
+                &current_directory_path,
+                Some((dir_view.current_page + 1, dir_view.total_pages()))
+            )?;
+
+            print!("\n>> ");
+            io::stdout().flush()?;
+            let mut user_input = String::new();
+            io::stdin().read_line(&mut user_input)?;
+            
+            // Handle pagination commands first
+            let trimmed_input = user_input.trim();
+            if trimmed_input == "d" {
+                dir_view.next_page();
+                continue; // Stay in inner loop, just change page
+            } else if trimmed_input == "u" {
+                dir_view.prev_page();
+                continue; // Stay in inner loop, just change page
             }
-            NavigationAction::ParentDirectory => {
-                if let Some(parent) = current_directory_path.parent() {
-                    current_directory_path = parent.to_path_buf();
+            
+            // Handle number input directly to account for pagination
+            if let Ok(number) = trimmed_input.parse::<usize>() {
+                if let Some(actual_index) = dir_view.get_actual_index(number) {
+                    // Only process if within range of full directory listing
+                    if actual_index < directory_entries.len() {
+                        let entry = &directory_entries[actual_index];
+                        if entry.is_directory {
+                            current_directory_path = entry.file_system_item_path.clone();
+                            break; // Break inner loop to read new directory
+                        } else {
+                            handle_file_open(&entry.file_system_item_path)?;
+                            continue; // Stay in inner loop
+                        }
+                    }
                 }
             }
-            NavigationAction::OpenFile(ref path) => {
-                handle_file_open(path)?;
-            }
-            NavigationAction::Quit => break,
-            NavigationAction::Refresh => continue,
-            NavigationAction::Invalid => {
-                println!("Invalid input. Press Enter to continue...");
-                let _ = io::stdin().read_line(&mut String::new());
+            
+            // For other commands, use normal processing
+            match process_user_input(&user_input, &nav_state, &page_entries)? {
+                NavigationAction::ChangeDirectory(new_path) => {
+                    current_directory_path = new_path;
+                    break; // Break inner loop to read new directory
+                }
+                NavigationAction::ParentDirectory => {
+                    if let Some(parent) = current_directory_path.parent() {
+                        current_directory_path = parent.to_path_buf();
+                    }
+                    break; // Break inner loop to read new directory
+                }
+                NavigationAction::OpenFile(ref path) => {
+                    handle_file_open(path)?;
+                }
+                NavigationAction::Quit => return Ok(()),
+                NavigationAction::Refresh => break, // Break inner loop to refresh directory
+                NavigationAction::Sort(command) => {
+                    nav_state.toggle_sort(command);
+                    break; // Break inner loop to resort directory
+                }
+                NavigationAction::OpenNewTerminal => {
+                    match open_new_terminal(&current_directory_path) {
+                        Ok(_) => {
+                            println!("Opening new terminal... Press Enter to continue");
+                            let _ = io::stdin().read_line(&mut String::new());
+                        }
+                        Err(e) => {
+                            println!("Error opening new terminal: {}. Press Enter to continue", e);
+                            let _ = io::stdin().read_line(&mut String::new());
+                        }
+                    }
+                },
+                NavigationAction::Invalid => {
+                    println!("Invalid input. Press Enter to continue...");
+                    let _ = io::stdin().read_line(&mut String::new());
+                }
             }
         }
     }
-
-    Ok(())
 }
+
+// fn main() -> io::Result<()> {
+//     let mut current_directory_path = std::env::current_dir()?;
+//     let mut nav_state = NavigationState::new();
+
+//     loop {
+//         // let mut directory_entries = read_directory_contents(&current_directory_path)?;
+//         // sort_directory_entries(&mut directory_entries, nav_state.current_sort_method);
+//         let mut directory_entries = read_directory_contents(&current_directory_path)?;
+//         sort_directory_entries(&mut directory_entries, nav_state.current_sort_method);
+//         let mut dir_view = DirectoryView::new(directory_entries);
+        
+//         // nav_state.update_lookup_table(&directory_entries);
+//         // display_directory_contents(&directory_entries, &current_directory_path)?;
+//         // Display only current page entries
+//         let page_entries = dir_view.current_page_entries();
+//         nav_state.update_lookup_table(page_entries);
+//         display_directory_contents(
+//             page_entries, 
+//             &current_directory_path,
+//             dir_view.current_page + 1,
+//             dir_view.total_pages()
+//         )?;
+
+//         print!("\n>> ");
+//         io::stdout().flush()?;
+//         let mut user_input = String::new();
+//         io::stdin().read_line(&mut user_input)?;
+
+//         // match process_user_input(&user_input, &nav_state)? {
+//         match process_user_input(&user_input, &nav_state, &directory_entries)? {
+                    
+//             NavigationAction::Sort(command) => {
+//                 nav_state.toggle_sort(command);
+//             },
+//             NavigationAction::OpenNewTerminal => {
+//                 match open_new_terminal(&current_directory_path) {
+//                     Ok(_) => {
+//                         println!("Opening new terminal... Press Enter to continue");
+//                         let _ = io::stdin().read_line(&mut String::new());
+//                     }
+//                     Err(e) => {
+//                         println!("Error opening new terminal: {}. Press Enter to continue", e);
+//                         let _ = io::stdin().read_line(&mut String::new());
+//                     }
+//                 }
+//             },
+            
+//             // ... rest of the match arms remain the same ...
+//             NavigationAction::ChangeDirectory(new_path) => {
+//                 current_directory_path = new_path;
+//             }
+//             NavigationAction::ParentDirectory => {
+//                 if let Some(parent) = current_directory_path.parent() {
+//                     current_directory_path = parent.to_path_buf();
+//                 }
+//             }
+//             NavigationAction::OpenFile(ref path) => {
+//                 handle_file_open(path)?;
+//             }
+//             NavigationAction::Quit => break,
+//             NavigationAction::Refresh => continue,
+//             NavigationAction::Invalid => {
+//                 println!("Invalid input. Press Enter to continue...");
+//                 let _ = io::stdin().read_line(&mut String::new());
+//             }
+//         }
+//     }
+
+//     Ok(())
+// }
