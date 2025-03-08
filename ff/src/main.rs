@@ -1,5 +1,6 @@
 /// ff - A minimal file manager in Rust
-/// use -> cargo build --profile release-small 
+/// use -> cargo build --profile release-performance
+/// or, use -> cargo build --profile release-small 
 
 /* Docs:
 ff is a minimal rust file manager
@@ -979,6 +980,14 @@ mod tests {
 
 /// Formats and displays directory contents as a numbered list with columns
 /// 
+/// For adjustments:
+/// then name and data displays are different
+/// the size date field uses a max of 6 char
+/// the modified (date) uses a max of 11 char
+/// the max text with elipsis is 55
+/// so 52 is the trim point if over 55
+/// numbering... if under 100 is 3 spaces
+///
 /// # Arguments
 /// * `directory_entries` - Vector of FileSystemEntry items to display
 /// * `current_directory_path` - PathBuf of the directory being displayed
@@ -1020,8 +1029,10 @@ fn display_directory_contents(
         current_directory_path.display()
     );
 
+    // this only prints the header
     println!(
-        "{:>4}  {:<40} {:>15} {:>15}",
+        // "{:>4}  {:<40} {:>18} {:>12}",
+        "{:>4}  {:<53} {:>7} {:>11}",
         "Num", "Name", "Size", "Modified"
     );
     println!(" {} ", "-".repeat(78));
@@ -1033,8 +1044,8 @@ fn display_directory_contents(
             directory_entry.file_system_item_name.clone()
         };
 
-        let display_name = if formatted_name.chars().count() > 28 {
-            let truncated: String = formatted_name.chars().take(25).collect();
+        let display_name = if formatted_name.chars().count() > 55 {
+            let truncated: String = formatted_name.chars().take(52).collect();
             format!("{}...", truncated)
         } else {
             formatted_name
@@ -1048,8 +1059,11 @@ fn display_directory_contents(
 
         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
 
+        // this spaces out each line, 
+        // confusingly, some are space-counted forwards others backwards
         println!(
-            "{:>3}. {:<40} {:>15} {:>15}",
+            // "{:>3}. {:<40} {:>19} {:>12}",
+            "{:>3}. {:<55} {:>6} {:>11}",
             entry_index + 1,
             display_name,
             size_display,
