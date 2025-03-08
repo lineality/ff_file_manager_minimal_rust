@@ -5,7 +5,6 @@
 /* Docs:
 ff is a minimal rust file manager
 
-
 A very minimal 'file manager', much more minimal than "midnight commander." 
 
 # Scope:
@@ -292,39 +291,46 @@ fn sort_directory_entries(
 /// - Uses 'Terminal.app' on macOS
 /// - Uses 'gnome-terminal' or other terminals on Linux
 /// - Uses 'cmd.exe' on Windows
-/// Opens a new terminal window at the specified directory
-/// 
-/// # Arguments
-/// * `directory_path` - PathBuf of the directory to open terminal in
-/// 
-/// # Returns
-/// * `io::Result<()>` - Success: () unit type
-///                      Error: IO error with description
 fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        return std::process::Command::new("open")
             .args(["-a", "Terminal"])
             .arg(directory_path)
-            .spawn()?;
+            .spawn()
+            .map(|_| ());
     }
+    
     #[cfg(target_os = "linux")]
     {
         // Try different terminal emulators in order of preference
         let terminal_commands = [
             ("gnome-terminal", vec!["--working-directory"]),
+            ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
             ("konsole", vec!["--workdir"]),
             ("xfce4-terminal", vec!["--working-directory"]),
+            ("mate-terminal", vec!["--working-directory"]),
+            ("terminator", vec!["--working-directory"]),
+            ("alacritty", vec!["--working-directory"]),
+            ("kitty", vec!["--directory"]),
+            ("tilix", vec!["--working-directory"]),
+            ("urxvt", vec!["-cd"]),
+            ("rxvt", vec!["-cd"]),
             ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
         ];
 
         for (terminal, args) in terminal_commands.iter() {
             let mut command = std::process::Command::new(terminal);
             
-            if *terminal == "xterm" {
+            if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
+                // These terminals need special handling with the shell
                 command.args(args)
                     .arg(directory_path.to_string_lossy().to_string())
                     .arg("&& bash");
+            } else if *terminal == "alacritty" || *terminal == "kitty" {
+                // Some newer terminals handle working directory differently
+                command.arg(args[0])
+                    .arg(directory_path);
             } else {
                 command.args(args)
                     .arg(directory_path);
@@ -336,21 +342,27 @@ fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
             }
         }
         
-        // Fixed error return with explicit type
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "No supported terminal emulator found",
         ));
     }
+    
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
+        return std::process::Command::new("cmd")
             .args(["/c", "start", "cmd.exe"])
             .current_dir(directory_path)
-            .spawn()?;
+            .spawn()
+            .map(|_| ());
     }
     
-    Ok(())
+    // This is a fallback for platforms not explicitly handled
+    #[allow(unreachable_code)]
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Platform not supported",
+    ))
 }
 
 /// Processes user input and returns the corresponding NavigationAction
@@ -368,14 +380,19 @@ fn process_user_input(
     directory_entries: &[FileSystemEntry],
 ) -> io::Result<NavigationAction> {
     let input = input.trim();
-    
+        
     // Handle single-character commands first
     if input.len() == 1 {
-        match input.to_lowercase().as_str() {
+        // Convert to lowercase for case-insensitive commands
+        let lowercase_input = input.to_lowercase();
+        
+        match lowercase_input.as_str() {
             "q" => return Ok(NavigationAction::Quit),
             "b" => return Ok(NavigationAction::ParentDirectory),
             "t" => return Ok(NavigationAction::OpenNewTerminal),
-            "n" | "s" | "m" => return Ok(NavigationAction::Sort(input.chars().next().unwrap())),
+            "n" => return Ok(NavigationAction::Sort('n')),
+            "s" => return Ok(NavigationAction::Sort('s')),
+            "m" => return Ok(NavigationAction::Sort('m')),
             _ => {}
         }
     }
@@ -426,7 +443,8 @@ fn process_user_input(
         }
     }
 
-    Ok(NavigationAction::Refresh)
+    // Ok(NavigationAction::Refresh)
+    Ok(NavigationAction::Invalid)
 }
 
 /// Represents possible navigation actions based on user input in the file manager
@@ -590,14 +608,10 @@ enum FileSystemItemType {
 /// Represents a displayed item's information for lookup purposes
 #[derive(Debug)]
 struct DisplayedItemInfo {
-    /// The display index (number shown to user)
-    display_index: usize,
     /// The full path to the item
     item_path: PathBuf,
     /// The type of the item (file or directory)
     item_type: FileSystemItemType,
-    /// Original index in unsorted directory listing
-    original_index: usize,
 }
 
 /// FileSystemEntry represents a single item (file or directory) in the file system
@@ -673,17 +687,9 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     Ok(())
 }
 
-// TODO doc string
+// TODO full doc string
 /// Represents the dimensions and navigation state of the terminal UI
 struct NavigationState {
-    /// Height of terminal display area in rows
-    terminal_height_rows: u16,
-    /// Width of terminal display area in columns
-    terminal_width_columns: u16,
-    /// Current scroll position (which row is at top of display)
-    scroll_position: usize,
-    /// Number of rows available for file listing (terminal height minus headers/footers)
-    available_display_rows: u16,
     /// Lookup table mapping displayed numbers to item information
     /// Key: displayed number (1-based index shown to user)
     /// Value: information about the item at that display position
@@ -692,16 +698,12 @@ struct NavigationState {
     last_sort_command: Option<char>,  // Tracks last sort command used
 }
 
-// TODO doc string
+// TODO full doc string
 impl NavigationState {
     /// Creates a new NavigationState with default terminal dimensions
     /// and empty lookup table
     fn new() -> Self {
         NavigationState {
-            terminal_height_rows: 24, // default terminal height
-            terminal_width_columns: 80, // default terminal width
-            scroll_position: 0,
-            available_display_rows: 20, // default visible rows
             display_lookup_table: HashMap::new(),
             current_sort_method: DirectorySortingMethodEnum::Name(true),
             last_sort_command: None,
@@ -845,14 +847,12 @@ impl NavigationState {
             self.display_lookup_table.insert(
                 index + 1, // 1-based display index
                 DisplayedItemInfo {
-                    display_index: index + 1,
                     item_path: entry.file_system_item_path.clone(),
                     item_type: if entry.is_directory {
                         FileSystemItemType::Directory
                     } else {
                         FileSystemItemType::File
                     },
-                    original_index: index,
                 }
             );
         }
@@ -879,25 +879,25 @@ enum DirectorySortingMethodEnum {
     Modified(bool),
 }
 
-// TODO doc string
-/// Maintains current display information for the file manager
-struct DisplayState {
-    /// Current directory being displayed
-    current_directory_path: PathBuf,
+// // TODO doc string
+// /// Maintains current display information for the file manager
+// struct DisplayState {
+//     /// Current directory being displayed
+//     current_directory_path: PathBuf,
     
-    /// Current list of files/directories to display
-    directory_contents: Vec<FileSystemEntry>,
+//     /// Current list of files/directories to display
+//     directory_contents: Vec<FileSystemEntry>,
     
-    /// Display table for TUI (row,column format)
-    /// [item_number, name, size, modified_date]
-    display_table_rows: Vec<[String; 4]>,
+//     /// Display table for TUI (row,column format)
+//     /// [item_number, name, size, modified_date]
+//     display_table_rows: Vec<[String; 4]>,
     
-    /// Current sort method and direction for directory contents
-    directory_sorting_method: DirectorySortingMethodEnum,
+//     /// Current sort method and direction for directory contents
+//     directory_sorting_method: DirectorySortingMethodEnum,
 
-    /// Terminal display and navigation information
-    navigation_state: NavigationState,
-}
+//     /// Terminal display and navigation information
+//     navigation_state: NavigationState,
+// }
 
 /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
 /// 
@@ -1155,8 +1155,14 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
                 // Try different terminal emulators
                 let terminal_commands = [
                     ("gnome-terminal", vec!["--", editor]),
+                    ("ptyxis", vec!["--", editor]),              // Fedora 41's default
                     ("konsole", vec!["--e", editor]),
                     ("xfce4-terminal", vec!["--command", editor]),
+                    ("terminator", vec!["-e", editor]),
+                    ("tilix", vec!["-e", editor]),
+                    ("kitty", vec!["-e", editor]),
+                    ("alacritty", vec!["-e", editor]),
+                    ("terminology", vec!["-e", editor]),
                     ("xterm", vec!["-e", editor]),
                 ];
 
@@ -1440,4 +1446,3 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
-
