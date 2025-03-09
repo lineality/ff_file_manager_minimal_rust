@@ -127,6 +127,8 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
+const MAX_NAME_LENGTH: usize = 55;
+const FILENAME_SUFFIX_LENGTH: usize = 5;
 
 const RESET: &str = "\x1b[0m";
 // const RED: &str = "\x1b[31m";
@@ -1308,6 +1310,44 @@ mod tests {
     }
 }
 
+/// Truncates a file name for display in CLI, keeping both the beginning and the file extension.
+/// 
+/// If the name is longer than 55 characters, it will be truncated to show the first 47 characters,
+/// an ellipsis, and the last 5 characters (typically containing the file extension).
+/// 
+/// # Arguments
+/// * `formatted_name` - The original filename to be truncated
+/// 
+/// # Returns
+/// A String with the truncated name if necessary, or the original if it's short enough
+/// requires: MAX_NAME_LENGTH, FILENAME_SUFFIX_LENGTH
+///
+fn truncate_filename_for_display(formatted_name: String) -> String {
+    // MAX_NAME_LENGTH
+    // FILENAME_SUFFIX_LENGTH
+    let ellipsis = "...";
+    
+    if formatted_name.chars().count() <= MAX_NAME_LENGTH {
+        return formatted_name;
+    }
+    
+    // Calculate how many characters we can take from the start
+    // (max_length - suffix_length - ellipsis.len())
+    let prefix_length = MAX_NAME_LENGTH - FILENAME_SUFFIX_LENGTH - ellipsis.len();
+    
+    // Get prefix (start of the filename)
+    let prefix: String = formatted_name.chars().take(prefix_length).collect();
+    
+    // Get suffix (end of the filename, including extension)
+    let suffix: String = formatted_name
+        .chars()
+        .skip(formatted_name.chars().count() - FILENAME_SUFFIX_LENGTH)
+        .collect();
+    
+    // Combine prefix, ellipsis, and suffix
+    format!("{}{}{}", prefix, ellipsis, suffix)
+}
+
 /// Formats and displays directory contents as a numbered list with columns
 /// 
 /// For adjustments:
@@ -1408,12 +1448,7 @@ fn display_directory_contents(
             directory_entry.file_system_item_name.clone()
         };
 
-        let display_name = if formatted_name.chars().count() > 55 {
-            let truncated: String = formatted_name.chars().take(52).collect();
-            format!("{}...", truncated)
-        } else {
-            formatted_name
-        };
+        let display_name = truncate_filename_for_display(formatted_name);
 
         let size_display = if directory_entry.is_directory {
             String::from("-")
