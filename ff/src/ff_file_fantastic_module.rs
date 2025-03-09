@@ -140,6 +140,113 @@ const YELLOW: &str = "\x1b[33m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
 
+
+/*
+Error Handling
+*/
+/// Custom error type for the file manager that provides specific error contexts
+/// and better error messages for users.
+///
+/// # Error Categories
+/// This enum categorizes errors that can occur during file manager operations
+/// to enable appropriate handling and user-friendly messages.
+///
+/// # Examples
+/// ```
+/// // Creating a not found error
+/// let error = FileFantasticError::NotFound(path);
+/// 
+/// // Converting an IO error
+/// let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "Access denied");
+/// let error = FileFantasticError::from(io_err);
+/// ```
+#[derive(Debug)]
+pub enum FileFantasticError {
+    /// Standard IO errors with the original error preserved
+    Io(io::Error),
+    
+    /// File or directory not found with the path that was attempted
+    NotFound(PathBuf),
+    
+    /// Permission denied when accessing a file or directory
+    PermissionDenied(PathBuf),
+    
+    /// Invalid file or directory name that cannot be processed
+    InvalidName(String),
+    
+    /// No suitable terminal found for the current platform
+    NoTerminalFound,
+    
+    /// Failed to read metadata for a file or directory
+    MetadataError(PathBuf),
+    
+    /// Failed to launch the specified editor
+    EditorLaunchFailed(String),
+    
+    /// Current platform is not supported for a specific operation
+    UnsupportedPlatform,
+}
+
+impl std::fmt::Display for FileFantasticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "I/O error: {}", err),
+            Self::NotFound(path) => write!(f, "Not found: {}", path.display()),
+            Self::PermissionDenied(path) => write!(f, "Permission denied: {}", path.display()),
+            Self::InvalidName(name) => write!(f, "Invalid file name: {}", name),
+            Self::NoTerminalFound => write!(f, "No suitable terminal emulator found"),
+            Self::MetadataError(path) => write!(f, "Failed to read metadata for: {}", path.display()),
+            Self::EditorLaunchFailed(editor) => write!(f, "Failed to launch editor: {}", editor),
+            Self::UnsupportedPlatform => write!(f, "Current platform is not supported"),
+        }
+    }
+}
+
+impl std::error::Error for FileFantasticError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for FileFantasticError {
+    fn from(err: io::Error) -> Self {
+        match err.kind() {
+            io::ErrorKind::NotFound => {
+                // Create a generic PathBuf for the error context
+                // In practice, the actual path should be provided when possible
+                let path = PathBuf::from("<path unknown>");
+                Self::NotFound(path)
+            }
+            io::ErrorKind::PermissionDenied => {
+                let path = PathBuf::from("<path unknown>");
+                Self::PermissionDenied(path)
+            }
+            _ => Self::Io(err),
+        }
+    }
+}
+
+/// Result type for file manager operations
+/// 
+/// This type alias simplifies function signatures throughout the codebase
+/// and ensures consistent error handling.
+/// 
+/// # Examples
+/// ```
+/// fn example_function() -> Result<()> {
+///     // Function implementation
+///     Ok(())
+/// }
+/// ```
+pub type Result<T> = std::result::Result<T, FileFantasticError>;
+/*
+End of Error Handling Code
+*/
+
+
 /// Handles paginated viewing of directory contents
 struct DirectoryView<'a> {
     entries: &'a [FileSystemEntry],
@@ -418,27 +525,39 @@ fn sort_directory_entries(
     }
 }
 
+
 /// Opens a new terminal window at the specified directory
 /// 
 /// # Arguments
 /// * `directory_path` - PathBuf of the directory to open terminal in
 /// 
 /// # Returns
-/// * `io::Result<()>` - Success: () unit type
-///                      Error: IO error with description
+/// * `Result<()>` - Success: () unit type
+///                  Error: FileFantasticError with context
 /// 
 /// # Platform-specific Implementation
 /// - Uses 'Terminal.app' on macOS
 /// - Uses 'gnome-terminal' or other terminals on Linux
 /// - Uses 'cmd.exe' on Windows
-fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
+/// 
+/// # Error Handling
+/// - Handles process spawn errors with specific error types
+/// - Tries multiple terminal emulators on Linux
+/// - Returns NoTerminalFound if no suitable terminal is available
+/// - Returns UnsupportedPlatform for unsupported platforms
+fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("open")
+        std::process::Command::new("open")
             .args(["-a", "Terminal"])
             .arg(directory_path)
             .spawn()
-            .map(|_| ());
+            .map_err(|e| {
+                // Provide context about the failed operation
+                eprintln!("Failed to open Terminal.app: {}", e);
+                FileFantasticError::Io(e)
+            })?;
+        return Ok(());
     }
     
     #[cfg(target_os = "linux")]
@@ -478,47 +597,148 @@ fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
 
             match command.spawn() {
                 Ok(_) => return Ok(()),
-                Err(_) => continue,
+                Err(e) => {
+                    // Log the attempt but continue trying other terminals
+                    eprintln!("Failed to open terminal {}: {}", terminal, e);
+                    continue;
+                }
             }
         }
         
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "No supported terminal emulator found",
-        ));
+        // None of the terminals worked
+        return Err(FileFantasticError::NoTerminalFound);
     }
     
     #[cfg(target_os = "windows")]
     {
-        return std::process::Command::new("cmd")
+        std::process::Command::new("cmd")
             .args(["/c", "start", "cmd.exe"])
             .current_dir(directory_path)
             .spawn()
-            .map(|_| ());
+            .map_err(|e| {
+                eprintln!("Failed to open cmd.exe: {}", e);
+                FileFantasticError::Io(e)
+            })?;
+        return Ok(());
     }
     
     // This is a fallback for platforms not explicitly handled
     #[allow(unreachable_code)]
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Platform not supported",
-    ))
+    Err(FileFantasticError::UnsupportedPlatform)
 }
+
+// old works
+// /// Opens a new terminal window at the specified directory
+// /// 
+// /// # Arguments
+// /// * `directory_path` - PathBuf of the directory to open terminal in
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success: () unit type
+// ///                      Error: IO error with description
+// /// 
+// /// # Platform-specific Implementation
+// /// - Uses 'Terminal.app' on macOS
+// /// - Uses 'gnome-terminal' or other terminals on Linux
+// /// - Uses 'cmd.exe' on Windows
+// fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
+//     #[cfg(target_os = "macos")]
+//     {
+//         return std::process::Command::new("open")
+//             .args(["-a", "Terminal"])
+//             .arg(directory_path)
+//             .spawn()
+//             .map(|_| ());
+//     }
+    
+//     #[cfg(target_os = "linux")]
+//     {
+//         // Try different terminal emulators in order of preference
+//         let terminal_commands = [
+//             ("gnome-terminal", vec!["--working-directory"]),
+//             ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
+//             ("konsole", vec!["--workdir"]),
+//             ("xfce4-terminal", vec!["--working-directory"]),
+//             ("mate-terminal", vec!["--working-directory"]),
+//             ("terminator", vec!["--working-directory"]),
+//             ("alacritty", vec!["--working-directory"]),
+//             ("kitty", vec!["--directory"]),
+//             ("tilix", vec!["--working-directory"]),
+//             ("urxvt", vec!["-cd"]),
+//             ("rxvt", vec!["-cd"]),
+//             ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
+//         ];
+
+//         for (terminal, args) in terminal_commands.iter() {
+//             let mut command = std::process::Command::new(terminal);
+            
+//             if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
+//                 // These terminals need special handling with the shell
+//                 command.args(args)
+//                     .arg(directory_path.to_string_lossy().to_string())
+//                     .arg("&& bash");
+//             } else if *terminal == "alacritty" || *terminal == "kitty" {
+//                 // Some newer terminals handle working directory differently
+//                 command.arg(args[0])
+//                     .arg(directory_path);
+//             } else {
+//                 command.args(args)
+//                     .arg(directory_path);
+//             }
+
+//             match command.spawn() {
+//                 Ok(_) => return Ok(()),
+//                 Err(_) => continue,
+//             }
+//         }
+        
+//         return Err(io::Error::new(
+//             io::ErrorKind::NotFound,
+//             "No supported terminal emulator found",
+//         ));
+//     }
+    
+//     #[cfg(target_os = "windows")]
+//     {
+//         return std::process::Command::new("cmd")
+//             .args(["/c", "start", "cmd.exe"])
+//             .current_dir(directory_path)
+//             .spawn()
+//             .map(|_| ());
+//     }
+    
+//     // This is a fallback for platforms not explicitly handled
+//     #[allow(unreachable_code)]
+//     Err(io::Error::new(
+//         io::ErrorKind::Unsupported,
+//         "Platform not supported",
+//     ))
+// }
 
 /// Processes user input and returns the corresponding NavigationAction
 /// 
 /// # Arguments
 /// * `input` - The user's input string
 /// * `nav_state` - Current navigation state containing lookup table
+/// * `all_entries` - Complete list of directory entries
 /// 
 /// # Returns
-/// * `io::Result<NavigationAction>` - The determined action to take
-/// Updated process_user_input to handle search
+/// * `Result<NavigationAction>` - The determined action to take or error with context
+/// 
+/// # Behavior
+/// - Handles command parsing (single letters, numbers, search terms)
+/// - Performs fuzzy search when appropriate
+/// - Maps numerical input to directory items
+/// 
+/// # Error Handling
+/// - Validates user input
+/// - Handles IO errors during search result display
+/// - Validates selected numbers against available items
 fn process_user_input(
     input: &str,
     nav_state: &NavigationState,
     all_entries: &[FileSystemEntry],
-) -> io::Result<NavigationAction> {
+) -> Result<NavigationAction> {
     let input = input.trim();
         
     // Handle empty input first - refresh and clear filters
@@ -546,11 +766,6 @@ fn process_user_input(
         }
     }
 
-    // // Handle empty input
-    // if input.is_empty() {
-    //     return Ok(NavigationAction::Refresh);
-    // }
-
     // Try to parse as number for direct selection
     // This will be used as a fallback when not handled by pagination
     if let Ok(number) = input.parse::<usize>() {
@@ -568,14 +783,23 @@ fn process_user_input(
 
     // If not a command or number, treat as search
     let search_results = nav_state.fuzzy_search(input, all_entries);
-    display_search_results(&search_results)?;
+    display_search_results(&search_results).map_err(|e| {
+        eprintln!("Failed to display search results: {}", e);
+        FileFantasticError::Io(e)
+    })?;
     
     // Wait for user to select from results or press enter to continue
     print!("\nEnter number to select or press Enter to continue: ");
-    io::stdout().flush()?;
+    io::stdout().flush().map_err(|e| {
+        eprintln!("Failed to flush stdout: {}", e);
+        FileFantasticError::Io(e)
+    })?;
     
     let mut selection = String::new();
-    io::stdin().read_line(&mut selection)?;
+    io::stdin().read_line(&mut selection).map_err(|e| {
+        eprintln!("Failed to read input: {}", e);
+        FileFantasticError::Io(e)
+    })?;
     
     if let Ok(number) = selection.trim().parse::<usize>() {
         // Find the search result with the matching display_index
@@ -593,6 +817,96 @@ fn process_user_input(
 
     Ok(NavigationAction::Invalid)
 }
+
+// old works
+// /// Processes user input and returns the corresponding NavigationAction
+// /// 
+// /// # Arguments
+// /// * `input` - The user's input string
+// /// * `nav_state` - Current navigation state containing lookup table
+// /// 
+// /// # Returns
+// /// * `io::Result<NavigationAction>` - The determined action to take
+// /// Updated process_user_input to handle search
+// fn process_user_input(
+//     input: &str,
+//     nav_state: &NavigationState,
+//     all_entries: &[FileSystemEntry],
+// ) -> io::Result<NavigationAction> {
+//     let input = input.trim();
+        
+//     // Handle empty input first - refresh and clear filters
+//     if input.is_empty() {
+//         return Ok(NavigationAction::Refresh);
+//     } 
+        
+//     // Handle single-character commands first
+//     if input.len() == 1 {
+//         // Convert to lowercase for case-insensitive commands
+//         let lowercase_input = input.to_lowercase();
+        
+//         match lowercase_input.as_str() {
+//             "q" => return Ok(NavigationAction::Quit),
+//             "b" => return Ok(NavigationAction::ParentDirectory),
+//             "t" => return Ok(NavigationAction::OpenNewTerminal),
+//             "n" => return Ok(NavigationAction::Sort('n')),
+//             "s" => return Ok(NavigationAction::Sort('s')),
+//             "m" => return Ok(NavigationAction::Sort('m')),
+//             "d" => return Ok(NavigationAction::Filter('d')), // Show directories only
+//             "f" => return Ok(NavigationAction::Filter('f')), // Show files only
+//             "a" => return Ok(NavigationAction::Filter('a')),
+//             // u and d are handled in main loop for pagination
+//             _ => {}
+//         }
+//     }
+
+//     // // Handle empty input
+//     // if input.is_empty() {
+//     //     return Ok(NavigationAction::Refresh);
+//     // }
+
+//     // Try to parse as number for direct selection
+//     // This will be used as a fallback when not handled by pagination
+//     if let Ok(number) = input.parse::<usize>() {
+//         if let Some(item_info) = nav_state.lookup_item(number) {
+//             return Ok(match item_info.item_type {
+//                 FileSystemItemType::Directory => {
+//                     NavigationAction::ChangeDirectory(item_info.item_path.clone())
+//                 }
+//                 FileSystemItemType::File => {
+//                     NavigationAction::OpenFile(item_info.item_path.clone())
+//                 }
+//             });
+//         }
+//     }
+
+//     // If not a command or number, treat as search
+//     let search_results = nav_state.fuzzy_search(input, all_entries);
+//     display_search_results(&search_results)?;
+    
+//     // Wait for user to select from results or press enter to continue
+//     print!("\nEnter number to select or press Enter to continue: ");
+//     io::stdout().flush()?;
+    
+//     let mut selection = String::new();
+//     io::stdin().read_line(&mut selection)?;
+    
+//     if let Ok(number) = selection.trim().parse::<usize>() {
+//         // Find the search result with the matching display_index
+//         if let Some(result) = search_results.iter().find(|r| r.display_index == number) {
+//             // Get the original entry by its index to determine if it's a directory or file
+//             if let Some(entry) = all_entries.get(number - 1) {
+//                 return Ok(if entry.is_directory {
+//                     NavigationAction::ChangeDirectory(result.item_path.clone())
+//                 } else {
+//                     NavigationAction::OpenFile(result.item_path.clone())
+//                 });
+//             }
+//         }
+//     }
+
+//     Ok(NavigationAction::Invalid)
+// }
 
 /// Represents possible navigation actions based on user input in the file manager
 /// 
@@ -1209,47 +1523,138 @@ enum DirectorySortingMethodEnum {
     Modified(bool),
 }
 
+
 /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
 /// 
 /// # Arguments
 /// * `directory_path_to_read` - The PathBuf pointing to the directory to be read
 /// 
 /// # Returns
-/// * `io::Result<Vec<FileSystemEntry>>` - Success: Vector of FileSystemEntry items
-///                                       Error: IO error with description
+/// * `Result<Vec<FileSystemEntry>>` - Success: Vector of FileSystemEntry items
+///                                  Error: FileFantasticError with context
 /// 
 /// # Error Handling
-/// - Handles directory read errors
-/// - Handles metadata read errors
-/// - Handles timestamp conversion errors
+/// - Handles directory read errors with specific error types:
+///   * NotFound: When directory doesn't exist
+///   * PermissionDenied: When access is denied
+///   * MetadataError: When file metadata can't be read
 /// 
 /// # Example Usage
 /// ```
 /// let current_path = std::env::current_dir()?;
 /// let directory_entries = read_directory_contents(&current_path)?;
 /// ```
-/// Update read_directory_contents to store SystemTime
-fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<FileSystemEntry>> {
+fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileSystemEntry>> {
     let mut directory_entries_list: Vec<FileSystemEntry> = Vec::new();
     
-    for directory_item_result in fs::read_dir(directory_path_to_read)? {
-        let directory_item = directory_item_result?;
-        let item_metadata = directory_item.metadata()?;
+    // Handle directory read errors with specific error types
+    let read_dir_result = match fs::read_dir(directory_path_to_read) {
+        Ok(dir) => dir,
+        Err(e) => {
+            match e.kind() {
+                io::ErrorKind::NotFound => 
+                    return Err(FileFantasticError::NotFound(directory_path_to_read.clone())),
+                io::ErrorKind::PermissionDenied => 
+                    return Err(FileFantasticError::PermissionDenied(directory_path_to_read.clone())),
+                _ => return Err(FileFantasticError::Io(e)),
+            }
+        }
+    };
+
+    for directory_item_result in read_dir_result {
+        // Handle errors reading directory entries
+        let directory_item = match directory_item_result {
+            Ok(item) => item,
+            Err(e) => {
+                // Log error but continue with other entries
+                eprintln!("Warning: Failed to read entry in {}: {}", 
+                          directory_path_to_read.display(), e);
+                continue;
+            }
+        };
+        
+        let item_path = directory_item.path();
+        
+        // Get metadata with better error context - actually use MetadataError
+        let item_metadata = match directory_item.metadata() {
+            Ok(meta) => meta,
+            Err(_) => {
+                // Instead of just skipping, at least log the error using our specific type
+                let meta_error = FileFantasticError::MetadataError(item_path.clone());
+                eprintln!("Warning: {}", meta_error);
+                continue;
+            }
+        };
+        
+        // Handle modification time error with a fallback to UNIX_EPOCH
+        let modified_time = match item_metadata.modified() {
+            Ok(time) => time,
+            Err(_) => {
+                // When modification time is not available, use epoch as fallback
+                eprintln!("Warning: Cannot determine modification time for {}", 
+                          item_path.display());
+                SystemTime::UNIX_EPOCH
+            }
+        };
         
         directory_entries_list.push(FileSystemEntry {
             file_system_item_name: directory_item
                 .file_name()
                 .to_string_lossy()
                 .to_string(),
-            file_system_item_path: directory_item.path(),
+            file_system_item_path: item_path,
             file_system_item_size_in_bytes: item_metadata.len(),
-            file_system_item_last_modified_time: item_metadata.modified()?,
+            file_system_item_last_modified_time: modified_time,
             is_directory: item_metadata.is_dir(),
         });
     }
 
     Ok(directory_entries_list)
 }
+
+
+// // old works
+// /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
+// /// 
+// /// # Arguments
+// /// * `directory_path_to_read` - The PathBuf pointing to the directory to be read
+// /// 
+// /// # Returns
+// /// * `io::Result<Vec<FileSystemEntry>>` - Success: Vector of FileSystemEntry items
+// ///                                       Error: IO error with description
+// /// 
+// /// # Error Handling
+// /// - Handles directory read errors
+// /// - Handles metadata read errors
+// /// - Handles timestamp conversion errors
+// /// 
+// /// # Example Usage
+// /// ```
+// /// let current_path = std::env::current_dir()?;
+// /// let directory_entries = read_directory_contents(&current_path)?;
+// /// ```
+// /// Update read_directory_contents to store SystemTime
+// fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<FileSystemEntry>> {
+//     let mut directory_entries_list: Vec<FileSystemEntry> = Vec::new();
+    
+//     for directory_item_result in fs::read_dir(directory_path_to_read)? {
+//         let directory_item = directory_item_result?;
+//         let item_metadata = directory_item.metadata()?;
+        
+//         directory_entries_list.push(FileSystemEntry {
+//             file_system_item_name: directory_item
+//                 .file_name()
+//                 .to_string_lossy()
+//                 .to_string(),
+//             file_system_item_path: directory_item.path(),
+//             file_system_item_size_in_bytes: item_metadata.len(),
+//             file_system_item_last_modified_time: item_metadata.modified()?,
+//             is_directory: item_metadata.is_dir(),
+//         });
+//     }
+
+//     Ok(directory_entries_list)
+// }
 
 /// Test suite for file manager functionality
 /// 
@@ -1486,7 +1891,7 @@ fn display_directory_contents(
 /// * `file_path` - PathBuf of the file to open
 /// 
 /// # Returns
-/// * `io::Result<()>` - Success or IO error
+/// * `Result<()>` - Success or FileFantasticError with context
 /// 
 /// # Behavior
 /// - Prompts user to select editor (e.g., nano, vim, code)
@@ -1495,16 +1900,28 @@ fn display_directory_contents(
 /// - GUI editors (code, sublime, etc.) launch directly
 /// - Falls back to system default if editor fails
 /// 
-/// # Example
+/// # Error Handling
+/// - Handles IO errors for user input/output
+/// - Handles process spawn failures
+/// - Provides fallbacks when editor launch fails
+/// - Gives user feedback for all error cases
+/// 
+/// # Example Output
 /// ```text
 /// Open with (enter for default, or type: nano/vim/code/etc): vim
 /// ```
-fn open_file(file_path: &PathBuf) -> io::Result<()> {
-    print!("Open with... (hit enter for default, or enter your editor 'name' as called in a terminal: gedit, hx, lapce, vi, vim, nano, code, etc.): ");
-    io::stdout().flush()?;
+fn open_file(file_path: &PathBuf) -> Result<()> {
+    print!("Open with... (hit enter for default, or enter your software 'name' as called in a terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): ");
+    io::stdout().flush().map_err(|e| {
+        eprintln!("Failed to flush stdout: {}", e);
+        FileFantasticError::Io(e)
+    })?;
     
     let mut editor = String::new();
-    io::stdin().read_line(&mut editor)?;
+    io::stdin().read_line(&mut editor).map_err(|e| {
+        eprintln!("Failed to read input: {}", e);
+        FileFantasticError::Io(e)
+    })?;
     let editor = editor.trim();
 
     if editor.is_empty() {
@@ -1513,34 +1930,48 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
         {
             std::process::Command::new("open")
                 .arg(file_path)
-                .spawn()?;
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open file with default application: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
         }
         #[cfg(target_os = "linux")]
         {
             std::process::Command::new("xdg-open")
                 .arg(file_path)
-                .spawn()?;
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open file with xdg-open: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
         }
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
                 .args(["/C", "start", ""])
                 .arg(file_path)
-                .spawn()?;
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open file with default application: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
         }
     } else {
         // List of known GUI editors that shouldn't need a terminal
         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
         
         if gui_editors.contains(&editor.to_lowercase().as_str()) {
-            // Launch GUI editors directly
+            // Launch GUI editors directly - use EditorLaunchFailed
             match std::process::Command::new(editor)
                 .arg(file_path)
                 .spawn() 
             {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    println!("Error launching {}: {}. Falling back to system default...", editor, e);
+                    eprintln!("Error launching {}: {}", editor, e);
+                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                    println!("Falling back to system default due to: {}", error);
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     return open_file(file_path);
                 }
@@ -1552,7 +1983,11 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
                 std::process::Command::new("open")
                     .args(["-a", "Terminal"])
                     .arg(format!("{}; exit", editor))
-                    .spawn()?;
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open Terminal.app for editor: {}", e);
+                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    })?;
             }
             #[cfg(target_os = "linux")]
             {
@@ -1575,7 +2010,7 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
                     let mut cmd = std::process::Command::new(terminal);
                     cmd.args(args).arg(file_path);
                     
-                    if cmd.spawn().is_ok() {
+                    if let Ok(_) = cmd.spawn() {
                         success = true;
                         break;
                     }
@@ -1583,6 +2018,8 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
 
                 if !success {
                     println!("No terminal available. Falling back to system default...");
+                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                    eprintln!("Error: {}", error);
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     return open_file(file_path);
                 }
@@ -1592,7 +2029,11 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
                 std::process::Command::new("cmd")
                     .args(["/C", "start", "cmd", "/C"])
                     .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-                    .spawn()?;
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open cmd.exe for editor: {}", e);
+                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    })?;
             }
         }
     }
@@ -1600,34 +2041,195 @@ fn open_file(file_path: &PathBuf) -> io::Result<()> {
     Ok(())
 }
 
+// old works
+// /// Opens a file with user-selected editor in a new terminal window
+// /// 
+// /// # Arguments
+// /// * `file_path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Behavior
+// /// - Prompts user to select editor (e.g., nano, vim, code)
+// /// - Empty input uses system default opener
+// /// - Terminal-based editors open in new terminal window
+// /// - GUI editors (code, sublime, etc.) launch directly
+// /// - Falls back to system default if editor fails
+// /// 
+// /// # Example
+// /// ```text
+// /// Open with (enter for default, or type: nano/vim/code/etc): vim
+// /// ```
+// fn open_file(file_path: &PathBuf) -> io::Result<()> {
+//     print!("Open with... (hit enter for default, or enter your editor 'name' as called in a terminal: gedit, hx, lapce, vi, vim, nano, code, etc.): ");
+//     io::stdout().flush()?;
+    
+//     let mut editor = String::new();
+//     io::stdin().read_line(&mut editor)?;
+//     let editor = editor.trim();
+
+//     if editor.is_empty() {
+//         // Use system default
+//         #[cfg(target_os = "macos")]
+//         {
+//             std::process::Command::new("open")
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//         #[cfg(target_os = "linux")]
+//         {
+//             std::process::Command::new("xdg-open")
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//         #[cfg(target_os = "windows")]
+//         {
+//             std::process::Command::new("cmd")
+//                 .args(["/C", "start", ""])
+//                 .arg(file_path)
+//                 .spawn()?;
+//         }
+//     } else {
+//         // List of known GUI editors that shouldn't need a terminal
+//         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+        
+//         if gui_editors.contains(&editor.to_lowercase().as_str()) {
+//             // Launch GUI editors directly
+//             match std::process::Command::new(editor)
+//                 .arg(file_path)
+//                 .spawn() 
+//             {
+//                 Ok(_) => return Ok(()),
+//                 Err(e) => {
+//                     println!("Error launching {}: {}. Falling back to system default...", editor, e);
+//                     std::thread::sleep(std::time::Duration::from_secs(2));
+//                     return open_file(file_path);
+//                 }
+//             }
+//         } else {
+//             // Open terminal-based editors in new terminal window
+//             #[cfg(target_os = "macos")]
+//             {
+//                 std::process::Command::new("open")
+//                     .args(["-a", "Terminal"])
+//                     .arg(format!("{}; exit", editor))
+//                     .spawn()?;
+//             }
+//             #[cfg(target_os = "linux")]
+//             {
+//                 // Try different terminal emulators
+//                 let terminal_commands = [
+//                     ("gnome-terminal", vec!["--", editor]),
+//                     ("ptyxis", vec!["--", editor]),              // Fedora 41's default
+//                     ("konsole", vec!["--e", editor]),
+//                     ("xfce4-terminal", vec!["--command", editor]),
+//                     ("terminator", vec!["-e", editor]),
+//                     ("tilix", vec!["-e", editor]),
+//                     ("kitty", vec!["-e", editor]),
+//                     ("alacritty", vec!["-e", editor]),
+//                     ("terminology", vec!["-e", editor]),
+//                     ("xterm", vec!["-e", editor]),
+//                 ];
+
+//                 let mut success = false;
+//                 for (terminal, args) in terminal_commands.iter() {
+//                     let mut cmd = std::process::Command::new(terminal);
+//                     cmd.args(args).arg(file_path);
+                    
+//                     if cmd.spawn().is_ok() {
+//                         success = true;
+//                         break;
+//                     }
+//                 }
+
+//                 if !success {
+//                     println!("No terminal available. Falling back to system default...");
+//                     std::thread::sleep(std::time::Duration::from_secs(2));
+//                     return open_file(file_path);
+//                 }
+//             }
+//             #[cfg(target_os = "windows")]
+//             {
+//                 std::process::Command::new("cmd")
+//                     .args(["/C", "start", "cmd", "/C"])
+//                     .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+//                     .spawn()?;
+//             }
+//         }
+//     }
+    
+//     Ok(())
+// }
+
 /// Handles opening a file with optional editor selection
 /// 
 /// # Arguments
 /// * `path` - PathBuf of the file to open
 /// 
 /// # Returns
-/// * `io::Result<()>` - Success or IO error
+/// * `Result<()>` - Success or FileFantasticError with context
 /// 
 /// # Behavior
-/// - Prompts for editor selection
-/// - Opens terminal editors in new window
-/// - Launches GUI editors directly
-/// - Shows status messages
-fn handle_file_open(path: &PathBuf) -> io::Result<()> {
+/// - Calls open_file() to handle the file opening process
+/// - Provides user feedback on success or failure
+/// - Waits for user confirmation before continuing
+/// 
+/// # Error Handling
+/// - Catches and displays errors from open_file()
+/// - Handles input/output errors during user prompts
+/// - Ensures user is informed of all outcomes
+fn handle_file_open(path: &PathBuf) -> Result<()> {
     match open_file(path) {
         Ok(_) => {
             println!("Opening file... \n\nPress Enter to continue");
             let mut buf = String::new();
-            io::stdin().read_line(&mut buf)?;
+            io::stdin().read_line(&mut buf).map_err(|e| {
+                eprintln!("Failed to read input: {}", e);
+                FileFantasticError::Io(e)
+            })?;
         }
         Err(e) => {
             println!("Error opening file: {}. \nPress Enter to continue", e);
             let mut buf = String::new();
-            io::stdin().read_line(&mut buf)?;
+            io::stdin().read_line(&mut buf).map_err(|e| {
+                eprintln!("Failed to read input: {}", e);
+                FileFantasticError::Io(e)
+            })?;
         }
     }
     Ok(())
 }
+
+// old works
+// /// Handles opening a file with optional editor selection
+// /// 
+// /// # Arguments
+// /// * `path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Behavior
+// /// - Prompts for editor selection
+// /// - Opens terminal editors in new window
+// /// - Launches GUI editors directly
+// /// - Shows status messages
+// fn handle_file_open(path: &PathBuf) -> io::Result<()> {
+//     match open_file(path) {
+//         Ok(_) => {
+//             println!("Opening file... \n\nPress Enter to continue");
+//             let mut buf = String::new();
+//             io::stdin().read_line(&mut buf)?;
+//         }
+//         Err(e) => {
+//             println!("Error opening file: {}. \nPress Enter to continue", e);
+//             let mut buf = String::new();
+//             io::stdin().read_line(&mut buf)?;
+//         }
+//     }
+//     Ok(())
+// }
 
 /*
 See: https://en.wikipedia.org/wiki/Levenshtein_distance
@@ -1737,20 +2339,29 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
 /// Determines the starting directory path from command line arguments
 /// 
 /// # Returns
-/// * `io::Result<PathBuf>` - The absolute path to start in
+/// * `Result<PathBuf>` - The absolute path to start in or error with context
 ///
 /// # Behavior
 /// - If a valid path is provided as first argument, uses that
 /// - If a file path is provided, uses its parent directory
 /// - If path doesn't exist or no args provided, uses current directory
 /// - Converts all paths to absolute paths for clarity
-fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
+/// 
+/// # Error Handling
+/// - Validates path existence and type
+/// - Provides clear error messages for invalid paths
+/// - Falls back to current directory when appropriate
+/// - Handles failures to determine current or parent directories
+fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
     // Get command line arguments
     let args: Vec<String> = std::env::args().skip(1).collect();
     
     if args.is_empty() {
         // No arguments provided, use current directory
-        return std::env::current_dir();
+        return std::env::current_dir().map_err(|e| {
+            eprintln!("Failed to get current directory: {}", e);
+            FileFantasticError::Io(e)
+        });
     }
     
     // Use first argument as path
@@ -1761,7 +2372,10 @@ fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
         // Join with current directory to make absolute
         match std::env::current_dir() {
             Ok(current_dir) => current_dir.join(&path_arg),
-            Err(_) => path_arg // Fall back to relative if current_dir fails
+            Err(e) => {
+                eprintln!("Failed to get current directory: {}", e);
+                return Err(FileFantasticError::Io(e));
+            }
         }
     } else {
         path_arg
@@ -1780,104 +2394,141 @@ fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
                     println!("Directory: {}", parent.display());
                     println!("Press Enter to continue...");
                     let mut input = String::new();
-                    io::stdin().read_line(&mut input)?;
+                    io::stdin().read_line(&mut input).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
                     
                     Ok(PathBuf::from(parent))
                 },
-                None => Err(io::Error::new(
-                    io::ErrorKind::InvalidInput, 
-                    format!("Cannot determine parent directory of '{}'", absolute_path.display())
-                ))
+                None => {
+                    // This should rarely happen (e.g., with root files on Windows)
+                    eprintln!("Cannot determine parent directory of '{}'", absolute_path.display());
+                    Err(FileFantasticError::InvalidName(absolute_path.display().to_string()))
+                }
             }
         }
     } else {
         // Path doesn't exist, notify user and fall back to current directory
         eprintln!("Warning: Path '{}' does not exist. Starting in current directory.", 
                  absolute_path.display());
-        std::env::current_dir()
+        std::env::current_dir().map_err(|e| {
+            eprintln!("Failed to get current directory: {}", e);
+            FileFantasticError::Io(e)
+        })
     }
 }
+
+// /// Determines the starting directory path from command line arguments
+// /// 
+// /// # Returns
+// /// * `io::Result<PathBuf>` - The absolute path to start in
+// ///
+// /// # Behavior
+// /// - If a valid path is provided as first argument, uses that
+// /// - If a file path is provided, uses its parent directory
+// /// - If path doesn't exist or no args provided, uses current directory
+// /// - Converts all paths to absolute paths for clarity
+// fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
+//     // Get command line arguments
+//     let args: Vec<String> = std::env::args().skip(1).collect();
+    
+//     if args.is_empty() {
+//         // No arguments provided, use current directory
+//         return std::env::current_dir();
+//     }
+    
+//     // Use first argument as path
+//     let path_arg = PathBuf::from(&args[0]);
+    
+//     // Convert to absolute path if possible
+//     let absolute_path = if path_arg.is_relative() {
+//         // Join with current directory to make absolute
+//         match std::env::current_dir() {
+//             Ok(current_dir) => current_dir.join(&path_arg),
+//             Err(_) => path_arg // Fall back to relative if current_dir fails
+//         }
+//     } else {
+//         path_arg
+//     };
+    
+//     if absolute_path.exists() {
+//         if absolute_path.is_dir() {
+//             // Path is a directory, use it directly
+//             Ok(absolute_path)
+//         } else {
+//             // Path is a file, use its parent directory
+//             match absolute_path.parent() {
+//                 Some(parent) => {
+//                     // Print notice about using parent directory
+//                     println!("Note: Using parent directory of file: {}", absolute_path.display());
+//                     println!("Directory: {}", parent.display());
+//                     println!("Press Enter to continue...");
+//                     let mut input = String::new();
+//                     io::stdin().read_line(&mut input)?;
+                    
+//                     Ok(PathBuf::from(parent))
+//                 },
+//                 None => Err(io::Error::new(
+//                     io::ErrorKind::InvalidInput, 
+//                     format!("Cannot determine parent directory of '{}'", absolute_path.display())
+//                 ))
+//             }
+//         }
+//     } else {
+//         // Path doesn't exist, notify user and fall back to current directory
+//         eprintln!("Warning: Path '{}' does not exist. Starting in current directory.", 
+//                  absolute_path.display());
+//         std::env::current_dir()
+//     }
+// }
 
 /// Public entry point for the file manager functionality.
 /// 
 /// This function runs the file manager in the current terminal
-/// and returns when the user exits.
+/// and provides a file browsing interface with sorting, filtering,
+/// and search capabilities.
 ///
 /// # Returns
-/// * `io::Result<()>` - Success or IO error
+/// * `Result<()>` - Success or FileFantasticError with context
+///
+/// # Features
+/// - Directory navigation with numbered selection
+/// - File opening with custom editor selection
+/// - Sorting by name, size, or modification time
+/// - Filtering by file type (files or directories)
+/// - Fuzzy text search with Levenshtein distance
+/// - Pagination for large directories
+/// 
+/// # Error Handling
+/// - Recoverable errors allow continued operation
+/// - Critical errors return with context
+/// - User is informed of all error conditions
+/// - Fallbacks implemented for common failure scenarios
 ///
 /// # Example
 /// ```rust
-/// use crate::ff;
+/// use crate::ff_file_fantastic_module::file_fantastic;
 ///
-/// fn main() -> io::Result<()> {
-///     ff::file_fantastic()
+/// fn main() -> std::io::Result<()> {
+///     if let Err(e) = file_fantastic() {
+///         eprintln!("Error: {}", e);
+///         std::process::exit(1);
+///     }
+///     Ok(())
 /// }
 /// ```
-/// Main entry point for the file manager application
-/// 
-/// # Overview
-/// Implements a terminal-based file manager with the following features:
-/// - Directory navigation and file operations
-/// - Numbered item selection interface
-/// - Multiple sort options (name, size, modified date)
-/// - Fuzzy search functionality
-/// - File opening with custom editor selection
-/// - New terminal window opening
-/// 
-/// # User Interface
-/// - Displays current directory path
-/// - Shows numbered list of files and directories
-/// - Command prompt (>>) for user input
-/// 
-/// # Commands
-/// - Numbers (1-N): Select file or directory
-/// - Single letters:
-///   * (q)uit: Exit application
-///   * (b)ack: Go to parent directory
-///   * (t)erminal: Open new terminal in current directory
-///   * (n)ame: Sort by name
-///   * (s)ize: Sort by size
-///   * (m)odified: Sort by modification date
-/// - Enter/Return: Refresh display
-/// - Text input: Fuzzy search through current directory
-/// 
-/// # Sort Behavior
-/// - Each sort command (n/s/m) toggles ascending/descending
-/// - Directories are always grouped together
-/// - Secondary sort maintains stable ordering
-/// 
-/// # Search Behavior
-/// - Any input longer than one character triggers fuzzy search
-/// - Shows matches within Levenshtein distance threshold
-/// - Searches both filenames and directories
-/// 
-/// # Error Handling
-/// - Handles IO errors gracefully
-/// - Provides user feedback for all operations
-/// - Maintains application state on recoverable errors
-/// 
-/// # Returns
-/// * `io::Result<()>` - Success or IO error
-/// 
-/// # Implementation Notes
-/// - Uses NavigationState to maintain UI state
-/// - Updates display after each operation
-/// - Handles platform-specific file operations
-/// - Implements clean shutdown on quit
-/// 
-/// # Example Usage
-/// ```text
-/// >> 5        # Select item number 5
-/// >> b        # Go back to parent directory
-/// >> cargo    # Search for items matching "cargo"
-/// >> q        # Quit application
-/// ```
-/// Main entry point for the file manager application
-pub fn file_fantastic() -> io::Result<()> {
-    
+pub fn file_fantastic() -> Result<()> {
     // Get starting directory from args or default to current directory
-    let mut current_directory_path = get_starting_path_from_args_or_cwd_default()?;
+    let mut current_directory_path = match get_starting_path_from_args_or_cwd_default() {
+        Ok(path) => path,
+        Err(e) => {
+            // Critical failure - unable to determine any starting directory
+            eprintln!("Unable to determine starting directory: {}", e);
+            eprintln!("This may be due to permission issues or missing directories.");
+            return Err(e);
+        }
+    };
     
     // Display startup information for transparency
     println!("Using directory: {}", current_directory_path.display());
@@ -1885,8 +2536,73 @@ pub fn file_fantastic() -> io::Result<()> {
     let mut nav_state = NavigationState::new();
 
     loop {
+        // Read directory contents with proper error handling
+        let mut all_entries = match read_directory_contents(&current_directory_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                match e {
+                    FileFantasticError::PermissionDenied(_) => {
+                        eprintln!("Permission denied: Cannot read directory {}", 
+                                 current_directory_path.display());
+                        println!("Press Enter to go back to previous directory or 'q' to quit...");
+                        
+                        let mut input = String::new();
+                        io::stdin().read_line(&mut input).map_err(|e| {
+                            eprintln!("Failed to read input: {}", e);
+                            FileFantasticError::Io(e)
+                        })?;
+                        
+                        if input.trim().eq_ignore_ascii_case("q") {
+                            return Ok(());
+                        }
+                        
+                        // Try to go up one directory
+                        match current_directory_path.parent() {
+                            Some(parent) => {
+                                current_directory_path = parent.to_path_buf();
+                                continue;
+                            },
+                            None => {
+                                eprintln!("Cannot navigate further up. Exiting.");
+                                return Ok(());
+                            }
+                        }
+                    },
+                    FileFantasticError::NotFound(_) => {
+                        eprintln!("Directory not found: {}", current_directory_path.display());
+                        
+                        // Try to go up one directory
+                        match current_directory_path.parent() {
+                            Some(parent) => {
+                                current_directory_path = parent.to_path_buf();
+                                continue;
+                            },
+                            None => {
+                                // Last resort: use current working directory
+                                eprintln!("Falling back to current working directory");
+                                match std::env::current_dir() {
+                                    Ok(cwd) => {
+                                        current_directory_path = cwd;
+                                        continue;
+                                    },
+                                    Err(io_err) => {
+                                        eprintln!("Cannot determine current directory: {}", io_err);
+                                        return Err(FileFantasticError::Io(io_err));
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    // Other errors are critical
+                    _ => {
+                        eprintln!("Error reading directory: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        };
 
-        let mut all_entries = read_directory_contents(&current_directory_path)?;
+        // Sort entries according to current sort method
         sort_directory_entries(&mut all_entries, nav_state.current_sort_method);
         
         // Apply the current filter to get filtered entries
@@ -1913,17 +2629,47 @@ pub fn file_fantastic() -> io::Result<()> {
             nav_state.update_lookup_table(page_entries);
 
             // Display with pagination info and filter status
-            display_directory_contents(
+            match display_directory_contents(
                 page_entries, 
                 &current_directory_path,
                 Some((dir_view.current_page + 1, dir_view.total_pages())),
-                nav_state.current_filter, // Pass current filter setting
-            )?;
+                nav_state.current_filter,
+            ) {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("Error displaying directory contents: {}", e);
+                    eprintln!("Press Enter to try again or 'q' to quit...");
+                    
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+                    
+                    if input.trim().eq_ignore_ascii_case("q") {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            }
 
             print!("\n>> ");
-            io::stdout().flush()?;
+            match io::stdout().flush() {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("Failed to flush stdout: {}", e);
+                    // Non-critical error, continue
+                }
+            }
+            
             let mut user_input = String::new();
-            io::stdin().read_line(&mut user_input)?;
+            match io::stdin().read_line(&mut user_input) {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("Error reading input: {}", e);
+                    continue; // Try again
+                }
+            }
             
             // Handle pagination commands first
             let trimmed_input = user_input.trim();
@@ -1945,7 +2691,14 @@ pub fn file_fantastic() -> io::Result<()> {
                             current_directory_path = entry.file_system_item_path.clone();
                             break; // Break inner loop to read new directory
                         } else {
-                            handle_file_open(&entry.file_system_item_path)?;
+                            match handle_file_open(&entry.file_system_item_path) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    eprintln!("Error opening file: {}", e);
+                                    println!("Press Enter to continue...");
+                                    let _ = io::stdin().read_line(&mut String::new());
+                                }
+                            }
                             continue; // Stay in inner loop
                         }
                     }
@@ -1957,52 +2710,282 @@ pub fn file_fantastic() -> io::Result<()> {
                 &user_input, 
                 &nav_state, 
                 &all_entries,
-            )? {
-                NavigationAction::Refresh => {
-                    // Clear any filters when refreshing
-                    nav_state.current_filter = None;
-                    break; // Break inner loop to refresh directory
-                },
-                NavigationAction::Filter(filter_char) => {
-                    nav_state.set_filter(filter_char);
-                    break; // Break inner loop to apply filter
-                },
-                NavigationAction::ChangeDirectory(new_path) => {
-                    current_directory_path = new_path;
-                    break; // Break inner loop to read new directory
-                }
-                NavigationAction::ParentDirectory => {
-                    if let Some(parent) = current_directory_path.parent() {
-                        current_directory_path = parent.to_path_buf();
-                    }
-                    break; // Break inner loop to read new directory
-                }
-                NavigationAction::OpenFile(ref path) => {
-                    handle_file_open(path)?;
-                }
-                NavigationAction::Quit => return Ok(()),
-
-                NavigationAction::Sort(command) => {
-                    nav_state.toggle_sort(command);
-                    break; // Break inner loop to resort directory
-                }
-                NavigationAction::OpenNewTerminal => {
-                    match open_new_terminal(&current_directory_path) {
-                        Ok(_) => {
-                            println!("Opening new terminal... Press Enter to continue");
+            ) {
+                Ok(action) => {
+                    match action {
+                        NavigationAction::Refresh => {
+                            // Clear any filters when refreshing
+                            nav_state.current_filter = None;
+                            break; // Break inner loop to refresh directory
+                        },
+                        NavigationAction::Filter(filter_char) => {
+                            nav_state.set_filter(filter_char);
+                            break; // Break inner loop to apply filter
+                        },
+                        NavigationAction::ChangeDirectory(new_path) => {
+                            current_directory_path = new_path;
+                            break; // Break inner loop to read new directory
+                        }
+                        NavigationAction::ParentDirectory => {
+                            match current_directory_path.parent() {
+                                Some(parent) => {
+                                    current_directory_path = parent.to_path_buf();
+                                    break; // Break inner loop to read new directory
+                                },
+                                None => {
+                                    println!("Already at root directory");
+                                    // Stay in current directory
+                                }
+                            }
+                        }
+                        NavigationAction::OpenFile(ref path) => {
+                            match handle_file_open(path) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    eprintln!("Error opening file: {}", e);
+                                    println!("Press Enter to continue...");
+                                    let _ = io::stdin().read_line(&mut String::new());
+                                }
+                            }
+                        }
+                        NavigationAction::Quit => return Ok(()),
+                        NavigationAction::Sort(command) => {
+                            nav_state.toggle_sort(command);
+                            break; // Break inner loop to resort directory
+                        }
+                        NavigationAction::OpenNewTerminal => {
+                            match open_new_terminal(&current_directory_path) {
+                                Ok(_) => {
+                                    println!("Opening new terminal... Press Enter to continue");
+                                },
+                                Err(e) => {
+                                    println!("Error opening new terminal: {}. Press Enter to continue", e);
+                                }
+                            }
+                            let _ = io::stdin().read_line(&mut String::new());
+                        },
+                        NavigationAction::Invalid => {
+                            println!("Invalid input. Press Enter to continue...");
                             let _ = io::stdin().read_line(&mut String::new());
                         }
-                        Err(e) => {
-                            println!("Error opening new terminal: {}. Press Enter to continue", e);
-                            let _ = io::stdin().read_line(&mut String::new());
-                        }
                     }
                 },
-                NavigationAction::Invalid => {
-                    println!("Invalid input. Press Enter to continue...");
+                Err(e) => {
+                    eprintln!("Error processing input: {}", e);
+                    println!("Press Enter to continue...");
                     let _ = io::stdin().read_line(&mut String::new());
                 }
             }
         }
     }
 }
+
+// old works
+// /// Public entry point for the file manager functionality.
+// /// 
+// /// This function runs the file manager in the current terminal
+// /// and returns when the user exits.
+// ///
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// ///
+// /// # Example
+// /// ```rust
+// /// use crate::ff;
+// ///
+// /// fn main() -> io::Result<()> {
+// ///     ff::file_fantastic()
+// /// }
+// /// ```
+// /// Main entry point for the file manager application
+// /// 
+// /// # Overview
+// /// Implements a terminal-based file manager with the following features:
+// /// - Directory navigation and file operations
+// /// - Numbered item selection interface
+// /// - Multiple sort options (name, size, modified date)
+// /// - Fuzzy search functionality
+// /// - File opening with custom editor selection
+// /// - New terminal window opening
+// /// 
+// /// # User Interface
+// /// - Displays current directory path
+// /// - Shows numbered list of files and directories
+// /// - Command prompt (>>) for user input
+// /// 
+// /// # Commands
+// /// - Numbers (1-N): Select file or directory
+// /// - Single letters:
+// ///   * (q)uit: Exit application
+// ///   * (b)ack: Go to parent directory
+// ///   * (t)erminal: Open new terminal in current directory
+// ///   * (n)ame: Sort by name
+// ///   * (s)ize: Sort by size
+// ///   * (m)odified: Sort by modification date
+// /// - Enter/Return: Refresh display
+// /// - Text input: Fuzzy search through current directory
+// /// 
+// /// # Sort Behavior
+// /// - Each sort command (n/s/m) toggles ascending/descending
+// /// - Directories are always grouped together
+// /// - Secondary sort maintains stable ordering
+// /// 
+// /// # Search Behavior
+// /// - Any input longer than one character triggers fuzzy search
+// /// - Shows matches within Levenshtein distance threshold
+// /// - Searches both filenames and directories
+// /// 
+// /// # Error Handling
+// /// - Handles IO errors gracefully
+// /// - Provides user feedback for all operations
+// /// - Maintains application state on recoverable errors
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Implementation Notes
+// /// - Uses NavigationState to maintain UI state
+// /// - Updates display after each operation
+// /// - Handles platform-specific file operations
+// /// - Implements clean shutdown on quit
+// /// 
+// /// # Example Usage
+// /// ```text
+// /// >> 5        # Select item number 5
+// /// >> b        # Go back to parent directory
+// /// >> cargo    # Search for items matching "cargo"
+// /// >> q        # Quit application
+// /// ```
+// /// Main entry point for the file manager application
+// pub fn file_fantastic() -> io::Result<()> {
+    
+//     // Get starting directory from args or default to current directory
+//     let mut current_directory_path = get_starting_path_from_args_or_cwd_default()?;
+    
+//     // Display startup information for transparency
+//     println!("Using directory: {}", current_directory_path.display());
+    
+//     let mut nav_state = NavigationState::new();
+
+//     loop {
+
+//         let mut all_entries = read_directory_contents(&current_directory_path)?;
+//         sort_directory_entries(&mut all_entries, nav_state.current_sort_method);
+        
+//         // Apply the current filter to get filtered entries
+//         let filtered_entries = nav_state.apply_filter(&all_entries);
+        
+//         // Convert from Vec<&FileSystemEntry> to Vec<FileSystemEntry> for pagination
+//         let directory_entries: Vec<FileSystemEntry> = filtered_entries.iter()
+//             .map(|&entry| FileSystemEntry {
+//                 file_system_item_name: entry.file_system_item_name.clone(),
+//                 file_system_item_path: entry.file_system_item_path.clone(),
+//                 file_system_item_size_in_bytes: entry.file_system_item_size_in_bytes,
+//                 file_system_item_last_modified_time: entry.file_system_item_last_modified_time,
+//                 is_directory: entry.is_directory,
+//             })
+//             .collect();
+
+//         // Create paginated view
+//         let mut dir_view = DirectoryView::new(&directory_entries);
+
+//         // Inner loop for pagination within the same directory
+//         loop {
+//             // Get current page entries
+//             let page_entries = dir_view.current_page_entries();
+//             nav_state.update_lookup_table(page_entries);
+
+//             // Display with pagination info and filter status
+//             display_directory_contents(
+//                 page_entries, 
+//                 &current_directory_path,
+//                 Some((dir_view.current_page + 1, dir_view.total_pages())),
+//                 nav_state.current_filter, // Pass current filter setting
+//             )?;
+
+//             print!("\n>> ");
+//             io::stdout().flush()?;
+//             let mut user_input = String::new();
+//             io::stdin().read_line(&mut user_input)?;
+            
+//             // Handle pagination commands first
+//             let trimmed_input = user_input.trim();
+//             if trimmed_input == "s" {
+//                 dir_view.next_page();
+//                 continue; // Stay in inner loop, just change page
+//             } else if trimmed_input == "w" {
+//                 dir_view.prev_page();
+//                 continue; // Stay in inner loop, just change page
+//             }
+            
+//             // Handle number input directly to account for pagination
+//             if let Ok(number) = trimmed_input.parse::<usize>() {
+//                 if let Some(actual_index) = dir_view.get_actual_index(number) {
+//                     // Only process if within range of full directory listing
+//                     if actual_index < directory_entries.len() {
+//                         let entry = &directory_entries[actual_index];
+//                         if entry.is_directory {
+//                             current_directory_path = entry.file_system_item_path.clone();
+//                             break; // Break inner loop to read new directory
+//                         } else {
+//                             handle_file_open(&entry.file_system_item_path)?;
+//                             continue; // Stay in inner loop
+//                         }
+//                     }
+//                 }
+//             }
+
+//             // For other commands, use normal processing
+//             match process_user_input(
+//                 &user_input, 
+//                 &nav_state, 
+//                 &all_entries,
+//             )? {
+//                 NavigationAction::Refresh => {
+//                     // Clear any filters when refreshing
+//                     nav_state.current_filter = None;
+//                     break; // Break inner loop to refresh directory
+//                 },
+//                 NavigationAction::Filter(filter_char) => {
+//                     nav_state.set_filter(filter_char);
+//                     break; // Break inner loop to apply filter
+//                 },
+//                 NavigationAction::ChangeDirectory(new_path) => {
+//                     current_directory_path = new_path;
+//                     break; // Break inner loop to read new directory
+//                 }
+//                 NavigationAction::ParentDirectory => {
+//                     if let Some(parent) = current_directory_path.parent() {
+//                         current_directory_path = parent.to_path_buf();
+//                     }
+//                     break; // Break inner loop to read new directory
+//                 }
+//                 NavigationAction::OpenFile(ref path) => {
+//                     handle_file_open(path)?;
+//                 }
+//                 NavigationAction::Quit => return Ok(()),
+
+//                 NavigationAction::Sort(command) => {
+//                     nav_state.toggle_sort(command);
+//                     break; // Break inner loop to resort directory
+//                 }
+//                 NavigationAction::OpenNewTerminal => {
+//                     match open_new_terminal(&current_directory_path) {
+//                         Ok(_) => {
+//                             println!("Opening new terminal... Press Enter to continue");
+//                             let _ = io::stdin().read_line(&mut String::new());
+//                         }
+//                         Err(e) => {
+//                             println!("Error opening new terminal: {}. Press Enter to continue", e);
+//                             let _ = io::stdin().read_line(&mut String::new());
+//                         }
+//                     }
+//                 },
+//                 NavigationAction::Invalid => {
+//                     println!("Invalid input. Press Enter to continue...");
+//                     let _ = io::stdin().read_line(&mut String::new());
+//                 }
+//             }
+//         }
+//     }
+// }
