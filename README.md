@@ -43,9 +43,31 @@ source ~/.bashrc
 or bash_profile
 
 
-ff is a minimal rust file manager
+# ff is a minimal rust file manager
 
-A very minimal 'file manager', much more minimal than "midnight commander." 
+## A very minimal 'file manager' module, much more minimal than "midnight commander." 
+
+### Sample main file to use this module
+```rust
+// src/main.rs
+
+// import file fantstic module w/ these 2 lines
+mod ff;
+use ff::file_fantastic;
+
+fn main() {
+    
+    // Let's call File Fantastic Go!!
+    if let Err(e) = file_fantastic() {
+        
+        // Handle errors
+        eprintln!("Error: {}", e);
+        
+        // exit code one means ok!
+        std::process::exit(1);
+    }
+}
+```
 
 # Scope:
 1. no third party dependencies
@@ -55,6 +77,7 @@ A very minimal 'file manager', much more minimal than "midnight commander."
 5. no unsafe code
 6. all errors to be handled
 7. terminal cli application
+8. Module to be used by other projects
 
 # Main functions/features:
 1. (very) minimal text user interface
@@ -100,4 +123,16 @@ if the size is no more than 99 of that unit
 - or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
 
+// src/main.rs
+
+mod ff;
+use ff::file_fantastic;
+
+fn main() {
+    // Handle the Result properly
+    if let Err(e) = file_fantastic() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
 

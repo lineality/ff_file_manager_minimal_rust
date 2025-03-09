@@ -494,7 +494,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
 fn process_user_input(
     input: &str,
     nav_state: &NavigationState,
-    directory_entries: &[FileSystemEntry],
     all_entries: &[FileSystemEntry],
 ) -> io::Result<NavigationAction> {
     let input = input.trim();
@@ -1837,10 +1836,8 @@ pub fn file_fantastic() -> io::Result<()> {
             match process_user_input(
                 &user_input, 
                 &nav_state, 
-                &page_entries, 
                 &all_entries,
             )? {
-                // match process_user_input(&user_input, &nav_state, &page_entries)? {
                 NavigationAction::Refresh => {
                     // Clear any filters when refreshing
                     nav_state.current_filter = None;
