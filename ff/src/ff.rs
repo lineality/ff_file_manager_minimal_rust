@@ -495,6 +495,7 @@ fn process_user_input(
     input: &str,
     nav_state: &NavigationState,
     directory_entries: &[FileSystemEntry],
+    all_entries: &[FileSystemEntry],
 ) -> io::Result<NavigationAction> {
     let input = input.trim();
         
@@ -523,10 +524,10 @@ fn process_user_input(
         }
     }
 
-    // Handle empty input
-    if input.is_empty() {
-        return Ok(NavigationAction::Refresh);
-    }
+    // // Handle empty input
+    // if input.is_empty() {
+    //     return Ok(NavigationAction::Refresh);
+    // }
 
     // Try to parse as number for direct selection
     // This will be used as a fallback when not handled by pagination
@@ -544,7 +545,7 @@ fn process_user_input(
     }
 
     // If not a command or number, treat as search
-    let search_results = nav_state.fuzzy_search(input, directory_entries);
+    let search_results = nav_state.fuzzy_search(input, all_entries);
     display_search_results(&search_results)?;
     
     // Wait for user to select from results or press enter to continue
@@ -555,16 +556,14 @@ fn process_user_input(
     io::stdin().read_line(&mut selection)?;
     
     if let Ok(number) = selection.trim().parse::<usize>() {
+        // Find the search result with the matching display_index
         if let Some(result) = search_results.iter().find(|r| r.display_index == number) {
-            // Check if selected item is in lookup table and get its type
-            if let Some(item_info) = nav_state.lookup_item(number) {
-                return Ok(match item_info.item_type {
-                    FileSystemItemType::Directory => {
-                        NavigationAction::ChangeDirectory(result.item_path.clone())
-                    }
-                    FileSystemItemType::File => {
-                        NavigationAction::OpenFile(result.item_path.clone())
-                    }
+            // Get the original entry by its index to determine if it's a directory or file
+            if let Some(entry) = all_entries.get(number - 1) {
+                return Ok(if entry.is_directory {
+                    NavigationAction::ChangeDirectory(result.item_path.clone())
+                } else {
+                    NavigationAction::OpenFile(result.item_path.clone())
                 });
             }
         }
@@ -1417,7 +1416,7 @@ fn display_directory_contents(
     // Add pagination footer if applicable
     if let Some((current_page, total_pages)) = page_info {
         if total_pages > 1 {
-            println!("--- Page {} of {}: (w)^ for up previous-page, (s)v for down next-page ---", 
+            println!("--- Page {} of {}: (w)^ for above page, (s)v for below page ---", 
                     current_page, total_pages);
         }
     }
@@ -1835,7 +1834,13 @@ pub fn file_fantastic() -> io::Result<()> {
             }
 
             // For other commands, use normal processing
-            match process_user_input(&user_input, &nav_state, &page_entries)? {
+            match process_user_input(
+                &user_input, 
+                &nav_state, 
+                &page_entries, 
+                &all_entries,
+            )? {
+                // match process_user_input(&user_input, &nav_state, &page_entries)? {
                 NavigationAction::Refresh => {
                     // Clear any filters when refreshing
                     nav_state.current_filter = None;
