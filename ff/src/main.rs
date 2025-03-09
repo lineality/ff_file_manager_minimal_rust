@@ -1,8 +1,8 @@
 // src/main.rs
 
 // import file fantstic module w/ these 2 lines
-mod ff;
-use ff::file_fantastic;
+mod ff_file_fantastic_module;
+use ff_file_fantastic_module::file_fantastic;
 
 fn main() {
     
@@ -16,3 +16,4 @@ fn main() {
         std::process::exit(1);
     }
 }
+

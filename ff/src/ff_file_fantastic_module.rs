@@ -1,4 +1,4 @@
-// src/lib.rs (or src/ff.rs)
+// src/lib.rs (or src/ff_file_fantastic_module.rs)
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small 
@@ -6,15 +6,15 @@
 /* Docs:
 # ff is a minimal rust file manager
 
-## A very minimal 'file manager' module, much more minimal than "midnight commander." 
+## A very minimal 'file browser/explorer' module, much more minimal than "midnight commander." 
 
 ### Sample main file to use this module
 ```rust
 // src/main.rs
 
-// import file fantstic module w/ these 2 lines
-mod ff;
-use ff::file_fantastic;
+// import file fantastic module w/ these 2 lines
+mod ff_file_fantastic_module;
+use ff_file_fantastic_module::file_fantastic;
 
 fn main() {
     
@@ -28,17 +28,50 @@ fn main() {
         std::process::exit(1);
     }
 }
+
 ```
 
-# Scope:
-1. no third party dependencies
-2. docstrings required
-3. code comments required
-4. no unwrap
-5. no unsafe code
-6. all errors to be handled
-7. terminal cli application
-8. Module to be used by other projects
+
+# Functionality Goal:
+ff (File Fantastic) is meant to operate in a 'do one thing well' context.
+A plain posix (unix, bsd, linux, etc.) terminal is very useful
+and important to use, but common useful features that have become
+conventions of file-folder-explorers/managers/browsers are missing,
+such as seeing file sizes, sorting by last-modified date, etc. 
+with ff (File Fantastic) it is (hopefully) simple to ~bridge or interface the
+common conventions of file-explorers with the open-ended utility of the terminal,
+without adding too many redundant features to File Fantastic.
+
+Terminals are great for lower level tasks such as 
+making new directories, renaming, removing, etc.,
+but terminals are not very user-friendly for seeing and navigating 'where'
+you are in the data.
+
+### Do One Thing Well
+If in a terminal you want the navigation-features of a file-explorer just type 'ff'
+and there you are: that terminal view is enhanced with file-folder visibility. 
+If in File Fantastic you want the lower-level utility of a terminal, 
+type 't' and there you are: a terminal opens where you were. Use the right
+tool for the job, not a multi-function-monster that does many things badly.
+
+### A Stable Backup: 
+File Fantastic is not expected to completely replace the GUI fancy file-manager
+that usually is a default in an OS. But it does happen, often more frequently
+than one might expect, that the default fancy GUI file explorer tool does
+not work. In such cases it is nice to have a stable backup option. 
+
+# Design Scope:
+1. use best practice
+2. absolute file paths
+3. no third party dependencies
+4. docstrings required
+4. code comments required
+5. clear unique meaningful naming required
+6. no unwrap
+7. no unsafe code
+8. all errors to be handled
+9. terminal cli application
+10. module to be used in other projects
 
 # Main functions/features:
 1. (very) minimal text user interface
@@ -83,19 +116,6 @@ if the size is no more than 99 of that unit
 - default terminal size 80/24
 - or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
-
-// src/main.rs
-
-mod ff;
-use ff::file_fantastic;
-
-fn main() {
-    // Handle the Result properly
-    if let Err(e) = file_fantastic() {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
-}
 
 */
 
@@ -1444,7 +1464,7 @@ fn display_directory_contents(
 /// Open with (enter for default, or type: nano/vim/code/etc): vim
 /// ```
 fn open_file(file_path: &PathBuf) -> io::Result<()> {
-    print!("Open with... (hit enter for default, or enter your editor 'name': hx, lapce, vi, vim, nano, code, etc.): ");
+    print!("Open with... (hit enter for default, or enter your editor 'name' as called in a terminal: gedit, hx, lapce, vi, vim, nano, code, etc.): ");
     io::stdout().flush()?;
     
     let mut editor = String::new();
@@ -1678,6 +1698,70 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     v0[n]
 }
 
+/// Determines the starting directory path from command line arguments
+/// 
+/// # Returns
+/// * `io::Result<PathBuf>` - The absolute path to start in
+///
+/// # Behavior
+/// - If a valid path is provided as first argument, uses that
+/// - If a file path is provided, uses its parent directory
+/// - If path doesn't exist or no args provided, uses current directory
+/// - Converts all paths to absolute paths for clarity
+fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
+    // Get command line arguments
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    
+    if args.is_empty() {
+        // No arguments provided, use current directory
+        return std::env::current_dir();
+    }
+    
+    // Use first argument as path
+    let path_arg = PathBuf::from(&args[0]);
+    
+    // Convert to absolute path if possible
+    let absolute_path = if path_arg.is_relative() {
+        // Join with current directory to make absolute
+        match std::env::current_dir() {
+            Ok(current_dir) => current_dir.join(&path_arg),
+            Err(_) => path_arg // Fall back to relative if current_dir fails
+        }
+    } else {
+        path_arg
+    };
+    
+    if absolute_path.exists() {
+        if absolute_path.is_dir() {
+            // Path is a directory, use it directly
+            Ok(absolute_path)
+        } else {
+            // Path is a file, use its parent directory
+            match absolute_path.parent() {
+                Some(parent) => {
+                    // Print notice about using parent directory
+                    println!("Note: Using parent directory of file: {}", absolute_path.display());
+                    println!("Directory: {}", parent.display());
+                    println!("Press Enter to continue...");
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    
+                    Ok(PathBuf::from(parent))
+                },
+                None => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput, 
+                    format!("Cannot determine parent directory of '{}'", absolute_path.display())
+                ))
+            }
+        }
+    } else {
+        // Path doesn't exist, notify user and fall back to current directory
+        eprintln!("Warning: Path '{}' does not exist. Starting in current directory.", 
+                 absolute_path.display());
+        std::env::current_dir()
+    }
+}
+
 /// Public entry point for the file manager functionality.
 /// 
 /// This function runs the file manager in the current terminal
@@ -1755,17 +1839,17 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
 /// ```
 /// Main entry point for the file manager application
 pub fn file_fantastic() -> io::Result<()> {
-    let mut current_directory_path = std::env::current_dir()?;
+    
+    // Get starting directory from args or default to current directory
+    let mut current_directory_path = get_starting_path_from_args_or_cwd_default()?;
+    
+    // Display startup information for transparency
+    println!("Using directory: {}", current_directory_path.display());
+    
     let mut nav_state = NavigationState::new();
 
     loop {
-        // let mut directory_entries = read_directory_contents(&current_directory_path)?;
-        // sort_directory_entries(&mut directory_entries, nav_state.current_sort_method);
-        
-        // // Create paginated view
-        // let mut dir_view = DirectoryView::new(&directory_entries);
-        
-        
+
         let mut all_entries = read_directory_contents(&current_directory_path)?;
         sort_directory_entries(&mut all_entries, nav_state.current_sort_method);
         
