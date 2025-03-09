@@ -83,7 +83,8 @@ not work. In such cases it is nice to have a stable backup option.
 4. 'b' to go back; back-up directory path, go to parent directory
 5. enter file to open by number; use Q&A to use editor of choice
 6. default to default program with another return/enter
-7. open file in new terminal
+7. open file in new terminal: note, due to using os-default if available,
+   File Fantastic can open image or other files, at least sometimes.
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
