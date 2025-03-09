@@ -120,6 +120,123 @@ if the size is no more than 99 of that unit
 
 */
 
+/// ff - A minimal file manager in Rust
+/// use -> cargo build --profile release-performance
+/// or, use -> cargo build --profile release-small 
+///
+/// # File Fantastic (ff) - A minimal file manager
+///
+/// ## Overview
+/// File Fantastic provides a lightweight, terminal-based file navigation and management
+/// interface that bridges the gap between command-line terminals and graphical file explorers.
+///
+/// ## Sample main file to use this module
+/// ```rust
+/// // src/main.rs
+///
+/// // import file fantastic module w/ these 2 lines
+/// mod ff_file_fantastic_module;
+/// use ff_file_fantastic_module::file_fantastic;
+///
+/// fn main() {
+///     
+///     // Let's call File Fantastic Go!!
+///     if let Err(e) = file_fantastic() {
+///         
+///         // Handle errors
+///         eprintln!("Error: {}", e);
+///         
+///         // exit code one means error occurred
+///         std::process::exit(1);
+///     }
+/// }
+/// ```
+///
+/// # Functionality Goal:
+/// ff (File Fantastic) is meant to operate in a 'do one thing well' context.
+/// A plain posix (unix, bsd, linux, etc.) terminal is very useful
+/// and important to use, but common useful features that have become
+/// conventions of file-folder-explorers/managers/browsers are missing,
+/// such as seeing file sizes, sorting by last-modified date, etc. 
+/// with ff (File Fantastic) it is (hopefully) simple to ~bridge or interface the
+/// common conventions of file-explorers with the open-ended utility of the terminal,
+/// without adding too many redundant features to File Fantastic.
+///
+/// Terminals are great for lower level tasks such as 
+/// making new directories, renaming, removing, etc.,
+/// but terminals are not very user-friendly for seeing and navigating 'where'
+/// you are in the data.
+///
+/// ## Do One Thing Well
+/// If in a terminal you want the navigation-features of a file-explorer just type 'ff'
+/// and there you are: that terminal view is enhanced with file-folder visibility. 
+/// If in File Fantastic you want the lower-level utility of a terminal, 
+/// type 't' and there you are: a terminal opens where you were. Use the right
+/// tool for the job, not a multi-function-monster that does many things badly.
+///
+/// ## A Stable Backup: 
+/// File Fantastic is not expected to completely replace the GUI fancy file-manager
+/// that usually is a default in an OS. But it does happen, often more frequently
+/// than one might expect, that the default fancy GUI file explorer tool does
+/// not work. In such cases it is nice to have a stable backup option.
+///
+/// # Design Scope:
+/// 1. use best practice
+/// 2. absolute file paths
+/// 3. no third party dependencies
+/// 4. docstrings required
+/// 4. code comments required
+/// 5. clear unique meaningful naming required
+/// 6. no unwrap
+/// 7. no unsafe code
+/// 8. all errors to be handled
+/// 9. terminal cli application
+/// 10. module to be used in other projects
+///
+/// # Main functions/features:
+/// 1. (very) minimal text user interface
+///   - path, then numbered lines
+///   - like bash: ls, but list by number
+///   - show as columns: item number name size modified
+/// 2. primarily int + enter/return for user-input
+/// 3. select directory to go to by number
+/// 4. 'b' to go back; back-up directory path, go to parent directory
+/// 5. enter file to open by number; use Q&A to use editor of choice
+/// 6. default to default program with another return/enter
+/// 7. open file in new terminal: note, due to using os-default if available,
+///    File Fantastic can open image or other files, at least sometimes.
+/// 8. hit enter to refresh
+/// 11. single letter commands
+/// 12. legend shows command 'words': use first letter as command
+///     (q)uit (b)ack|(t)erminal|(d)ir (f)ile|(n)ame (s)ize (m)od|str>search|enter>reset
+///     w for up, s for down, a for all 
+/// 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
+/// 14. Type a string for a partial match search.
+/// 15. 'f' or 'd' to show only files or only directories
+///
+/// # Scrolling
+/// 1. MVP: use mouse wheel to scroll up and down
+/// 2. pages using w and s to scroll up and down
+///
+/// # Example daily workflow:
+/// - open terminal
+/// - type ff to start file manager/browser
+/// - see list of directories and files by number
+///   with sort/re-sort
+/// - select item by number
+/// - select directory by number, that becomes next: like cd /dir
+/// - select file by number
+///
+/// ## List-item Size:
+/// - show file size in terms of b kb mb or gb depending on
+///   if the size is no more than 99 of that unit
+///   .1 mb, 99 k, 99 b etc.
+///
+/// ## TUI Size:
+/// - default terminal size 80/24
+/// - or first MVP, terminal size is default terminal size
+/// - for MVP...mouse to scroll up and down works fine for mvp
+
 use std::fs;
 use std::path::PathBuf;
 use std::io::{self, Write};
@@ -140,10 +257,10 @@ const YELLOW: &str = "\x1b[33m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
 
-
 /*
-Error Handling
+Error Handling section starts
 */
+
 /// Custom error type for the file manager that provides specific error contexts
 /// and better error messages for users.
 ///
@@ -151,14 +268,39 @@ Error Handling
 /// This enum categorizes errors that can occur during file manager operations
 /// to enable appropriate handling and user-friendly messages.
 ///
+/// # Purpose
+/// - Provides meaningful context beyond standard IO errors
+/// - Enables specific recovery strategies based on error type
+/// - Creates user-friendly error messages
+/// - Supports the standard error trait ecosystem
+///
+/// # Error Handling Strategy
+/// Different error variants allow for different recovery approaches:
+/// - `NotFound` errors might trigger navigation to parent directory
+/// - `PermissionDenied` errors might prompt for elevated privileges
+/// - `EditorLaunchFailed` errors can fall back to system defaults
+///
 /// # Examples
-/// ```
+/// ```rust
 /// // Creating a not found error
 /// let error = FileFantasticError::NotFound(path);
 /// 
 /// // Converting an IO error
 /// let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "Access denied");
 /// let error = FileFantasticError::from(io_err);
+///
+/// // Example error handling
+/// match operation() {
+///     Err(FileFantasticError::PermissionDenied(path)) => {
+///         eprintln!("Cannot access {}: permission denied", path.display());
+///         // Try alternative approach with elevated permissions
+///     },
+///     Err(FileFantasticError::NotFound(path)) => {
+///         eprintln!("The path {} no longer exists", path.display());
+///         // Navigate to parent directory
+///     },
+///     // Other error types...
+/// }
 /// ```
 #[derive(Debug)]
 pub enum FileFantasticError {
@@ -248,6 +390,48 @@ End of Error Handling Code
 
 
 /// Handles paginated viewing of directory contents
+///
+/// # Purpose
+/// This struct manages the pagination of directory listings, allowing users to
+/// navigate through large directories page by page rather than seeing all entries
+/// at once, which improves usability in terminals with limited display space.
+///
+/// # Pagination Behavior
+/// - Divides directory entries into pages of fixed size
+/// - Tracks current page and allows navigation between pages
+/// - Maps display indices to actual entry indices
+/// - Handles boundary cases (first/last page)
+///
+/// # Fields
+/// * `entries` - Reference to the full list of directory entries
+/// * `current_page` - Zero-based index of the current visible page
+/// * `items_per_page` - Number of items to display per page
+///
+/// # Usage
+/// ```rust
+/// // Create a paginated view of directory entries
+/// let mut dir_view = DirectoryView::new(&directory_entries);
+/// 
+/// // Display current page
+/// let current_page_entries = dir_view.current_page_entries();
+/// display_directory_contents(current_page_entries, &current_path)?;
+/// 
+/// // Navigate to next page if user presses 's'
+/// if user_input == "s" {
+///     dir_view.next_page();
+/// }
+/// 
+/// // Navigate to previous page if user presses 'w'
+/// if user_input == "w" {
+///     dir_view.prev_page();
+/// }
+///
+/// // Convert a display index to actual index in the full list
+/// if let Some(actual_index) = dir_view.get_actual_index(selected_number) {
+///     // Use the entry at the actual index
+///     let selected_entry = &directory_entries[actual_index];
+/// }
+/// ```
 struct DirectoryView<'a> {
     entries: &'a [FileSystemEntry],
     current_page: usize,
@@ -308,8 +492,12 @@ impl<'a> DirectoryView<'a> {
     }
 }
 
-/// Represents a search result with its distance score
 /// Represents a search result with its Levenshtein distance score and item details
+/// 
+/// # Purpose
+/// This struct stores information about items that match a user's search query,
+/// including their similarity score and position in the directory listing.
+/// It enables displaying search results and selecting items from search results.
 /// 
 /// # Fields
 /// * `item_name` - The name of the matching file or directory
@@ -317,9 +505,43 @@ impl<'a> DirectoryView<'a> {
 /// * `distance` - The Levenshtein distance score (lower is better)
 /// * `display_index` - The item's current display position in the file listing
 /// 
+/// # Levenshtein Distance
+/// The distance field measures similarity between the search term and item name.
+/// Lower values indicate closer matches:
+/// - 0: Exact match
+/// - 1: Single character difference
+/// - 2: Two character differences
+/// - etc.
+/// 
 /// # Usage
 /// Used to store and sort fuzzy search matches when a user enters a search term.
-/// Lower distance scores indicate closer matches to the search term.
+/// Results are typically sorted by distance (best matches first), then displayed
+/// for user selection.
+///
+/// # Example
+/// ```rust
+/// // Example search results for query "doc"
+/// let results = vec![
+///     SearchResult {
+///         item_name: "document.txt".to_string(),
+///         item_path: PathBuf::from("/path/to/document.txt"),
+///         distance: 0,  // "doc" matches the prefix exactly
+///         display_index: 3,
+///     },
+///     SearchResult {
+///         item_name: "code.rs".to_string(),
+///         item_path: PathBuf::from("/path/to/code.rs"),
+///         distance: 1,  // One letter difference between "doc" and "cod"
+///         display_index: 7,
+///     },
+/// ];
+///
+/// // Sort results by distance (best matches first)
+/// results.sort_by_key(|r| r.distance);
+///
+/// // Display to user for selection
+/// display_search_results(&results)?;
+/// ```
 #[derive(Debug)]
 struct SearchResult {
     /// Name of the matching item
@@ -334,16 +556,42 @@ struct SearchResult {
 
 /// Formats a timestamp into a human-readable format
 /// 
+/// # Purpose
+/// Converts system timestamps into user-friendly date/time representations
+/// that adapt based on how recent the timestamp is, prioritizing relevant
+/// information over complete timestamps.
+/// 
 /// # Arguments
 /// * `timestamp` - SystemTime to format
 /// 
 /// # Returns
 /// * String - Formatted date/time string
 /// 
-/// # Format
-/// - Today: "HH:MM"
-/// - This year: "MM-DD HH:MM"
-/// - Older: "YYYY-MM-DD"
+/// # Format Rules
+/// The function uses different formats based on the age of the timestamp:
+/// - Today: "HH:MM" (e.g., "14:30")
+/// - This year: "MM-DD HH:MM" (e.g., "09-15 14:30")
+/// - Older: "YYYY-MM-DD" (e.g., "2022-09-15")
+/// 
+/// # Timezone Behavior
+/// All times are displayed in the local system timezone.
+/// 
+/// # Edge Cases
+/// - For timestamps that can't be compared with now (future with TryFrom error),
+///   falls back to displaying them as if they're old timestamps
+/// - The Unix epoch (1970-01-01) is handled correctly and displayed as "1970-01-01"
+/// 
+/// # Examples
+/// ```rust
+/// // Format the current time (will show HH:MM)
+/// let now = SystemTime::now();
+/// let formatted = format_timestamp(now);
+/// 
+/// // Format a file's modification time
+/// let metadata = fs::metadata("example.txt")?;
+/// let modified = metadata.modified()?;
+/// let formatted = format_timestamp(modified);
+/// ```
 fn format_timestamp(timestamp: SystemTime) -> String {
     // Get current time and the file time as Duration since UNIX_EPOCH
     let now = SystemTime::now();
@@ -379,7 +627,38 @@ fn format_timestamp(timestamp: SystemTime) -> String {
     }
 }
 
-/// Convert seconds since epoch to year, month, day, hour, minute
+/// Convert seconds since epoch to year, month, day, hour, minute components
+/// 
+/// # Purpose
+/// Decomposes a Unix timestamp (seconds since 1970-01-01) into individual
+/// date and time components for formatted display.
+/// 
+/// # Arguments
+/// * `secs` - Seconds since Unix epoch (1970-01-01 00:00:00 UTC)
+/// 
+/// # Returns
+/// * Tuple of (year, month, day, hour, minute) as u32 values
+/// 
+/// # Implementation Notes
+/// - This is a simplified implementation that doesn't use the chrono crate
+/// - Time components (hour, minute) are calculated using modular arithmetic
+/// - Date components use the seconds_to_ymd helper function
+/// 
+/// # Limitations
+/// - Does not account for leap seconds
+/// - Uses simplified rules for leap years
+/// - Does not handle timezone conversions (assumes UTC)
+/// 
+/// # Example
+/// ```rust
+/// let timestamp = 1632145200; // 2021-09-20 12:00:00 UTC
+/// let (year, month, day, hour, minute) = seconds_to_components(timestamp);
+/// assert_eq!(year, 2021);
+/// assert_eq!(month, 9);
+/// assert_eq!(day, 20);
+/// assert_eq!(hour, 12);
+/// assert_eq!(minute, 0);
+/// ```
 fn seconds_to_components(secs: u64) -> (u32, u32, u32, u32, u32) {
     let secs_per_minute = 60;
     let secs_per_hour = secs_per_minute * 60;
@@ -393,7 +672,37 @@ fn seconds_to_components(secs: u64) -> (u32, u32, u32, u32, u32) {
     (year, month, day, hour, minute)
 }
 
-/// Convert seconds since epoch to year, month, day
+/// Convert seconds since epoch to year, month, day components
+/// 
+/// # Purpose
+/// A low-level helper function that calculates year, month, and day
+/// from a Unix timestamp without external date/time libraries.
+/// 
+/// # Arguments
+/// * `secs` - Seconds since Unix epoch (1970-01-01 00:00:00 UTC)
+/// 
+/// # Returns
+/// * Tuple of (year, month, day) as u32 values
+/// 
+/// # Implementation Details
+/// 1. Calculates days since epoch by dividing seconds by seconds per day
+/// 2. Determines the year by counting full years from 1970
+/// 3. Accounts for leap years by adding an extra day when appropriate
+/// 4. Calculates month and day using days remaining after year calculation
+/// 
+/// # Limitations
+/// - Uses simplified leap year calculation (doesn't handle all edge cases)
+/// - Assumes Gregorian calendar rules for the entire period
+/// - Does not apply timezone adjustments
+/// 
+/// # Example
+/// ```rust
+/// let timestamp = 1632145200; // 2021-09-20 12:00:00 UTC
+/// let (year, month, day) = seconds_to_ymd(timestamp);
+/// assert_eq!(year, 2021);
+/// assert_eq!(month, 9);
+/// assert_eq!(day, 20);
+/// ```
 fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
     // This simplified implementation doesn't handle leap years correctly
     // Consider a more accurate algorithm or the chrono crate for production
@@ -432,6 +741,10 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
 
 /// Sorts directory entries based on specified method while maintaining directories at the top
 /// 
+/// # Purpose
+/// This function provides consistent sorting of directory contents according to user preferences,
+/// while always preserving the convention that directories appear before files.
+/// 
 /// # Arguments
 /// * `entries` - Mutable reference to vector of FileSystemEntry items to sort
 /// * `sort_method` - Enum specifying sort method and direction
@@ -460,7 +773,7 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
 ///   * Modified: DateTime comparison of file_system_item_last_modified_time
 /// 
 /// # Examples
-/// ```
+/// ```rust
 /// // Sort by name ascending
 /// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Name(true));
 /// 
@@ -528,6 +841,11 @@ fn sort_directory_entries(
 
 /// Opens a new terminal window at the specified directory
 /// 
+/// # Purpose
+/// This function launches a new terminal emulator window that starts in the
+/// specified directory, allowing users to perform command-line operations
+/// directly from their current file browsing location.
+/// 
 /// # Arguments
 /// * `directory_path` - PathBuf of the directory to open terminal in
 /// 
@@ -536,15 +854,43 @@ fn sort_directory_entries(
 ///                  Error: FileFantasticError with context
 /// 
 /// # Platform-specific Implementation
-/// - Uses 'Terminal.app' on macOS
-/// - Uses 'gnome-terminal' or other terminals on Linux
-/// - Uses 'cmd.exe' on Windows
+/// - **macOS**: Uses 'Terminal.app' via the 'open' command
+/// - **Linux**: Tries multiple terminal emulators in order of preference:
+///   1. gnome-terminal
+///   2. ptyxis (Fedora 41+ default)
+///   3. konsole
+///   4. xfce4-terminal
+///   5. mate-terminal
+///   6. terminator
+///   7. alacritty
+///   8. kitty
+///   9. tilix
+///   10. urxvt
+///   11. rxvt
+///   12. xterm
+/// - **Windows**: Uses 'cmd.exe' with appropriate arguments
 /// 
 /// # Error Handling
 /// - Handles process spawn errors with specific error types
 /// - Tries multiple terminal emulators on Linux
 /// - Returns NoTerminalFound if no suitable terminal is available
 /// - Returns UnsupportedPlatform for unsupported platforms
+/// 
+/// # Security Considerations
+/// - Launches external processes, which could fail in restricted environments
+/// - Requires execute permissions on terminal emulators
+/// 
+/// # Examples
+/// ```rust
+/// // When user presses 't' to open terminal at current location
+/// match open_new_terminal(&current_directory) {
+///     Ok(_) => println!("Terminal opened successfully"),
+///     Err(FileFantasticError::NoTerminalFound) => {
+///         eprintln!("No suitable terminal emulator found on your system");
+///     },
+///     Err(e) => eprintln!("Failed to open terminal: {}", e),
+/// }
+/// ```
 fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -627,95 +973,12 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
     Err(FileFantasticError::UnsupportedPlatform)
 }
 
-// old works
-// /// Opens a new terminal window at the specified directory
-// /// 
-// /// # Arguments
-// /// * `directory_path` - PathBuf of the directory to open terminal in
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success: () unit type
-// ///                      Error: IO error with description
-// /// 
-// /// # Platform-specific Implementation
-// /// - Uses 'Terminal.app' on macOS
-// /// - Uses 'gnome-terminal' or other terminals on Linux
-// /// - Uses 'cmd.exe' on Windows
-// fn open_new_terminal(directory_path: &PathBuf) -> io::Result<()> {
-//     #[cfg(target_os = "macos")]
-//     {
-//         return std::process::Command::new("open")
-//             .args(["-a", "Terminal"])
-//             .arg(directory_path)
-//             .spawn()
-//             .map(|_| ());
-//     }
-    
-//     #[cfg(target_os = "linux")]
-//     {
-//         // Try different terminal emulators in order of preference
-//         let terminal_commands = [
-//             ("gnome-terminal", vec!["--working-directory"]),
-//             ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
-//             ("konsole", vec!["--workdir"]),
-//             ("xfce4-terminal", vec!["--working-directory"]),
-//             ("mate-terminal", vec!["--working-directory"]),
-//             ("terminator", vec!["--working-directory"]),
-//             ("alacritty", vec!["--working-directory"]),
-//             ("kitty", vec!["--directory"]),
-//             ("tilix", vec!["--working-directory"]),
-//             ("urxvt", vec!["-cd"]),
-//             ("rxvt", vec!["-cd"]),
-//             ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
-//         ];
-
-//         for (terminal, args) in terminal_commands.iter() {
-//             let mut command = std::process::Command::new(terminal);
-            
-//             if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
-//                 // These terminals need special handling with the shell
-//                 command.args(args)
-//                     .arg(directory_path.to_string_lossy().to_string())
-//                     .arg("&& bash");
-//             } else if *terminal == "alacritty" || *terminal == "kitty" {
-//                 // Some newer terminals handle working directory differently
-//                 command.arg(args[0])
-//                     .arg(directory_path);
-//             } else {
-//                 command.args(args)
-//                     .arg(directory_path);
-//             }
-
-//             match command.spawn() {
-//                 Ok(_) => return Ok(()),
-//                 Err(_) => continue,
-//             }
-//         }
-        
-//         return Err(io::Error::new(
-//             io::ErrorKind::NotFound,
-//             "No supported terminal emulator found",
-//         ));
-//     }
-    
-//     #[cfg(target_os = "windows")]
-//     {
-//         return std::process::Command::new("cmd")
-//             .args(["/c", "start", "cmd.exe"])
-//             .current_dir(directory_path)
-//             .spawn()
-//             .map(|_| ());
-//     }
-    
-//     // This is a fallback for platforms not explicitly handled
-//     #[allow(unreachable_code)]
-//     Err(io::Error::new(
-//         io::ErrorKind::Unsupported,
-//         "Platform not supported",
-//     ))
-// }
-
 /// Processes user input and returns the corresponding NavigationAction
+/// 
+/// # Purpose
+/// This function serves as the central command interpreter for File Fantastic,
+/// translating user text input into specific actions the application should take.
+/// It handles commands, item selection, and search functionality in one unified interface.
 /// 
 /// # Arguments
 /// * `input` - The user's input string
@@ -725,15 +988,46 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
 /// # Returns
 /// * `Result<NavigationAction>` - The determined action to take or error with context
 /// 
-/// # Behavior
-/// - Handles command parsing (single letters, numbers, search terms)
-/// - Performs fuzzy search when appropriate
-/// - Maps numerical input to directory items
+/// # Command Processing Rules
+/// 1. Empty input triggers refresh action
+/// 2. Single-character inputs are checked against command mappings:
+///    - `q` -> Quit
+///    - `b` -> Parent directory
+///    - `t` -> Open terminal
+///    - `n/s/m` -> Sort commands
+///    - `d/f/a` -> Filter commands
+/// 3. Numeric inputs are treated as item selection
+///    - Validates against current display lookup table
+///    - Returns appropriate action based on item type (file/directory)
+/// 4. Multi-character non-numeric inputs trigger fuzzy search
+///    - Search results are displayed for user selection
+///    - User can then select from results by number
 /// 
 /// # Error Handling
 /// - Validates user input
 /// - Handles IO errors during search result display
 /// - Validates selected numbers against available items
+/// - Returns specific FileFantasticError types with context
+/// 
+/// # Examples
+/// ```rust
+/// // Process user input and take appropriate action
+/// match process_user_input(&input, &nav_state, &all_entries)? {
+///     NavigationAction::Quit => break,
+///     NavigationAction::ChangeDirectory(path) => current_directory = path,
+///     NavigationAction::OpenFile(path) => handle_file_open(&path)?,
+///     NavigationAction::Sort(c) => nav_state.toggle_sort(c),
+///     NavigationAction::OpenNewTerminal => open_new_terminal(&current_directory)?,
+///     NavigationAction::Filter(c) => nav_state.set_filter(c),
+///     NavigationAction::Refresh => { /* reload directory */ },
+///     NavigationAction::ParentDirectory => {
+///         if let Some(parent) = current_directory.parent() {
+///             current_directory = parent.to_path_buf();
+///         }
+///     },
+///     NavigationAction::Invalid => println!("Invalid input"),
+/// }
+/// ```
 fn process_user_input(
     input: &str,
     nav_state: &NavigationState,
@@ -818,101 +1112,12 @@ fn process_user_input(
     Ok(NavigationAction::Invalid)
 }
 
-// old works
-// /// Processes user input and returns the corresponding NavigationAction
-// /// 
-// /// # Arguments
-// /// * `input` - The user's input string
-// /// * `nav_state` - Current navigation state containing lookup table
-// /// 
-// /// # Returns
-// /// * `io::Result<NavigationAction>` - The determined action to take
-// /// Updated process_user_input to handle search
-// fn process_user_input(
-//     input: &str,
-//     nav_state: &NavigationState,
-//     all_entries: &[FileSystemEntry],
-// ) -> io::Result<NavigationAction> {
-//     let input = input.trim();
-        
-//     // Handle empty input first - refresh and clear filters
-//     if input.is_empty() {
-//         return Ok(NavigationAction::Refresh);
-//     } 
-        
-//     // Handle single-character commands first
-//     if input.len() == 1 {
-//         // Convert to lowercase for case-insensitive commands
-//         let lowercase_input = input.to_lowercase();
-        
-//         match lowercase_input.as_str() {
-//             "q" => return Ok(NavigationAction::Quit),
-//             "b" => return Ok(NavigationAction::ParentDirectory),
-//             "t" => return Ok(NavigationAction::OpenNewTerminal),
-//             "n" => return Ok(NavigationAction::Sort('n')),
-//             "s" => return Ok(NavigationAction::Sort('s')),
-//             "m" => return Ok(NavigationAction::Sort('m')),
-//             "d" => return Ok(NavigationAction::Filter('d')), // Show directories only
-//             "f" => return Ok(NavigationAction::Filter('f')), // Show files only
-//             "a" => return Ok(NavigationAction::Filter('a')),
-//             // u and d are handled in main loop for pagination
-//             _ => {}
-//         }
-//     }
-
-//     // // Handle empty input
-//     // if input.is_empty() {
-//     //     return Ok(NavigationAction::Refresh);
-//     // }
-
-//     // Try to parse as number for direct selection
-//     // This will be used as a fallback when not handled by pagination
-//     if let Ok(number) = input.parse::<usize>() {
-//         if let Some(item_info) = nav_state.lookup_item(number) {
-//             return Ok(match item_info.item_type {
-//                 FileSystemItemType::Directory => {
-//                     NavigationAction::ChangeDirectory(item_info.item_path.clone())
-//                 }
-//                 FileSystemItemType::File => {
-//                     NavigationAction::OpenFile(item_info.item_path.clone())
-//                 }
-//             });
-//         }
-//     }
-
-//     // If not a command or number, treat as search
-//     let search_results = nav_state.fuzzy_search(input, all_entries);
-//     display_search_results(&search_results)?;
-    
-//     // Wait for user to select from results or press enter to continue
-//     print!("\nEnter number to select or press Enter to continue: ");
-//     io::stdout().flush()?;
-    
-//     let mut selection = String::new();
-//     io::stdin().read_line(&mut selection)?;
-    
-//     if let Ok(number) = selection.trim().parse::<usize>() {
-//         // Find the search result with the matching display_index
-//         if let Some(result) = search_results.iter().find(|r| r.display_index == number) {
-//             // Get the original entry by its index to determine if it's a directory or file
-//             if let Some(entry) = all_entries.get(number - 1) {
-//                 return Ok(if entry.is_directory {
-//                     NavigationAction::ChangeDirectory(result.item_path.clone())
-//                 } else {
-//                     NavigationAction::OpenFile(result.item_path.clone())
-//                 });
-//             }
-//         }
-//     }
-
-//     Ok(NavigationAction::Invalid)
-// }
-
 /// Represents possible navigation actions based on user input in the file manager
 /// 
 /// # Purpose
 /// This enum centralizes all possible actions that can result from user input,
 /// providing a clear interface between input processing and action handling.
+/// It serves as the primary control flow mechanism for the file manager's main loop.
 /// 
 /// # Variants
 /// - `ChangeDirectory(PathBuf)` - Navigate into a specified directory
@@ -923,12 +1128,18 @@ fn process_user_input(
 /// - `Refresh` - Reload current directory contents
 /// - `Sort(char)` - Change sort order based on command char
 /// - `OpenNewTerminal` - Open new terminal in current directory
+/// - `Filter(char)` - Filter directory contents by type
 /// 
 /// # Command Characters
 /// Sort commands use specific characters:
 /// - 'n' - Sort by name
 /// - 's' - Sort by size
 /// - 'm' - Sort by modification time
+///
+/// Filter commands use specific characters:
+/// - 'd' - Show only directories
+/// - 'f' - Show only files
+/// - 'a' - Show all items (clear filter)
 /// 
 /// # Usage Example
 /// ```rust
@@ -953,6 +1164,7 @@ fn process_user_input(
 /// - "b": Generates ParentDirectory
 /// - "t": Generates OpenNewTerminal
 /// - "n"/"s"/"m": Generate Sort with respective character
+/// - "d"/"f"/"a": Generate Filter with respective character
 /// - Invalid input: Generates Invalid
 /// 
 /// # Error Handling
@@ -1018,6 +1230,10 @@ enum NavigationAction {
 
 /// Formats file size into human readable format
 /// 
+/// # Purpose
+/// Converts raw byte counts into user-friendly size representations
+/// that are both concise and informative, using appropriate units.
+/// 
 /// # Arguments
 /// * `size_in_bytes` - The file size in bytes
 /// 
@@ -1025,10 +1241,26 @@ enum NavigationAction {
 /// * String - Formatted size string (e.g., "1.2 MB", "340 KB", "12 B")
 /// 
 /// # Format Rules
-/// - Uses B, KB, MB, GB
-/// - Shows decimal point only when value < 10
-/// - Maximum 2 decimal places
-/// - Shows unit that allows number to be 0.1 to 99.99
+/// - Uses B, KB, MB, GB units
+/// - Shows decimal point only when value < 10 in the chosen unit
+/// - Maximum 1 decimal place
+/// - Uses the largest unit that allows the number to be 0.1 to 99.99
+/// - Zero bytes displayed as "0 B"
+/// 
+/// # Examples
+/// ```rust
+/// assert_eq!(format_file_size(0), "0 B");
+/// assert_eq!(format_file_size(100), "100 B");
+/// assert_eq!(format_file_size(1024), "1.0 KB");
+/// assert_eq!(format_file_size(1536), "1.5 KB");
+/// assert_eq!(format_file_size(10240), "10 KB");
+/// assert_eq!(format_file_size(1048576), "1.0 MB");
+/// assert_eq!(format_file_size(1073741824), "1.0 GB");
+/// ```
+///
+/// # Implementation Notes
+/// - Uses binary units (1 KB = 1024 bytes) rather than decimal (1 KB = 1000 bytes)
+/// - Does not implement TB or larger units, which may be needed for very large files
 fn format_file_size(size_in_bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -1066,6 +1298,10 @@ fn format_file_size(size_in_bytes: u64) -> String {
 
 /// Represents the type of an item in the file system
 /// 
+/// # Purpose
+/// Provides a clear distinction between files and directories throughout the
+/// application, allowing for type-specific handling and operations.
+/// 
 /// # Variants
 /// - `Directory` - Represents a directory/folder
 /// - `File` - Represents a regular file
@@ -1076,14 +1312,26 @@ fn format_file_size(size_in_bytes: u64) -> String {
 /// - Display formatting (directories show trailing slash)
 /// - Navigation behavior (directories can be entered)
 /// - Operation selection (files can be opened)
+/// - Filtering (showing only files or directories)
 /// 
-/// # Example
-/// ```
+/// # Examples
+/// ```rust
+/// // Determine action based on item type
 /// match item_info.item_type {
-///     FileSystemItemType::Directory => NavigationAction::ChangeDirectory(path),
-///     FileSystemItemType::File => NavigationAction::OpenFile(path),
+///     FileSystemItemType::Directory => {
+///         // Navigate into directory
+///         current_directory = item_path;
+///     },
+///     FileSystemItemType::File => {
+///         // Open file with editor
+///         open_file(&item_path)?;
+///     },
 /// }
 /// ```
+///
+/// # Implementation Notes
+/// - Implements PartialEq to allow direct comparison
+/// - Implements Debug and Clone for utility
 #[derive(Debug, Clone, PartialEq)]
 enum FileSystemItemType {
     Directory,
@@ -1095,26 +1343,34 @@ enum FileSystemItemType {
 /// # Purpose
 /// This struct maintains the mapping between display numbers shown to the user
 /// and the actual file system items they represent, enabling selection by number.
+/// It serves as a key component of the NavigationState's display lookup table.
 /// 
 /// # Fields
 /// * `item_path` - The full path to the file system item
 /// * `item_type` - Whether the item is a file or directory
 /// 
-/// # Usage
+/// # Usage Context
 /// Used in the NavigationState's display_lookup_table to enable quick lookup
-/// when a user selects an item by its display number.
+/// when a user selects an item by its display number. The mapping allows
+/// translating user input (e.g., "5") into the corresponding file system action.
 /// 
 /// # Example
-/// ```
-/// let item_info = display_lookup_table.get(&selected_number)?;
-/// match item_info.item_type {
-///     FileSystemItemType::Directory => {
-///         // Handle directory selection
-///         current_directory = item_info.item_path.clone();
-///     },
-///     FileSystemItemType::File => {
-///         // Handle file selection
-///         open_file(&item_info.item_path)?;
+/// ```rust
+/// // When user enters a number
+/// if let Ok(number) = input.parse::<usize>() {
+///     if let Some(item_info) = nav_state.lookup_item(number) {
+///         match item_info.item_type {
+///             FileSystemItemType::Directory => {
+///                 // Handle directory selection
+///                 current_directory = item_info.item_path.clone();
+///             },
+///             FileSystemItemType::File => {
+///                 // Handle file selection
+///                 open_file(&item_info.item_path)?;
+///             }
+///         }
+///     } else {
+///         println!("Invalid item number");
 ///     }
 /// }
 /// ```
@@ -1129,11 +1385,43 @@ struct DisplayedItemInfo {
 /// FileSystemEntry represents a single item (file or directory) in the file system
 /// with its essential metadata for display and manipulation in the file manager.
 /// 
-/// This struct is used to store information about files and directories that
-/// will be displayed in the numbered list interface of the file manager.
+/// # Purpose
+/// This struct is the fundamental data structure of File Fantastic, holding
+/// all relevant information about each file or directory that will be displayed
+/// to the user. It provides a consistent interface to file system entries
+/// regardless of platform.
 /// 
+/// # Design Philosophy
 /// Properties are deliberately named to be extremely clear and unambiguous,
-/// avoiding short or cryptic abbreviations.
+/// avoiding short or cryptic abbreviations to maximize code readability and
+/// maintainability.
+/// 
+/// # Fields
+/// * `file_system_item_name` - The complete name of the file or directory
+/// * `file_system_item_path` - The full path to the file or directory
+/// * `file_system_item_size_in_bytes` - Size of the file in bytes (0 for directories)
+/// * `file_system_item_last_modified_time` - Last modification time as a SystemTime
+/// * `is_directory` - Boolean flag indicating if this entry is a directory
+/// 
+/// # Usage Context
+/// Instances are created during directory reading and used for:
+/// - Displaying in the file browser interface
+/// - Sorting based on various criteria (name, size, date)
+/// - Searching by name
+/// - Navigating when selected by user
+/// - Determining appropriate actions (open file vs. enter directory)
+/// 
+/// # Example
+/// ```rust
+/// // Creating a FileSystemEntry from directory read results
+/// let entry = FileSystemEntry {
+///     file_system_item_name: dir_entry.file_name().to_string_lossy().to_string(),
+///     file_system_item_path: dir_entry.path(),
+///     file_system_item_size_in_bytes: metadata.len(),
+///     file_system_item_last_modified_time: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+///     is_directory: metadata.is_dir(),
+/// };
+/// ```
 #[derive(Debug)]
 struct FileSystemEntry {
     /// The complete name of the file or directory
@@ -1152,8 +1440,11 @@ struct FileSystemEntry {
     is_directory: bool,
 }
 
-/// Display search results in a formatted table
 /// Displays search results in a formatted table with clear headers
+/// 
+/// # Purpose
+/// Presents fuzzy search results to the user in a readable format,
+/// allowing them to select a matching file or directory by number.
 /// 
 /// # Arguments
 /// * `results` - Vector of SearchResult items to display
@@ -1163,17 +1454,46 @@ struct FileSystemEntry {
 /// 
 /// # Display Format
 /// ```text
-/// Search Results:
+/// Search Results   (Levenshtein < 3)
 /// Num   Name                           Distance
 /// ---------------------------------------------
 ///  1    example.txt                       2
 ///  2    sample.doc                        3
 /// ```
 /// 
+/// # User Interface
+/// - Clears the screen before displaying results
+/// - Shows header with column names
+/// - Displays each result with its original item number
+/// - Shows the Levenshtein distance (lower is better)
+/// - Handles empty results with a "No matches found" message
+/// 
 /// # Notes
-/// - Truncates long filenames to fit display
-/// - Shows original item numbers from directory listing
+/// - Truncates long filenames to fit display width (max 30 characters)
+/// - Shows original item numbers from directory listing for selection
 /// - Distance indicates how close the match is (lower is better)
+/// 
+/// # Error Handling
+/// - Returns IO errors from terminal output operations
+/// 
+/// # Example
+/// ```rust
+/// // After performing a search
+/// let results = nav_state.fuzzy_search("doc", &directory_entries);
+/// if !results.is_empty() {
+///     display_search_results(&results)?;
+///     
+///     // Get user selection from search results
+///     print!("\nEnter number to select or press Enter to continue: ");
+///     io::stdout().flush()?;
+///     let mut selection = String::new();
+///     io::stdin().read_line(&mut selection)?;
+///     
+///     // Process selection...
+/// } else {
+///     println!("No matches found");
+/// }
+/// ```
 fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     if results.is_empty() {
         println!("No matches found");
@@ -1199,6 +1519,39 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     Ok(())
 }
 
+/// Manages navigation state, lookup tables, and sort/filter settings
+/// 
+/// This struct serves as the central state manager for the File Fantastic UI,
+/// tracking display mappings, sort preferences, filter settings, and search capabilities.
+/// It maintains the connection between what the user sees on screen and the underlying
+/// file system entities.
+/// 
+/// # State Management
+/// - Maps displayed item numbers to actual file system items
+/// - Tracks current sort method and direction
+/// - Maintains filter settings (showing files/directories/all)
+/// - Provides fuzzy search capability
+/// 
+/// # Lifecycle
+/// The NavigationState is created once at application start and persists
+/// throughout the session, being updated as the user navigates, sorts,
+/// filters, or searches the file system.
+/// 
+/// # Key Responsibilities
+/// 1. **Display Mapping**: Maps display numbers (what user sees) to actual file paths
+/// 2. **Sort Management**: Tracks and toggles sort methods/directions
+/// 3. **Filter Application**: Applies file/directory filters to listings
+/// 4. **Search Functionality**: Performs fuzzy text searches
+/// 
+/// # Usage Context
+/// The NavigationState is passed to various UI functions to maintain
+/// consistency between user actions and display state.
+/// 
+/// # Implementation Notes
+/// - Uses HashMap for O(1) lookup of items by display number
+/// - Maintains last sort command to enable toggling behavior
+/// - Filters are implemented as Option<char> for three states
+/// - Fuzzy search implements Levenshtein distance algorithm
 /// Manages navigation state, lookup tables, and sort settings for the file manager
 /// 
 /// # Purpose
@@ -1282,6 +1635,36 @@ impl NavigationState {
     }
 
     /// Set or toggle filter mode
+    /// 
+    /// # Purpose
+    /// Controls which types of file system items are displayed in the directory listing,
+    /// allowing the user to focus on just files, just directories, or all items.
+    /// 
+    /// # Arguments
+    /// * `filter_char` - Character indicating the filter type to apply:
+    ///   - 'd': Show only directories
+    ///   - 'f': Show only files
+    ///   - 'a' or others: Show all items (clear filter)
+    /// 
+    /// # Behavior
+    /// - Toggling behavior: selecting the same filter twice turns it off
+    /// - Only one filter can be active at a time
+    /// - Used by the 'd' and 'f' keyboard commands
+    /// 
+    /// # Example
+    /// ```
+    /// // Show only directories
+    /// nav_state.set_filter('d');
+    /// 
+    /// // Show only files
+    /// nav_state.set_filter('f');
+    /// 
+    /// // Show all items
+    /// nav_state.set_filter('a');
+    /// 
+    /// // Toggle directories filter off (if currently showing only directories)
+    /// nav_state.set_filter('d');
+    /// ```
     fn set_filter(&mut self, filter_char: char) {
         match filter_char {
             'd' => {
@@ -1305,6 +1688,32 @@ impl NavigationState {
     }
 
     /// Apply current filter to entries
+    /// 
+    /// # Purpose
+    /// Applies the current filter setting to the directory entries, returning
+    /// only the entries that should be displayed according to the filter.
+    /// 
+    /// # Arguments
+    /// * `entries` - Slice of FileSystemEntry items to be filtered
+    /// 
+    /// # Returns
+    /// * `Vec<&'a FileSystemEntry>` - Vector of references to entries that pass the filter
+    /// 
+    /// # Filter Modes
+    /// - Some('d'): Show only directories
+    /// - Some('f'): Show only files
+    /// - None: Show all entries (no filtering)
+    /// 
+    /// # Usage Context
+    /// Called during the main loop before displaying directory contents to
+    /// present only the file types the user wants to see.
+    /// 
+    /// # Example
+    /// ```
+    /// // Apply current filter and get filtered entries to display
+    /// let filtered_entries = nav_state.apply_filter(&all_entries);
+    /// display_directory_contents(&filtered_entries, &current_directory)?;
+    /// ```
     fn apply_filter<'a>(&self, entries: &'a [FileSystemEntry]) -> Vec<&'a FileSystemEntry> {
         match self.current_filter {
             Some('d') => entries.iter()
@@ -1612,50 +2021,6 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileS
     Ok(directory_entries_list)
 }
 
-
-// // old works
-// /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
-// /// 
-// /// # Arguments
-// /// * `directory_path_to_read` - The PathBuf pointing to the directory to be read
-// /// 
-// /// # Returns
-// /// * `io::Result<Vec<FileSystemEntry>>` - Success: Vector of FileSystemEntry items
-// ///                                       Error: IO error with description
-// /// 
-// /// # Error Handling
-// /// - Handles directory read errors
-// /// - Handles metadata read errors
-// /// - Handles timestamp conversion errors
-// /// 
-// /// # Example Usage
-// /// ```
-// /// let current_path = std::env::current_dir()?;
-// /// let directory_entries = read_directory_contents(&current_path)?;
-// /// ```
-// /// Update read_directory_contents to store SystemTime
-// fn read_directory_contents(directory_path_to_read: &PathBuf) -> io::Result<Vec<FileSystemEntry>> {
-//     let mut directory_entries_list: Vec<FileSystemEntry> = Vec::new();
-    
-//     for directory_item_result in fs::read_dir(directory_path_to_read)? {
-//         let directory_item = directory_item_result?;
-//         let item_metadata = directory_item.metadata()?;
-        
-//         directory_entries_list.push(FileSystemEntry {
-//             file_system_item_name: directory_item
-//                 .file_name()
-//                 .to_string_lossy()
-//                 .to_string(),
-//             file_system_item_path: directory_item.path(),
-//             file_system_item_size_in_bytes: item_metadata.len(),
-//             file_system_item_last_modified_time: item_metadata.modified()?,
-//             is_directory: item_metadata.is_dir(),
-//         });
-//     }
-
-//     Ok(directory_entries_list)
-// }
-
 /// Test suite for file manager functionality
 /// 
 /// # Test Coverage
@@ -1718,16 +2083,41 @@ mod tests {
 
 /// Truncates a file name for display in CLI, keeping both the beginning and the file extension.
 /// 
-/// If the name is longer than 55 characters, it will be truncated to show the first 47 characters,
-/// an ellipsis, and the last 5 characters (typically containing the file extension).
+/// # Purpose
+/// Ensures long filenames are displayed in a readable format that fits within
+/// the terminal width constraints while preserving the most meaningful parts:
+/// the beginning of the name and the file extension.
 /// 
 /// # Arguments
 /// * `formatted_name` - The original filename to be truncated
 /// 
 /// # Returns
-/// A String with the truncated name if necessary, or the original if it's short enough
-/// requires: MAX_NAME_LENGTH, FILENAME_SUFFIX_LENGTH
-///
+/// * `String` - Truncated name if necessary, or the original if it's short enough
+/// 
+/// # Truncation Method
+/// If the name exceeds `MAX_NAME_LENGTH` (55 characters):
+/// 1. Takes the first (MAX_NAME_LENGTH - SUFFIX_LENGTH - ellipsis.len()) characters
+/// 2. Adds an ellipsis ("...")
+/// 3. Keeps the last SUFFIX_LENGTH (5) characters (typically file extension)
+/// 
+/// # Examples
+/// ```rust
+/// let long_name = "really_long_filename_that_exceeds_the_maximum_length_for_display.txt";
+/// assert_eq!(
+///     truncate_filename_for_display(long_name.to_string()),
+///     "really_long_filename_that_exceeds_the_maximum_leng...e.txt"
+/// );
+/// 
+/// let short_name = "short.txt";
+/// assert_eq!(
+///     truncate_filename_for_display(short_name.to_string()),
+///     "short.txt"
+/// );
+/// ```
+/// 
+/// # Constants Used
+/// - MAX_NAME_LENGTH = 55
+/// - FILENAME_SUFFIX_LENGTH = 5
 fn truncate_filename_for_display(formatted_name: String) -> String {
     // MAX_NAME_LENGTH
     // FILENAME_SUFFIX_LENGTH
@@ -2041,127 +2431,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-// old works
-// /// Opens a file with user-selected editor in a new terminal window
-// /// 
-// /// # Arguments
-// /// * `file_path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success or IO error
-// /// 
-// /// # Behavior
-// /// - Prompts user to select editor (e.g., nano, vim, code)
-// /// - Empty input uses system default opener
-// /// - Terminal-based editors open in new terminal window
-// /// - GUI editors (code, sublime, etc.) launch directly
-// /// - Falls back to system default if editor fails
-// /// 
-// /// # Example
-// /// ```text
-// /// Open with (enter for default, or type: nano/vim/code/etc): vim
-// /// ```
-// fn open_file(file_path: &PathBuf) -> io::Result<()> {
-//     print!("Open with... (hit enter for default, or enter your editor 'name' as called in a terminal: gedit, hx, lapce, vi, vim, nano, code, etc.): ");
-//     io::stdout().flush()?;
-    
-//     let mut editor = String::new();
-//     io::stdin().read_line(&mut editor)?;
-//     let editor = editor.trim();
-
-//     if editor.is_empty() {
-//         // Use system default
-//         #[cfg(target_os = "macos")]
-//         {
-//             std::process::Command::new("open")
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//         #[cfg(target_os = "linux")]
-//         {
-//             std::process::Command::new("xdg-open")
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//         #[cfg(target_os = "windows")]
-//         {
-//             std::process::Command::new("cmd")
-//                 .args(["/C", "start", ""])
-//                 .arg(file_path)
-//                 .spawn()?;
-//         }
-//     } else {
-//         // List of known GUI editors that shouldn't need a terminal
-//         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-        
-//         if gui_editors.contains(&editor.to_lowercase().as_str()) {
-//             // Launch GUI editors directly
-//             match std::process::Command::new(editor)
-//                 .arg(file_path)
-//                 .spawn() 
-//             {
-//                 Ok(_) => return Ok(()),
-//                 Err(e) => {
-//                     println!("Error launching {}: {}. Falling back to system default...", editor, e);
-//                     std::thread::sleep(std::time::Duration::from_secs(2));
-//                     return open_file(file_path);
-//                 }
-//             }
-//         } else {
-//             // Open terminal-based editors in new terminal window
-//             #[cfg(target_os = "macos")]
-//             {
-//                 std::process::Command::new("open")
-//                     .args(["-a", "Terminal"])
-//                     .arg(format!("{}; exit", editor))
-//                     .spawn()?;
-//             }
-//             #[cfg(target_os = "linux")]
-//             {
-//                 // Try different terminal emulators
-//                 let terminal_commands = [
-//                     ("gnome-terminal", vec!["--", editor]),
-//                     ("ptyxis", vec!["--", editor]),              // Fedora 41's default
-//                     ("konsole", vec!["--e", editor]),
-//                     ("xfce4-terminal", vec!["--command", editor]),
-//                     ("terminator", vec!["-e", editor]),
-//                     ("tilix", vec!["-e", editor]),
-//                     ("kitty", vec!["-e", editor]),
-//                     ("alacritty", vec!["-e", editor]),
-//                     ("terminology", vec!["-e", editor]),
-//                     ("xterm", vec!["-e", editor]),
-//                 ];
-
-//                 let mut success = false;
-//                 for (terminal, args) in terminal_commands.iter() {
-//                     let mut cmd = std::process::Command::new(terminal);
-//                     cmd.args(args).arg(file_path);
-                    
-//                     if cmd.spawn().is_ok() {
-//                         success = true;
-//                         break;
-//                     }
-//                 }
-
-//                 if !success {
-//                     println!("No terminal available. Falling back to system default...");
-//                     std::thread::sleep(std::time::Duration::from_secs(2));
-//                     return open_file(file_path);
-//                 }
-//             }
-//             #[cfg(target_os = "windows")]
-//             {
-//                 std::process::Command::new("cmd")
-//                     .args(["/C", "start", "cmd", "/C"])
-//                     .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-//                     .spawn()?;
-//             }
-//         }
-//     }
-    
-//     Ok(())
-// }
-
 /// Handles opening a file with optional editor selection
 /// 
 /// # Arguments
@@ -2200,36 +2469,6 @@ fn handle_file_open(path: &PathBuf) -> Result<()> {
     }
     Ok(())
 }
-
-// old works
-// /// Handles opening a file with optional editor selection
-// /// 
-// /// # Arguments
-// /// * `path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success or IO error
-// /// 
-// /// # Behavior
-// /// - Prompts for editor selection
-// /// - Opens terminal editors in new window
-// /// - Launches GUI editors directly
-// /// - Shows status messages
-// fn handle_file_open(path: &PathBuf) -> io::Result<()> {
-//     match open_file(path) {
-//         Ok(_) => {
-//             println!("Opening file... \n\nPress Enter to continue");
-//             let mut buf = String::new();
-//             io::stdin().read_line(&mut buf)?;
-//         }
-//         Err(e) => {
-//             println!("Error opening file: {}. \nPress Enter to continue", e);
-//             let mut buf = String::new();
-//             io::stdin().read_line(&mut buf)?;
-//         }
-//     }
-//     Ok(())
-// }
 
 /*
 See: https://en.wikipedia.org/wiki/Levenshtein_distance
@@ -2295,6 +2534,43 @@ Distance between 'test' and '' is 4
 
 /// Vanilla home made pair compair levenshtein_distance
 /// e.g. for simple fuzzy search
+/// Calculates the Levenshtein distance between two strings
+/// 
+/// # Purpose
+/// Provides fuzzy text matching capability for the search functionality,
+/// measuring how many single-character edits (insertions, deletions, substitutions)
+/// are needed to transform one string into another.
+/// 
+/// # Arguments
+/// * `s` - First string for comparison
+/// * `t` - Second string for comparison
+/// 
+/// # Returns
+/// * `usize` - The edit distance between the strings (lower = more similar)
+/// 
+/// # Algorithm
+/// Uses a dynamic programming approach with two work vectors to calculate
+/// the minimum edit distance between strings:
+/// - 0 means strings are identical
+/// - Higher values indicate greater differences
+/// - Equal to max(s.len(), t.len()) when strings share no characters
+/// 
+/// # Performance Considerations
+/// - O(m*n) time complexity where m and n are string lengths
+/// - O(n) space complexity using the two-vector approach
+/// - Efficient for short strings like filenames, but may not scale well
+///   for very long strings
+/// 
+/// # Usage Context
+/// Used in the `fuzzy_search` method to find files matching a partial query,
+/// allowing for approximate/inexact matches when users don't know the exact filename.
+/// 
+/// # Examples
+/// ```
+/// assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+/// assert_eq!(levenshtein_distance("rust", "dust"), 1);
+/// assert_eq!(levenshtein_distance("", "test"), 4);
+/// ```
 fn levenshtein_distance(s: &str, t: &str) -> usize {
     // Get the lengths of both strings
     let m = s.len();
@@ -2419,105 +2695,52 @@ fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
     }
 }
 
-// /// Determines the starting directory path from command line arguments
-// /// 
-// /// # Returns
-// /// * `io::Result<PathBuf>` - The absolute path to start in
-// ///
-// /// # Behavior
-// /// - If a valid path is provided as first argument, uses that
-// /// - If a file path is provided, uses its parent directory
-// /// - If path doesn't exist or no args provided, uses current directory
-// /// - Converts all paths to absolute paths for clarity
-// fn get_starting_path_from_args_or_cwd_default() -> io::Result<PathBuf> {
-//     // Get command line arguments
-//     let args: Vec<String> = std::env::args().skip(1).collect();
-    
-//     if args.is_empty() {
-//         // No arguments provided, use current directory
-//         return std::env::current_dir();
-//     }
-    
-//     // Use first argument as path
-//     let path_arg = PathBuf::from(&args[0]);
-    
-//     // Convert to absolute path if possible
-//     let absolute_path = if path_arg.is_relative() {
-//         // Join with current directory to make absolute
-//         match std::env::current_dir() {
-//             Ok(current_dir) => current_dir.join(&path_arg),
-//             Err(_) => path_arg // Fall back to relative if current_dir fails
-//         }
-//     } else {
-//         path_arg
-//     };
-    
-//     if absolute_path.exists() {
-//         if absolute_path.is_dir() {
-//             // Path is a directory, use it directly
-//             Ok(absolute_path)
-//         } else {
-//             // Path is a file, use its parent directory
-//             match absolute_path.parent() {
-//                 Some(parent) => {
-//                     // Print notice about using parent directory
-//                     println!("Note: Using parent directory of file: {}", absolute_path.display());
-//                     println!("Directory: {}", parent.display());
-//                     println!("Press Enter to continue...");
-//                     let mut input = String::new();
-//                     io::stdin().read_line(&mut input)?;
-                    
-//                     Ok(PathBuf::from(parent))
-//                 },
-//                 None => Err(io::Error::new(
-//                     io::ErrorKind::InvalidInput, 
-//                     format!("Cannot determine parent directory of '{}'", absolute_path.display())
-//                 ))
-//             }
-//         }
-//     } else {
-//         // Path doesn't exist, notify user and fall back to current directory
-//         eprintln!("Warning: Path '{}' does not exist. Starting in current directory.", 
-//                  absolute_path.display());
-//         std::env::current_dir()
-//     }
-// }
-
-/// Public entry point for the file manager functionality.
+/// Public entry point for File Fantastic file manager module
 /// 
-/// This function runs the file manager in the current terminal
-/// and provides a file browsing interface with sorting, filtering,
-/// and search capabilities.
-///
-/// # Returns
-/// * `Result<()>` - Success or FileFantasticError with context
-///
-/// # Features
-/// - Directory navigation with numbered selection
-/// - File opening with custom editor selection
-/// - Sorting by name, size, or modification time
-/// - Filtering by file type (files or directories)
-/// - Fuzzy text search with Levenshtein distance
-/// - Pagination for large directories
-/// 
-/// # Error Handling
-/// - Recoverable errors allow continued operation
-/// - Critical errors return with context
-/// - User is informed of all error conditions
-/// - Fallbacks implemented for common failure scenarios
-///
-/// # Example
+/// # Usage as a Module
+/// This function is designed to be imported and called from a main program:
 /// ```rust
-/// use crate::ff_file_fantastic_module::file_fantastic;
-///
-/// fn main() -> std::io::Result<()> {
+/// // src/main.rs
+/// mod ff_file_fantastic_module;
+/// use ff_file_fantastic_module::file_fantastic;
+/// 
+/// fn main() {
 ///     if let Err(e) = file_fantastic() {
 ///         eprintln!("Error: {}", e);
 ///         std::process::exit(1);
 ///     }
-///     Ok(())
 /// }
 /// ```
+///
+/// # Function Operation
+/// 1. Determines starting directory:
+///    - Uses first command-line argument if valid path
+///    - Falls back to current working directory
+///    - For file paths, uses parent directory
+///
+/// 2. Handles all user interaction:
+///    - Displays directory contents with numbered entries
+///    - Processes keyboard commands for navigation/operations
+///    - Manages file viewing and directory traversal
+///    - Continues until user quits with 'q' command
+///
+/// # Returns
+/// * `Result<()>` - Ok on clean exit, Err with context for critical failures
+///
+/// # Error Cases
+/// - Returns errors only for critical failures that prevent operation
+/// - Handles recoverable errors internally (permission issues, etc.)
+/// - Callers should display the error and exit with non-zero code
+///
+/// # Dependencies
+/// - Requires read access to file system
+/// - Uses standard terminal for display
+/// - Launches external programs for file viewing and terminal operations
+///
+/// # Performance Considerations
+/// - Minimal memory usage with on-demand directory reading
+/// - No background threads or async operations
+/// - Suitable for use in resource-constrained environments
 pub fn file_fantastic() -> Result<()> {
     // Get starting directory from args or default to current directory
     let mut current_directory_path = match get_starting_path_from_args_or_cwd_default() {
@@ -2859,133 +3082,3 @@ pub fn file_fantastic() -> Result<()> {
 // /// Main entry point for the file manager application
 // pub fn file_fantastic() -> io::Result<()> {
     
-//     // Get starting directory from args or default to current directory
-//     let mut current_directory_path = get_starting_path_from_args_or_cwd_default()?;
-    
-//     // Display startup information for transparency
-//     println!("Using directory: {}", current_directory_path.display());
-    
-//     let mut nav_state = NavigationState::new();
-
-//     loop {
-
-//         let mut all_entries = read_directory_contents(&current_directory_path)?;
-//         sort_directory_entries(&mut all_entries, nav_state.current_sort_method);
-        
-//         // Apply the current filter to get filtered entries
-//         let filtered_entries = nav_state.apply_filter(&all_entries);
-        
-//         // Convert from Vec<&FileSystemEntry> to Vec<FileSystemEntry> for pagination
-//         let directory_entries: Vec<FileSystemEntry> = filtered_entries.iter()
-//             .map(|&entry| FileSystemEntry {
-//                 file_system_item_name: entry.file_system_item_name.clone(),
-//                 file_system_item_path: entry.file_system_item_path.clone(),
-//                 file_system_item_size_in_bytes: entry.file_system_item_size_in_bytes,
-//                 file_system_item_last_modified_time: entry.file_system_item_last_modified_time,
-//                 is_directory: entry.is_directory,
-//             })
-//             .collect();
-
-//         // Create paginated view
-//         let mut dir_view = DirectoryView::new(&directory_entries);
-
-//         // Inner loop for pagination within the same directory
-//         loop {
-//             // Get current page entries
-//             let page_entries = dir_view.current_page_entries();
-//             nav_state.update_lookup_table(page_entries);
-
-//             // Display with pagination info and filter status
-//             display_directory_contents(
-//                 page_entries, 
-//                 &current_directory_path,
-//                 Some((dir_view.current_page + 1, dir_view.total_pages())),
-//                 nav_state.current_filter, // Pass current filter setting
-//             )?;
-
-//             print!("\n>> ");
-//             io::stdout().flush()?;
-//             let mut user_input = String::new();
-//             io::stdin().read_line(&mut user_input)?;
-            
-//             // Handle pagination commands first
-//             let trimmed_input = user_input.trim();
-//             if trimmed_input == "s" {
-//                 dir_view.next_page();
-//                 continue; // Stay in inner loop, just change page
-//             } else if trimmed_input == "w" {
-//                 dir_view.prev_page();
-//                 continue; // Stay in inner loop, just change page
-//             }
-            
-//             // Handle number input directly to account for pagination
-//             if let Ok(number) = trimmed_input.parse::<usize>() {
-//                 if let Some(actual_index) = dir_view.get_actual_index(number) {
-//                     // Only process if within range of full directory listing
-//                     if actual_index < directory_entries.len() {
-//                         let entry = &directory_entries[actual_index];
-//                         if entry.is_directory {
-//                             current_directory_path = entry.file_system_item_path.clone();
-//                             break; // Break inner loop to read new directory
-//                         } else {
-//                             handle_file_open(&entry.file_system_item_path)?;
-//                             continue; // Stay in inner loop
-//                         }
-//                     }
-//                 }
-//             }
-
-//             // For other commands, use normal processing
-//             match process_user_input(
-//                 &user_input, 
-//                 &nav_state, 
-//                 &all_entries,
-//             )? {
-//                 NavigationAction::Refresh => {
-//                     // Clear any filters when refreshing
-//                     nav_state.current_filter = None;
-//                     break; // Break inner loop to refresh directory
-//                 },
-//                 NavigationAction::Filter(filter_char) => {
-//                     nav_state.set_filter(filter_char);
-//                     break; // Break inner loop to apply filter
-//                 },
-//                 NavigationAction::ChangeDirectory(new_path) => {
-//                     current_directory_path = new_path;
-//                     break; // Break inner loop to read new directory
-//                 }
-//                 NavigationAction::ParentDirectory => {
-//                     if let Some(parent) = current_directory_path.parent() {
-//                         current_directory_path = parent.to_path_buf();
-//                     }
-//                     break; // Break inner loop to read new directory
-//                 }
-//                 NavigationAction::OpenFile(ref path) => {
-//                     handle_file_open(path)?;
-//                 }
-//                 NavigationAction::Quit => return Ok(()),
-
-//                 NavigationAction::Sort(command) => {
-//                     nav_state.toggle_sort(command);
-//                     break; // Break inner loop to resort directory
-//                 }
-//                 NavigationAction::OpenNewTerminal => {
-//                     match open_new_terminal(&current_directory_path) {
-//                         Ok(_) => {
-//                             println!("Opening new terminal... Press Enter to continue");
-//                             let _ = io::stdin().read_line(&mut String::new());
-//                         }
-//                         Err(e) => {
-//                             println!("Error opening new terminal: {}. Press Enter to continue", e);
-//                             let _ = io::stdin().read_line(&mut String::new());
-//                         }
-//                     }
-//                 },
-//                 NavigationAction::Invalid => {
-//                     println!("Invalid input. Press Enter to continue...");
-//                     let _ = io::stdin().read_line(&mut String::new());
-//                 }
-//             }
-//         }
-//     }
-// }
