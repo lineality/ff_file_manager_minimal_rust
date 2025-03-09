@@ -4,10 +4,12 @@
 
 ## linux: for small build, use (for me executible is 1.8mb)
 see https://github.com/lineality/rust_compile_optimizations_cheatsheet
+
+#### For smallest size, build:
 ```bash
 cargo build --profile release-small 
 ```
-or 
+#### or for optimal performance 
 ```bash
 cargo build --profile release-performance
 ```
@@ -41,7 +43,7 @@ source ~/.bashrc
 or bash_profile
 
 
-# ff is a minimal rust file manager
+ff is a minimal rust file manager
 
 A very minimal 'file manager', much more minimal than "midnight commander." 
 
@@ -68,15 +70,16 @@ A very minimal 'file manager', much more minimal than "midnight commander."
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
-(q)uit (b)ack|(t)erminal|(f)iles (d)ir|(n)ame (s)ize (m)odified|str>search 
+(q)uit (b)ack|(t)erminal|(d)ir (f)ile|(n)ame (s)ize (m)od|str>search|enter>reset
+w for up, s for down, a for all 
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
 14. Type a string for a partial match search.
-pending 
-(pending) 15. 'f' or 'd' to show only files or only directories
+15. 'f' or 'd' to show only files or only directories
 
 
 # Scrolling
 1. MVP: use mouse wheel to scroll up and down
+2. pages using w and s to scroll up and down
 
 # Example daily workflow:
 - open terminal
@@ -93,22 +96,8 @@ if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
 ## TUI Size:
+- default terminal size 80/24
 - or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
 
-
-(future items, after mvp)
-
-## show just files/dir
-
-## scroll
-maybe scrolling but likely not needed
-
-### TUI Size:
-- or first MVP, set terminal size to actual default terminal size
-- start with standard terminal size
-- scroll / offset and range
-- optionally say how many rows off screen
-- use key commands to increase or decrease TUI display size
-- for MVP... only wide and narrow need to adjust... (mouse to scroll up and down works fine for mvp)
 
