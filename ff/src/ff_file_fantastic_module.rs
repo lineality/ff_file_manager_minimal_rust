@@ -2,7 +2,16 @@
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small 
-
+/*Rust
+Always best practice.
+Always extensive doc strings.
+Always comments.
+Always clear, meaningful, unique names.
+Always absolute file paths.
+Always error handling.
+Never unsafe code.
+Never use unwrap.
+*/
 /* Docs:
 # ff is a minimal rust file manager
 
