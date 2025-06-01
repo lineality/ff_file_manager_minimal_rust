@@ -14,66 +14,6 @@ Never unsafe code.
 Never use unwrap.
 */
 /*
-Todo:
-
-struct and enum for saving file paths
-struct and enum for saving directories
-struct / system for storing navigation state, including path, mode, scrolldown, etc.
-
-Get-Send-Mode and "Pocket-Dimensions":
-
-A system, (maybe a list of structs, maybe a set of structs and enums) to store a 'navigation state' of the user. E.g. the user wants to go look for the path to another file, or a directory to send a file too, but they also want to return to where they currently are. e.g. they will save their current navigation state (including path, view of files/directories etc., sorted by, pagination, etc., so they return to exactly the same 'place') 
-
-Navigation state items:
-
-- Current directory path
-- Current sort method and direction
-- Current filter (files only, dirs only, all)
-- Current page number in pagination
-- Scroll position/selected item
-- Search state
-- Terminal size 
-- return_to_here_flag
-- maybe a timestamp for sorting chronologically (not showing the timestamp)
-
-This should be stored either as a list or a hash-table with a nickname (or optional nickname defaulting to either an integer/index or an abridged path 'name' e.g. so the user can select which navigation -state ('pocket dimension') they want to go to.
-
-
-Requires Updates:
-- file path stack (array)
-- directory path stack (array)
-- pocket dimension stack (system)
-- Q&A function to save cwd file pathto file-stack:
-- uses the same ff file list select by int system that already exists and works for opening a file.
-E.g. 
-ff file display:
-in info bar -> 
-"Hello User! Select one of the above files by number
-to add to your file-stack!"
-input...
-
-- Q&A function to Get: Save file here, from file-stack:
-- Q&A function to get dir-path from dir-stack
-- 'landing page' for v, c, y, p, g: Get-Send-Mode
-
-Get-Send-Mode Workflow v2:
-if the user enters any of these: v, c, y, p, g
-
-
-1. store file-path from cwd to file-stack (start Q&A)
-2. get file from file-stack (save here) (start Q&A)
-3. store directory-path to directory-stack
-4. Save: current navigation-state to -> pocket-dimensions
-5. Go To: Pocket-Dimension (select from saved navigation states) 
-6. Go To: path -> from directory-stack [set this up later]
-7. clear 
-8. return/exit/back (same as "" or "b")
-
-This is meant to be a minimal/modular system for copying files.
-
-TODO:
-complete and replace ALL DOCUMENTATION THAT WAS REMOVED THROUGH INCOMPETANCE OR MALICE!!!
-
 */
 /* Docs:
 # ff is a minimal rust file manager
@@ -165,7 +105,7 @@ w for up, s for down, a for all
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
 14. Type a string for a partial match search.
 15. 'f' or 'd' to show only files or only directories
-
+16. minimal file-moving
 
 # Scrolling
 1. MVP: use mouse wheel to scroll up and down
@@ -460,11 +400,9 @@ pub type Result<T> = std::result::Result<T, FileFantasticError>;
 End of Error Handling Code
 */
 
-
 /*
 Pocket-Dimensions/Bookmarks Section
 */
-
 /// Complete navigation state that can be saved and restored as a "pocket dimension"
 /// 
 /// # Purpose
@@ -1369,7 +1307,7 @@ impl NavigationStateManager {
     // /// Select a file by number to add to file stack: 3
     // /// Added 'document.txt' to file stack. Total files: 2
     // /// ```
-    // pub fn interactive_save_file_to_stack_using_numbers(
+    // pub fn interactive_add_file_to_stack(
     //     &mut self,
     //     directory_entries: &[FileSystemEntry],
     //     nav_state: &NavigationState,
@@ -1434,18 +1372,18 @@ impl NavigationStateManager {
     //     Ok(())
     // }
         
-    /// Q&A interface to save current file path to file stack using numbered selection
+    /// Interactive interface to add a file to the file stack
     /// 
     /// # Purpose
     /// Provides an interactive interface for adding files to the file stack,
-    /// using the same numbered selection system as the main file browser.
-    /// This maintains consistency with the existing user interface.
+    /// supporting both pre-selected files (with Y/n confirmation) and 
+    /// numbered selection from the current directory listing. This maintains 
+    /// consistency with the existing user interface while providing flexible
+    /// workflows for different user scenarios.
     /// 
     /// # Arguments
-    /// * `directory_entries` - Current directory entries being displayed
-    /// * `nav_state` - Current navigation state with lookup table
-    /// * `current_directory` - The current working directory
-    /// * `selected_file` - Optional pre-selected file path to offer as default
+    /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    /// * `selected_file` - Optional pre-selected file path to offer as default confirmation
     /// 
     /// # Returns
     /// * `Result<()>` - Success or error with context
@@ -1457,16 +1395,26 @@ impl NavigationStateManager {
     /// 4. User selects file by number (same as normal file browsing)
     /// 5. Validate selection is a file (not directory)
     /// 6. Add file to stack and show confirmation
+    /// 7. **ADDITIONAL:** If a file is pre-selected, offer Y/n confirmation workflow
+    ///    - Display clear prompt with filename
+    ///    - Default to 'yes' if user just presses enter
+    ///    - Add to stack immediately if confirmed, or continue to numbered selection
+    /// 8. **ADDITIONAL:** Enhanced error handling for both workflows
+    ///    - Validates numbered selections against lookup table
+    ///    - Ensures selected items are files, not directories
+    ///    - Provides clear error messages for invalid selections
     /// 
     /// # Integration with Existing System
-    /// - Uses the same display_directory_contents function
-    /// - Uses the same nav_state.lookup_item system
-    /// - Maintains the same numbered selection interface
-    /// - Only adds the stack-specific messaging
+    /// - Uses the same display_directory_contents function for consistency
+    /// - Uses the same nav_state.lookup_item system for numbered selection
+    /// - Maintains the same numbered selection interface as main browser
+    /// - Only adds the stack-specific messaging and workflow
+    /// - Preserves all existing user interface patterns
     /// 
     /// # Input Buffer Management
     /// - Clears stdin buffer to prevent reuse of previous menu selections
     /// - Forces fresh user input for file selection
+    /// - Handles both confirmation and selection input patterns
     /// 
     /// # Example Interaction
     /// ```text
@@ -1478,7 +1426,37 @@ impl NavigationStateManager {
     /// Select a file by number to add to file stack: 3
     /// Added 'document.txt' to file stack. Total files: 2
     /// ```
-    pub fn interactive_save_file_to_stack_using_numbers(
+    /// 
+    /// # Additional Workflow Examples
+    /// 
+    /// ## Pre-selected File Workflow:
+    /// ```text
+    /// === Add File to Stack ===
+    /// Add 'document.txt' to file stack? (Y/n): [Enter]
+    /// Added 'document.txt' to file stack. Total files: 2
+    /// ```
+    /// 
+    /// ## Numbered Selection Workflow:
+    /// ```text
+    /// === Add File to Stack ===
+    /// Type file number & press Enter to add to file-stack.
+    /// Enter file number (or 'c' to cancel): 3
+    /// Added 'document.txt' to file stack. Total files: 2
+    /// ```
+    /// 
+    /// # Error Handling
+    /// - Validates numbered selections against lookup table
+    /// - Ensures selected items are files, not directories
+    /// - Provides clear error messages for invalid selections
+    /// - Handles cancellation gracefully
+    /// - Manages IO errors during user interaction
+    /// 
+    /// # Stack Integration
+    /// - Validates file existence before adding to stack
+    /// - Provides confirmation with updated stack count
+    /// - Maintains LIFO stack behavior for consistent operations
+    /// - Integrates with broader Get-Send-Mode workflow system
+    pub fn interactive_add_file_to_stack(
         &mut self,
         // _directory_entries: &[FileSystemEntry], // Keep for API consistency
         nav_state: &NavigationState,
@@ -1506,19 +1484,7 @@ impl NavigationStateManager {
         }
     
         println!("\n=== Add File to Stack ===");
-        // println!("Current directory contents above....");
-        
-        // is there a way to show this in info-bar?
         println!("Type file number & press Enter to add to file-stack.");
-        // print!("Press Enter to continue to file selection...");
-        // io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-        
-        // // This read_line consumes any leftover input from the menu selection
-        // let mut buffer_clear = String::new();
-        // io::stdin().read_line(&mut buffer_clear).map_err(|e| FileFantasticError::Io(e))?;
-        
-        // Now prompt for the actual file selection with fresh input
-        // println!("Select a file by number to add to file stack:");
         print!("Enter file number (or 'c' to cancel): ");
         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
         
@@ -4217,94 +4183,6 @@ fn display_directory_contents(
     Ok(())
 }
 
-
-// fn display_directory_contents(
-//     directory_entries: &[FileSystemEntry],
-//     current_directory_path: &PathBuf,
-//     page_info: Option<(usize, usize)>, // (current_page, total_pages)
-//     filter: Option<char>,
-// ) -> io::Result<()> {
-//     // clear screen
-//     print!("\x1B[2J\x1B[1;1H");
-
-//     let filter_status = match filter {
-//         Some('d') => "[Directories only] ",
-//         Some('f') => "[Files only] ",
-//         _ => "",
-//     };
-
-//     // // Add pagination info to legend if applicable
-//     // let legend = "(q)uit (b)ack|(t)erminal|(n)ame (s)ize (m)odified|(w)up (s)down|str>search";
-//     let legend = format!(
-//         "{}{}(q)uit (b)ack|(t)erminal|(d)ir (f)ile|(n)ame (s)ize (m)od|str>search|enter>reset{}", 
-//         YELLOW,
-//         filter_status,
-//         RESET);
-    
-//     let path_display = format!("{}", current_directory_path.display());
-
-//     // // Show pagination info if provided
-//     // if let Some((current_page, total_pages)) = page_info {
-//     //     if total_pages > 1 {
-//     //         // println!("{}\n{}\nPage {} of {}",
-//     //         println!("{}\n{}",
-//     //             // legend, path_display, current_page, total_pages
-//     //             legend, path_display,
-//     //             );
-//     //     } else {
-//     //         println!("{}\n{}", legend, path_display);
-//     //     }
-//     // } else {
-//     //     println!("{}\n{}", legend, path_display);
-//     // }
-//     println!("{}\n{}", legend, path_display);
-
-//     // Column headers
-//     println!(
-//         "{:>4}  {:<53} {:>7} {:>11}",
-//         "Num", "Name", "Size", "Modified"
-//     );
-//     println!(" {} ", "-".repeat(78));
-
-//     // Display entries
-//     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
-//         let formatted_name = if directory_entry.is_directory {
-//             format!("{}/", directory_entry.file_system_item_name)
-//         } else {
-//             directory_entry.file_system_item_name.clone()
-//         };
-
-//         let display_name = truncate_filename_for_display(formatted_name);
-
-//         let size_display = if directory_entry.is_directory {
-//             String::from("-")
-//         } else {
-//             format_file_size(directory_entry.file_system_item_size_in_bytes)
-//         };
-
-//         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
-
-//         println!(
-//             "{:>3}. {:<55} {:>6} {:>11}",
-//             entry_index + 1,
-//             display_name,
-//             size_display,
-//             time_display
-//         );
-//     }
-
-//     // Add pagination footer if applicable
-//     if let Some((current_page, total_pages)) = page_info {
-//         if total_pages > 1 {
-//             println!("--- Page {} of {}: (w)^ for above page, (s)v for below page ---", 
-//                     current_page, total_pages);
-//         }
-//     }
-
-//     io::stdout().flush()?;
-//     Ok(())
-// }
-
 /// Opens a file with user-selected editor in a new terminal window
 /// 
 /// # Arguments
@@ -5069,7 +4947,7 @@ pub fn file_fantastic() -> Result<()> {
                                         // Get currently selected file if any
                                         let selected_file_path = nav_state.get_selected_item_path();
                                         
-                                        match state_manager.interactive_save_file_to_stack_using_numbers(
+                                        match state_manager.interactive_add_file_to_stack(
                                             // page_entries, 
                                             &nav_state, 
                                             // &current_directory_path, 
@@ -5079,18 +4957,6 @@ pub fn file_fantastic() -> Result<()> {
                                             Err(e) => println!("Error: {}", e),
                                         }
                                     },
-                                    // GetSendModeAction::AddFileToStack => {
-                                    //     // Use the corrected numbered selection system
-                                    //     match state_manager.interactive_save_file_to_stack_using_numbers(
-                                    //         // page_entries, 
-                                    //         &nav_state, 
-                                    //         &current_directory_path, 
-                                    //         nav_state.get_selected_item_path().as_ref()
-                                    //     ) {
-                                    //         Ok(_) => println!("File stack operation completed."),
-                                    //         Err(e) => println!("Error: {}", e),
-                                    //     }
-                                    // },
                                     GetSendModeAction::GetFileFromStack => {
                                         match state_manager.interactive_get_file_from_stack() {
                                             Ok(Some(source_file_path)) => {
