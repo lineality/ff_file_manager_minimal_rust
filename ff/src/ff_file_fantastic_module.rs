@@ -445,52 +445,38 @@ impl From<io::Error> for FileFantasticError {
     }
 }
 
-/// Creates a zip archive of a directory with timestamped filename
+/// Creates a zip archive of a directory with timestamped filename and optional custom name
 /// 
 /// # Purpose
 /// Compresses an entire directory into a timestamped zip file for backup
-/// or archival purposes, preserving the directory structure and all contents.
+/// or archival purposes, with an optional custom name addition.
 /// 
 /// # Arguments
 /// * `source_directory_path` - Path to the directory to archive
 /// * `destination_directory_path` - Where to place the zip file
+/// * `custom_name_addition` - Optional custom text to add before timestamp
 /// 
 /// # Returns
 /// * `Result<PathBuf>` - Path to the created zip file, or error
 /// 
-/// # Zip Creation Strategy
-/// 1. Generate timestamped filename for the zip archive
-/// 2. Use system zip command for cross-platform compatibility
-/// 3. Create zip in destination directory with full directory contents
-/// 4. Preserve directory structure and permissions when possible
-/// 
-/// # Platform Commands
-/// - Linux/macOS: Uses `zip -r archive.zip source_directory`
-/// - Windows: Uses PowerShell `Compress-Archive` command
-/// 
-/// # Error Conditions
-/// - Source directory doesn't exist or isn't accessible
-/// - Destination directory doesn't exist or isn't writable
-/// - System zip command not available or fails
-/// - Insufficient disk space for zip creation
+/// # Filename Format
+/// - Without custom name: `directory_name_2025_01_15_14_30_45.zip`
+/// - With custom name: `directory_name_custom_2025_01_15_14_30_45.zip`
 /// 
 /// # Example
 /// ```rust
-/// let source = PathBuf::from("/home/user/my_project");
-/// let destination = PathBuf::from("/home/user/backups");
+/// // Basic archive
+/// let result = create_directory_zip_archive(&source, &dest, None);
+/// // Creates: my_project_2025_01_15_14_30_45.zip
 /// 
-/// match create_directory_zip_archive(&source, &destination) {
-///     Ok(zip_path) => {
-///         println!("Directory archived: {}", zip_path.display());
-///     },
-///     Err(e) => {
-///         eprintln!("Failed to create archive: {}", e);
-///     }
-/// }
+/// // Custom named archive
+/// let result = create_directory_zip_archive(&source, &dest, Some("backup"));
+/// // Creates: my_project_backup_2025_01_15_14_30_45.zip
 /// ```
 fn create_directory_zip_archive(
     source_directory_path: &PathBuf,
     destination_directory_path: &PathBuf,
+    custom_name_addition: Option<&str>,
 ) -> Result<PathBuf> {
     // Validate source directory exists and is a directory
     if !source_directory_path.exists() {
@@ -522,9 +508,21 @@ fn create_directory_zip_archive(
         .to_string_lossy()
         .to_string();
     
-    // Generate timestamped zip filename
+    // Generate timestamped zip filename with optional custom name
     let timestamp = generate_archive_timestamp();
-    let zip_filename = format!("{}_{}.zip", source_directory_name, timestamp);
+    let zip_filename = if let Some(custom_name) = custom_name_addition {
+        if custom_name.trim().is_empty() {
+            // Empty custom name, use standard format
+            format!("{}_{}.zip", source_directory_name, timestamp)
+        } else {
+            // Include custom name before timestamp
+            format!("{}_{}_{}.zip", source_directory_name, custom_name.trim(), timestamp)
+        }
+    } else {
+        // No custom name, use standard format
+        format!("{}_{}.zip", source_directory_name, timestamp)
+    };
+    
     let zip_destination_path = destination_directory_path.join(&zip_filename);
     
     // Create zip archive using system commands
@@ -542,6 +540,104 @@ fn create_directory_zip_archive(
         ))
     }
 }
+
+// /// Creates a zip archive of a directory with timestamped filename
+// /// 
+// /// # Purpose
+// /// Compresses an entire directory into a timestamped zip file for backup
+// /// or archival purposes, preserving the directory structure and all contents.
+// /// 
+// /// # Arguments
+// /// * `source_directory_path` - Path to the directory to archive
+// /// * `destination_directory_path` - Where to place the zip file
+// /// 
+// /// # Returns
+// /// * `Result<PathBuf>` - Path to the created zip file, or error
+// /// 
+// /// # Zip Creation Strategy
+// /// 1. Generate timestamped filename for the zip archive
+// /// 2. Use system zip command for cross-platform compatibility
+// /// 3. Create zip in destination directory with full directory contents
+// /// 4. Preserve directory structure and permissions when possible
+// /// 
+// /// # Platform Commands
+// /// - Linux/macOS: Uses `zip -r archive.zip source_directory`
+// /// - Windows: Uses PowerShell `Compress-Archive` command
+// /// 
+// /// # Error Conditions
+// /// - Source directory doesn't exist or isn't accessible
+// /// - Destination directory doesn't exist or isn't writable
+// /// - System zip command not available or fails
+// /// - Insufficient disk space for zip creation
+// /// 
+// /// # Example
+// /// ```rust
+// /// let source = PathBuf::from("/home/user/my_project");
+// /// let destination = PathBuf::from("/home/user/backups");
+// /// 
+// /// match create_directory_zip_archive(&source, &destination) {
+// ///     Ok(zip_path) => {
+// ///         println!("Directory archived: {}", zip_path.display());
+// ///     },
+// ///     Err(e) => {
+// ///         eprintln!("Failed to create archive: {}", e);
+// ///     }
+// /// }
+// /// ```
+// fn create_directory_zip_archive(
+//     source_directory_path: &PathBuf,
+//     destination_directory_path: &PathBuf,
+// ) -> Result<PathBuf> {
+//     // Validate source directory exists and is a directory
+//     if !source_directory_path.exists() {
+//         return Err(FileFantasticError::NotFound(source_directory_path.clone()));
+//     }
+    
+//     if !source_directory_path.is_dir() {
+//         return Err(FileFantasticError::InvalidName(
+//             format!("Source is not a directory: {}", source_directory_path.display())
+//         ));
+//     }
+    
+//     // Validate destination directory exists and is writable
+//     if !destination_directory_path.exists() {
+//         return Err(FileFantasticError::NotFound(destination_directory_path.clone()));
+//     }
+    
+//     if !destination_directory_path.is_dir() {
+//         return Err(FileFantasticError::InvalidName(
+//             format!("Destination is not a directory: {}", destination_directory_path.display())
+//         ));
+//     }
+    
+//     // Extract source directory name
+//     let source_directory_name = source_directory_path.file_name()
+//         .ok_or_else(|| FileFantasticError::InvalidName(
+//             format!("Cannot determine directory name from: {}", source_directory_path.display())
+//         ))?
+//         .to_string_lossy()
+//         .to_string();
+    
+//     // Generate timestamped zip filename
+//     let timestamp = generate_archive_timestamp();
+//     let zip_filename = format!("{}_{}.zip", source_directory_name, timestamp);
+//     let zip_destination_path = destination_directory_path.join(&zip_filename);
+    
+//     // Create zip archive using system commands
+//     let zip_result = create_zip_with_system_command(
+//         source_directory_path,
+//         &zip_destination_path,
+//     )?;
+    
+//     if zip_result {
+//         println!("Directory archived: {}", zip_destination_path.display());
+//         Ok(zip_destination_path)
+//     } else {
+//         Err(FileFantasticError::InvalidName(
+//             "Zip creation failed".to_string()
+//         ))
+//     }
+// }
 
 /// Creates a zip file using platform-appropriate system commands
 /// 
@@ -1801,10 +1897,29 @@ impl NavigationStateManager {
                     
                     // Perform archive operation based on item type
                     if item_info.item_type == FileSystemItemType::Directory {
+                        // Ask for optional custom name addition
+                        print!("Add custom name to archive? (optional, or Enter to skip): ");
+                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        
+                        let mut custom_name = String::new();
+                        io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
+                        let custom_name = custom_name.trim();
+                        
+                        // Prepare custom name parameter
+                        let custom_name_option = if custom_name.is_empty() {
+                            None
+                        } else {
+                            Some(custom_name)
+                        };
+                        
                         // Archive directory as zip in the archive subfolder for consistency
                         match ensure_archive_directory_exists(current_directory_path) {
                             Ok(archive_directory_path) => {
-                                match create_directory_zip_archive(&item_info.item_path, &archive_directory_path) {
+                                match create_directory_zip_archive(
+                                    &item_info.item_path, 
+                                    &archive_directory_path,
+                                    custom_name_option,
+                                ) {
                                     Ok(zip_path) => {
                                         println!("✓ Directory archived successfully!");
                                         println!("Archive location: {}", zip_path.display());
@@ -1830,6 +1945,36 @@ impl NavigationStateManager {
                             }
                         }
                     }
+                    // if item_info.item_type == FileSystemItemType::Directory {
+                    //     // Archive directory as zip in the archive subfolder for consistency
+                    //     match ensure_archive_directory_exists(current_directory_path) {
+                    //         Ok(archive_directory_path) => {
+                    //             match create_directory_zip_archive(&item_info.item_path, &archive_directory_path) {
+                    //                 Ok(zip_path) => {
+                    //                     println!("✓ Directory archived successfully!");
+                    //                     println!("Archive location: {}", zip_path.display());
+                    //                 },
+                    //                 Err(e) => {
+                    //                     eprintln!("✗ Directory archive creation failed: {}", e);
+                    //                 }
+                    //             }
+                    //         },
+                    //         Err(e) => {
+                    //             eprintln!("✗ Failed to create archive directory: {}", e);
+                    //         }
+                    //     }
+                    // } else {
+                    //     // Archive file with timestamp using existing system (already uses archive folder)
+                    //     match copy_file_with_archive_handling(&item_info.item_path, current_directory_path) {
+                    //         Ok(archived_path) => {
+                    //             println!("✓ File archived successfully!");
+                    //             println!("Archive location: {}", archived_path.display());
+                    //         },
+                    //         Err(e) => {
+                    //             eprintln!("✗ File archive creation failed: {}", e);
+                    //         }
+                    //     }
+                    // }
                 } else {
                     println!("Archive cancelled.");
                 }
