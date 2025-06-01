@@ -15,7 +15,60 @@ Never use unwrap.
 */
 /*
 */
-/* Docs:
+/* Docs: README.md
+# ff_file_manager_minimal_rust
+
+
+
+## Build
+see https://github.com/lineality/rust_compile_optimizations_cheatsheet
+
+#### For smallest size, build (~0.48 mb)
+```bash
+cargo build --profile release-small 
+```
+#### or for optimal performance (~6 mb)
+```bash
+cargo build --profile release-performance
+```
+
+## ~Install
+Put your executable-binary somewhere, and set the file-name of that file
+as a keyword for your command line interface (CLI) 
+so that entering that keyword calls the executable (starts the program):
+
+1. Make or get the binary executable and put it somewhere: e.g.
+```path
+/home/YOURCOMPUTERNAME/ff_file_browser/ff
+```
+2. Open the bash shell configuration file in a text editor. The configuration file is usually located at ~/.bashrc or ~/.bash_profile. (use whatever editor: vim, nano, hx (helix), gedit, lapce, teehee, lapce, etc.)
+```bash
+hx ~/.bashrc
+```
+or in some systems it may be called 'bash_profile'
+
+3. Add an "alias" for your executable at the end of your bash file. Replace /path/to/your_executable with the path of your executable. And replace "your_keyword" with whatever you want to call File Fantastic by typing into your terminal. Add this line (with your details put in):
+```text
+alias your_keyword='/path/to/your_executable'
+```
+e.g. add:
+```text
+alias ff='/home/COMPUTERNAME/ff_file_browser/ff'
+```
+
+4. Save and close the text editor. 
+- If you used nano, you can do this by pressing: Ctrl x s (control key, x key, s key)
+- If you use Helix(hx), Vim(vi), or Teehee: 'i' to type, then esc for normal mode, then :wq to write and quit
+
+4. Reload the bash-shell configuration file, and maybe open a new terminal, to apply and use the changes.
+```bash
+source ~/.bashrc
+```
+or bash_profile
+
+Now you should be able to call File Fantastic by typing 'ff' (or whatever you choose) into a terminal.
+
+
 # ff is a minimal rust file manager
 
 ## A very minimal 'file browser/explorer' module, much more minimal than "midnight commander." 
@@ -42,7 +95,6 @@ fn main() {
 }
 
 ```
-
 
 # Functionality Goal:
 ff (File Fantastic) is meant to operate in a 'do one thing well' context.
@@ -73,17 +125,14 @@ than one might expect, that the default fancy GUI file explorer tool does
 not work. In such cases it is nice to have a stable backup option. 
 
 # Design Scope:
-1. use best practice
-2. absolute file paths
-3. no third party dependencies
-4. docstrings required
-4. code comments required
-5. clear unique meaningful naming required
-6. no unwrap
-7. no unsafe code
-8. all errors to be handled
-9. terminal cli application
-10. module to be used in other projects
+1. no third party dependencies
+2. docstrings required
+3. code comments required
+4. no unwrap
+5. no unsafe code
+6. all errors to be handled
+7. terminal cli application
+8. Module to be used by other projects
 
 # Main functions/features:
 1. (very) minimal text user interface
@@ -95,8 +144,7 @@ not work. In such cases it is nice to have a stable backup option.
 4. 'b' to go back; back-up directory path, go to parent directory
 5. enter file to open by number; use Q&A to use editor of choice
 6. default to default program with another return/enter
-7. open file in new terminal: note, due to using os-default if available,
-   File Fantastic can open image or other files, at least sometimes.
+7. open file in new terminal
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
@@ -105,11 +153,25 @@ w for up, s for down, a for all
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
 14. Type a string for a partial match search.
 15. 'f' or 'd' to show only files or only directories
-16. minimal file-moving
+16. Minimal file-moving ("Get-Send Mode")
+17. Save and Change Navigation-State ("Pocket Dimensions")
 
 # Scrolling
 1. MVP: use mouse wheel to scroll up and down
 2. pages using w and s to scroll up and down
+
+# Get-Send Mode: Move Files
+This is a minimal/modular system of ~features for copying files.
+if the user enters any of these: v, c, y, p, g
+
+1. store file-path from cwd to file-stack (start Q&A)
+2. get file from file-stack (save here) (start Q&A)
+3. store directory-path to directory-stack
+4. Save: current navigation-state to -> pocket-dimensions
+5. Go To: Pocket-Dimension (select from saved navigation states) 
+6. Go To: path -> from directory-stack [set this up later]
+7. clear 
+8. return/exit/back (same as "" or "b")
 
 # Example daily workflow:
 - open terminal
@@ -129,6 +191,7 @@ if the size is no more than 99 of that unit
 - default terminal size 80/24
 - or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
+
 
 */
 
@@ -380,6 +443,206 @@ impl From<io::Error> for FileFantasticError {
             }
             _ => Self::Io(err),
         }
+    }
+}
+
+/// Creates a zip archive of a directory with timestamped filename
+/// 
+/// # Purpose
+/// Compresses an entire directory into a timestamped zip file for backup
+/// or archival purposes, preserving the directory structure and all contents.
+/// 
+/// # Arguments
+/// * `source_directory_path` - Path to the directory to archive
+/// * `destination_directory_path` - Where to place the zip file
+/// 
+/// # Returns
+/// * `Result<PathBuf>` - Path to the created zip file, or error
+/// 
+/// # Zip Creation Strategy
+/// 1. Generate timestamped filename for the zip archive
+/// 2. Use system zip command for cross-platform compatibility
+/// 3. Create zip in destination directory with full directory contents
+/// 4. Preserve directory structure and permissions when possible
+/// 
+/// # Platform Commands
+/// - Linux/macOS: Uses `zip -r archive.zip source_directory`
+/// - Windows: Uses PowerShell `Compress-Archive` command
+/// 
+/// # Error Conditions
+/// - Source directory doesn't exist or isn't accessible
+/// - Destination directory doesn't exist or isn't writable
+/// - System zip command not available or fails
+/// - Insufficient disk space for zip creation
+/// 
+/// # Example
+/// ```rust
+/// let source = PathBuf::from("/home/user/my_project");
+/// let destination = PathBuf::from("/home/user/backups");
+/// 
+/// match create_directory_zip_archive(&source, &destination) {
+///     Ok(zip_path) => {
+///         println!("Directory archived: {}", zip_path.display());
+///     },
+///     Err(e) => {
+///         eprintln!("Failed to create archive: {}", e);
+///     }
+/// }
+/// ```
+fn create_directory_zip_archive(
+    source_directory_path: &PathBuf,
+    destination_directory_path: &PathBuf,
+) -> Result<PathBuf> {
+    // Validate source directory exists and is a directory
+    if !source_directory_path.exists() {
+        return Err(FileFantasticError::NotFound(source_directory_path.clone()));
+    }
+    
+    if !source_directory_path.is_dir() {
+        return Err(FileFantasticError::InvalidName(
+            format!("Source is not a directory: {}", source_directory_path.display())
+        ));
+    }
+    
+    // Validate destination directory exists and is writable
+    if !destination_directory_path.exists() {
+        return Err(FileFantasticError::NotFound(destination_directory_path.clone()));
+    }
+    
+    if !destination_directory_path.is_dir() {
+        return Err(FileFantasticError::InvalidName(
+            format!("Destination is not a directory: {}", destination_directory_path.display())
+        ));
+    }
+    
+    // Extract source directory name
+    let source_directory_name = source_directory_path.file_name()
+        .ok_or_else(|| FileFantasticError::InvalidName(
+            format!("Cannot determine directory name from: {}", source_directory_path.display())
+        ))?
+        .to_string_lossy()
+        .to_string();
+    
+    // Generate timestamped zip filename
+    let timestamp = generate_archive_timestamp();
+    let zip_filename = format!("{}_{}.zip", source_directory_name, timestamp);
+    let zip_destination_path = destination_directory_path.join(&zip_filename);
+    
+    // Create zip archive using system commands
+    let zip_result = create_zip_with_system_command(
+        source_directory_path,
+        &zip_destination_path,
+    )?;
+    
+    if zip_result {
+        println!("Directory archived: {}", zip_destination_path.display());
+        Ok(zip_destination_path)
+    } else {
+        Err(FileFantasticError::InvalidName(
+            "Zip creation failed".to_string()
+        ))
+    }
+}
+
+/// Creates a zip file using platform-appropriate system commands
+/// 
+/// # Purpose
+/// Executes platform-specific zip creation commands to compress directories,
+/// avoiding external dependencies while providing cross-platform functionality.
+/// 
+/// # Arguments
+/// * `source_path` - Directory to compress
+/// * `zip_path` - Output path for the zip file
+/// 
+/// # Returns
+/// * `Result<bool>` - True if zip creation succeeded, false if failed
+/// 
+/// # Platform Implementation
+/// - **Linux/macOS**: Uses `zip -r` command for recursive compression
+/// - **Windows**: Uses PowerShell `Compress-Archive` cmdlet
+/// 
+/// # Command Details
+/// ## Linux/macOS
+/// ```bash
+/// zip -r "output.zip" "source_directory/"
+/// ```
+/// 
+/// ## Windows
+/// ```powershell
+/// Compress-Archive -Path "source_directory" -DestinationPath "output.zip"
+/// ```
+/// 
+/// # Error Handling
+/// - Handles command execution failures
+/// - Checks exit status of zip commands
+/// - Provides platform-specific error context
+/// 
+/// # Example
+/// ```rust
+/// let source = PathBuf::from("/home/user/documents");
+/// let zip_file = PathBuf::from("/home/user/documents_backup.zip");
+/// 
+/// match create_zip_with_system_command(&source, &zip_file) {
+///     Ok(true) => println!("Zip created successfully"),
+///     Ok(false) => println!("Zip command failed"),
+///     Err(e) => eprintln!("Error executing zip command: {}", e),
+/// }
+/// ```
+fn create_zip_with_system_command(
+    source_path: &PathBuf,
+    zip_path: &PathBuf,
+) -> Result<bool> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        // Use zip command on Unix-like systems
+        let output = std::process::Command::new("zip")
+            .arg("-r")  // Recursive
+            .arg(zip_path)
+            .arg(source_path)
+            .output()
+            .map_err(|e| {
+                eprintln!("Failed to execute zip command: {}", e);
+                eprintln!("Make sure 'zip' is installed on your system");
+                FileFantasticError::Io(e)
+            })?;
+            
+        if output.status.success() {
+            Ok(true)
+        } else {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Zip command failed: {}", error_msg);
+            Ok(false)
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell Compress-Archive on Windows
+        let output = std::process::Command::new("powershell")
+            .arg("-Command")
+            .arg(format!(
+                "Compress-Archive -Path '{}' -DestinationPath '{}'",
+                source_path.display(),
+                zip_path.display()
+            ))
+            .output()
+            .map_err(|e| {
+                eprintln!("Failed to execute PowerShell compress command: {}", e);
+                FileFantasticError::Io(e)
+            })?;
+            
+        if output.status.success() {
+            Ok(true)
+        } else {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            eprintln!("PowerShell compress command failed: {}", error_msg);
+            Ok(false)
+        }
+    }
+    
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err(FileFantasticError::UnsupportedPlatform)
     }
 }
 
@@ -758,6 +1021,24 @@ pub struct NavigationStateManager {
     auto_nickname_counter: usize,
 }
 
+/// Interactive user interface functions for Get-Send-Mode workflow
+/// 
+/// # Purpose
+/// This implementation block provides all the interactive Q&A functions
+/// that implement the Get-Send-Mode user interface. These functions
+/// handle user prompts, input validation, and workflow management.
+/// 
+/// # Design Philosophy
+/// Each function follows a consistent pattern:
+/// 1. Display clear prompts and options
+/// 2. Handle user input with validation
+/// 3. Provide feedback on actions taken
+/// 4. Graceful error handling with user-friendly messages
+/// 5. **INTEGRATES WITH EXISTING NUMBERED SELECTION SYSTEM**
+/// 
+/// # User Interface Consistency
+/// All functions use the same numbered selection system as the main file browser,
+/// maintaining consistency throughout the application.
 impl NavigationStateManager {
     /// Creates a new navigation state manager with empty stacks and collections
     /// 
@@ -1247,27 +1528,325 @@ impl NavigationStateManager {
             self.pocket_dimensions.len()
         )
     }
-}
 
-/// Interactive user interface functions for Get-Send-Mode workflow
-/// 
-/// # Purpose
-/// This implementation block provides all the interactive Q&A functions
-/// that implement the Get-Send-Mode user interface. These functions
-/// handle user prompts, input validation, and workflow management.
-/// 
-/// # Design Philosophy
-/// Each function follows a consistent pattern:
-/// 1. Display clear prompts and options
-/// 2. Handle user input with validation
-/// 3. Provide feedback on actions taken
-/// 4. Graceful error handling with user-friendly messages
-/// 5. **INTEGRATES WITH EXISTING NUMBERED SELECTION SYSTEM**
-/// 
-/// # User Interface Consistency
-/// All functions use the same numbered selection system as the main file browser,
-/// maintaining consistency throughout the application.
-impl NavigationStateManager {
+    // /// Interactive interface to archive the currently selected item
+    // /// 
+    // /// # Purpose
+    // /// Provides an interactive interface for creating timestamped archives of
+    // /// files or directories. Files are copied with timestamps, directories
+    // /// are compressed into zip files with timestamps.
+    // /// 
+    // /// # Arguments
+    // /// * `nav_state` - Current navigation state to identify selected item
+    // /// * `current_directory_entries` - Current directory entries for selection
+    // /// * `current_directory_path` - Current directory path for context
+    // /// 
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // /// 
+    // /// # Archive Behavior
+    // /// - **Files**: Creates timestamped copy in same directory
+    // /// - **Directories**: Creates timestamped zip archive in parent directory
+    // /// - **No Selection**: Prompts user to select item by number
+    // /// 
+    // /// # User Interface Flow
+    // /// 1. Check if an item is currently selected
+    // /// 2. If not selected, display directory and prompt for selection
+    // /// 3. Determine if selected item is file or directory
+    // /// 4. Create appropriate archive (copy or zip)
+    // /// 5. Display results and confirmation
+    // /// 
+    // /// # Example Interaction
+    // /// ```text
+    // /// === Archive Selection ===
+    // /// Archive 'document.txt' with timestamp? (Y/n): y
+    // /// File archived: document_2025_01_15_14_30_45.txt
+    // /// 
+    // /// === Archive Selection ===
+    // /// Archive 'my_project/' as zip with timestamp? (Y/n): y
+    // /// Directory archived: my_project_2025_01_15_14_30_45.zip
+    // /// ```
+    // pub fn interactive_archive_selection(
+    //     &mut self,
+    //     nav_state: &NavigationState,
+    //     current_directory_entries: &[FileSystemEntry],
+    //     current_directory_path: &PathBuf,
+    // ) -> Result<()> {
+        
+    //     // Check if there's a pre-selected item
+    //     if let Some(selected_path) = nav_state.get_selected_item_path() {
+    //         let item_name = selected_path.file_name()
+    //             .unwrap_or_default()
+    //             .to_string_lossy();
+                
+    //         if selected_path.is_dir() {
+    //             println!("\n=== Archive Selection ===");
+    //             print!("Archive directory '{}' as zip with timestamp? (Y/n): ", item_name);
+    //             io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             let mut response = String::new();
+    //             io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //                 // Create zip archive in the parent directory (or current if at root)
+    //                 let zip_destination = selected_path.parent()
+    //                     .unwrap_or(current_directory_path);
+                        
+    //                 match create_directory_zip_archive(&selected_path, &zip_destination.to_path_buf()) {
+    //                     Ok(zip_path) => {
+    //                         println!("✓ Directory archived successfully!");
+    //                         println!("Archive location: {}", zip_path.display());
+    //                     },
+    //                     Err(e) => {
+    //                         eprintln!("✗ Archive creation failed: {}", e);
+    //                     }
+    //                 }
+    //             } else {
+    //                 println!("Archive cancelled.");
+    //             }
+    //         } else {
+    //             // It's a file
+    //             println!("\n=== Archive Selection ===");
+    //             print!("Archive file '{}' with timestamp? (Y/n): ", item_name);
+    //             io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             let mut response = String::new();
+    //             io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //                 match copy_file_with_archive_handling(&selected_path, current_directory_path) {
+    //                     Ok(archived_path) => {
+    //                         println!("✓ File archived successfully!");
+    //                         println!("Archive location: {}", archived_path.display());
+    //                     },
+    //                     Err(e) => {
+    //                         eprintln!("✗ Archive creation failed: {}", e);
+    //                     }
+    //                 }
+    //             } else {
+    //                 println!("Archive cancelled.");
+    //             }
+    //         }
+    //         return Ok(());
+    //     }
+
+    //     // No pre-selected item, show directory and prompt for selection
+    //     display_directory_contents(
+    //         current_directory_entries,
+    //         current_directory_path,
+    //         None, // No pagination info needed for this context
+    //         nav_state.current_filter,
+    //     ).map_err(|e| FileFantasticError::Io(e))?;
+
+    //     println!("\n=== Archive Selection ===");
+    //     println!("Select item to archive (creates timestamped copy/zip)");
+    //     print!("Enter item number (or 'c' to cancel): ");
+    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        
+    //     let mut input = String::new();
+    //     io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+    //     let input = input.trim();
+        
+    //     // Handle cancellation
+    //     if input.eq_ignore_ascii_case("c") {
+    //         println!("Cancelled.");
+    //         return Ok(());
+    //     }
+        
+    //     // Try to parse as number and validate using existing lookup system
+    //     if let Ok(number) = input.parse::<usize>() {
+    //         if let Some(item_info) = nav_state.lookup_item(number) {
+    //             if item_info.item_type == FileSystemItemType::Directory {
+    //                 // Archive directory as zip
+    //                 let zip_destination = item_info.item_path.parent()
+    //                     .unwrap_or(current_directory_path);
+                        
+    //                 match create_directory_zip_archive(&item_info.item_path, &zip_destination.to_path_buf()) {
+    //                     Ok(zip_path) => {
+    //                         println!("✓ Directory archived successfully!");
+    //                         println!("Archive location: {}", zip_path.display());
+    //                     },
+    //                     Err(e) => {
+    //                         eprintln!("✗ Archive creation failed: {}", e);
+    //                     }
+    //                 }
+    //             } else {
+    //                 // Archive file with timestamp
+    //                 match copy_file_with_archive_handling(&item_info.item_path, current_directory_path) {
+    //                     Ok(archived_path) => {
+    //                         println!("✓ File archived successfully!");
+    //                         println!("Archive location: {}", archived_path.display());
+    //                     },
+    //                     Err(e) => {
+    //                         eprintln!("✗ Archive creation failed: {}", e);
+    //                     }
+    //                 }
+    //             }
+    //         } else {
+    //             println!("Error: Invalid item number {}. Please try again.", number);
+    //         }
+    //     } else {
+    //         println!("Error: Please enter a valid number or 'c' to cancel.");
+    //     }
+        
+    //     println!("Press Enter to continue...");
+    //     let _ = io::stdin().read_line(&mut String::new());
+        
+    //     Ok(())
+    // }
+
+    /// Interactive interface to archive a user-selected item
+    /// 
+    /// # Purpose
+    /// Provides an interactive interface for creating timestamped archives of
+    /// files or directories. Shows the current directory listing and prompts
+    /// user to select an item by number, then confirms archive operation.
+    /// 
+    /// # Arguments
+    /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    /// * `current_directory_entries` - Current directory entries to display for selection
+    /// * `current_directory_path` - Current directory path for archive context
+    /// 
+    /// # Returns
+    /// * `Result<()>` - Success or error with context
+    /// 
+    /// # Archive Behavior
+    /// - **Files**: Creates timestamped copy in same directory using existing archive handling
+    /// - **Directories**: Creates timestamped zip archive in same directory as the source
+    /// 
+    /// # User Interface Flow
+    /// 1. Display current directory contents with numbered items
+    /// 2. Prompt user to select item by number (same as normal navigation)
+    /// 3. Show selected item and ask for archive confirmation
+    /// 4. Perform archive operation based on item type
+    /// 5. Display results and status
+    /// 
+    /// # Integration with Existing System
+    /// - Uses the same display_directory_contents function for consistency
+    /// - Uses the same nav_state.lookup_item system for numbered selection
+    /// - Maintains the same numbered selection interface as main browser
+    /// - Only adds the archive-specific workflow and confirmation
+    /// 
+    /// # Example Interaction
+    /// ```text
+    /// Current Directory: /home/user/documents
+    /// 
+    /// Num  Name                    Size     Modified
+    /// ------------------------------------------------
+    ///  1)  folder1/               -        14:30
+    ///  2)  document.txt           1.2 KB   15:45
+    ///  3)  image.png              500 KB   16:20
+    /// 
+    /// === Archive Selection ===
+    /// Select item to archive (creates timestamped copy/zip)
+    /// Enter item number (or 'c' to cancel): 2
+    /// 
+    /// Archive 'document.txt' with timestamp? (Y/n): y
+    /// ✓ File archived successfully!
+    /// Archive location: /home/user/documents/archive/document_2025_01_15_14_30_45.txt
+    /// ```
+    pub fn interactive_archive_selection(
+        &mut self,
+        nav_state: &NavigationState,
+        current_directory_entries: &[FileSystemEntry],
+        current_directory_path: &PathBuf,
+    ) -> Result<()> {
+        
+        // Always display the directory contents first for user selection
+        display_directory_contents(
+            current_directory_entries,
+            current_directory_path,
+            None, // No pagination info needed for this context
+            nav_state.current_filter,
+        ).map_err(|e| FileFantasticError::Io(e))?;
+
+        println!("\n=== Archive Selection ===");
+        println!("Select item to archive (creates timestamped copy/zip)");
+        print!("Enter item number (or 'c' to cancel): ");
+        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        let input = input.trim();
+        
+        // Handle cancellation
+        if input.eq_ignore_ascii_case("c") {
+            println!("Cancelled.");
+            return Ok(());
+        }
+        
+        // Try to parse as number and validate using existing lookup system
+        if let Ok(number) = input.parse::<usize>() {
+            if let Some(item_info) = nav_state.lookup_item(number) {
+                
+                // Get the item name for display
+                let item_name = item_info.item_path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                
+                // Ask for confirmation based on item type
+                let confirmation_message = if item_info.item_type == FileSystemItemType::Directory {
+                    format!("Archive directory '{}' as zip with timestamp? (Y/n): ", item_name)
+                } else {
+                    format!("Archive file '{}' with timestamp? (Y/n): ", item_name)
+                };
+                
+                print!("\n{}", confirmation_message);
+                io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                
+                let mut response = String::new();
+                io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                
+                // Default to 'yes' if user just presses enter
+                if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+                    
+                    // Perform archive operation based on item type
+                    if item_info.item_type == FileSystemItemType::Directory {
+                        // Archive directory as zip in the archive subfolder for consistency
+                        match ensure_archive_directory_exists(current_directory_path) {
+                            Ok(archive_directory_path) => {
+                                match create_directory_zip_archive(&item_info.item_path, &archive_directory_path) {
+                                    Ok(zip_path) => {
+                                        println!("✓ Directory archived successfully!");
+                                        println!("Archive location: {}", zip_path.display());
+                                    },
+                                    Err(e) => {
+                                        eprintln!("✗ Directory archive creation failed: {}", e);
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!("✗ Failed to create archive directory: {}", e);
+                            }
+                        }
+                    } else {
+                        // Archive file with timestamp using existing system (already uses archive folder)
+                        match copy_file_with_archive_handling(&item_info.item_path, current_directory_path) {
+                            Ok(archived_path) => {
+                                println!("✓ File archived successfully!");
+                                println!("Archive location: {}", archived_path.display());
+                            },
+                            Err(e) => {
+                                eprintln!("✗ File archive creation failed: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    println!("Archive cancelled.");
+                }
+                
+            } else {
+                println!("Error: Invalid item number {}. Please try again.", number);
+            }
+        } else {
+            println!("Error: Please enter a valid number or 'c' to cancel.");
+        }
+        
+        println!("Press Enter to continue...");
+        let _ = io::stdin().read_line(&mut String::new());
+        
+        Ok(())
+    }
         
     /// Interactive interface to add a file to the file stack
     /// 
@@ -1634,6 +2213,8 @@ impl NavigationStateManager {
         Ok(None)
     }
     
+    
+    
     /// Interactive Get-Send-Mode landing page and command processor
     /// 
     /// # Purpose
@@ -1688,8 +2269,9 @@ impl NavigationStateManager {
         println!("4. Save current location as pocket dimension");
         println!("5. Go to pocket dimension");
         println!("6. View stacks and pocket dimensions");
-        println!("7. Clear all stacks");
-        println!("8. Return to file browser");
+        println!("7. Archive Selection (file or dir zipped + timestamp)");
+        println!("8. Clear all stacks");
+        println!("9. Return to file browser ( or empty Enter or (b)ack )");
         println!();
         print!("Select action (1-8): ");
         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
@@ -1705,8 +2287,9 @@ impl NavigationStateManager {
             "4" => Ok(GetSendModeAction::SavePocketDimension),
             "5" => Ok(GetSendModeAction::GoToPocketDimension),
             "6" => Ok(GetSendModeAction::ViewStacks),
-            "7" => Ok(GetSendModeAction::ClearAll),
-            "8" | "" | "b" => Ok(GetSendModeAction::ReturnToBrowser), // Default to return
+            "7" => Ok(GetSendModeAction::ArchiveSelection),
+            "8" => Ok(GetSendModeAction::ClearAll),
+            "9" | "" | "b" => Ok(GetSendModeAction::ReturnToBrowser), // Default to return
             _ => {
                 println!("Invalid selection.");
                 Ok(GetSendModeAction::ReturnToBrowser) // Default for invalid input
@@ -1778,6 +2361,9 @@ pub enum GetSendModeAction {
     /// Display current status and contents of all stacks and pocket dimensions
     /// Shows detailed view of all collected items and saved states
     ViewStacks,
+    
+    /// Archive the currently selected item (file copy or directory zip with timestamp)
+    ArchiveSelection,
     
     /// Clear all stacks and pocket dimensions
     /// Triggers the cleanup workflow with user confirmation
@@ -4037,7 +4623,6 @@ fn display_directory_contents(
         RED, YELLOW,      // RED str + YELLOW ...
         RED, YELLOW,      // RED enter + YELLOW ...
         RESET);
-
     
     // // Updated legend to include Get-Send-Mode commands
     // let legend = format!(
@@ -4046,8 +4631,6 @@ fn display_directory_contents(
     //     filter_status,
     //     RESET);
 
-
-    
     let path_display = format!("{}", current_directory_path.display());
     println!("{}\n{}", legend, path_display);
 
@@ -5006,6 +5589,16 @@ pub fn file_fantastic() -> Result<()> {
                                         
                                         println!("\nPress Enter to continue...");
                                         let _ = io::stdin().read_line(&mut String::new());
+                                    },
+                                    GetSendModeAction::ArchiveSelection => {
+                                        match state_manager.interactive_archive_selection(
+                                            &nav_state,
+                                            page_entries,
+                                            &current_directory_path,
+                                        ) {
+                                            Ok(_) => println!("Archive operation completed."),
+                                            Err(e) => println!("Error during archive operation: {}", e),
+                                        }
                                     },
                                     GetSendModeAction::ClearAll => {
                                         print!("Clear all stacks and pocket dimensions? (y/N): ");

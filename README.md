@@ -135,11 +135,25 @@ w for up, s for down, a for all
 13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
 14. Type a string for a partial match search.
 15. 'f' or 'd' to show only files or only directories
-
+16. Minimal file-moving ("Get-Send Mode")
+17. Save and Change Navigation-State ("Pocket Dimensions")
 
 # Scrolling
 1. MVP: use mouse wheel to scroll up and down
 2. pages using w and s to scroll up and down
+
+# Get-Send Mode: Move Files
+This is a minimal/modular system of ~features for copying files.
+if the user enters any of these: v, c, y, p, g
+
+1. store file-path from cwd to file-stack (start Q&A)
+2. get file from file-stack (save here) (start Q&A)
+3. store directory-path to directory-stack
+4. Save: current navigation-state to -> pocket-dimensions
+5. Go To: Pocket-Dimension (select from saved navigation states) 
+6. Go To: path -> from directory-stack [set this up later]
+7. clear 
+8. return/exit/back (same as "" or "b")
 
 # Example daily workflow:
 - open terminal
