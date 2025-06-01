@@ -137,6 +137,7 @@ w for up, s for down, a for all
 15. 'f' or 'd' to show only files or only directories
 16. Minimal file-moving ("Get-Send Mode")
 17. Save and Change Navigation-State ("Pocket Dimensions")
+18. Archive Selection: basic archive feature for versioning and backup
 
 # Scrolling
 1. MVP: use mouse wheel to scroll up and down
