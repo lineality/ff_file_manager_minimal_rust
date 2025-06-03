@@ -3362,8 +3362,7 @@ fn process_user_input(
             "d" => return Ok(NavigationAction::Filter('d')), // Show directories only
             "f" => return Ok(NavigationAction::Filter('f')), // Show files only
             "a" => return Ok(NavigationAction::Filter('a')),
-            "v" | "c" | "y" | "p" | "g" | "get" | "send" => return Ok(NavigationAction::GetSendMode),
-            // u and d are handled in main loop for pagination
+            "v" | "c" | "y" | "p" | "g" => return Ok(NavigationAction::GetSendMode),
             _ => {}
         }
     }
@@ -3959,6 +3958,50 @@ impl NavigationState {
             terminal_size: (80, 24), // Default terminal size
             current_page_index: 0, // Always start at page 0
         }
+    }
+    
+    /// Resets navigation state to clean defaults while preserving location and sort
+    /// 
+    /// # Purpose
+    /// Clears filters, pagination, selection, and search state to provide a "clean slate"
+    /// view of the current directory while preserving the user's preferred sort method
+    /// and current location.
+    /// 
+    /// # State Reset
+    /// - Clears any active filters (show all files and directories)
+    /// - Resets to first page (page 0)
+    /// - Clears any selected item
+    /// - Clears any active search term
+    /// - Preserves: current sort method, current directory location
+    /// 
+    /// # Usage Context
+    /// Called when user presses Enter with no input to "refresh" and clear all
+    /// applied filters, searches, and navigation state while staying in the
+    /// same directory with the same sort order.
+    /// 
+    /// # Example
+    /// ```rust
+    /// // User has filtered to files only, on page 3, with item 5 selected
+    /// // User presses Enter to reset
+    /// nav_state.reset_to_clean_state();
+    /// // Now: no filter, page 1, no selection, no search, same sort method
+    /// ```
+    fn reset_to_clean_state(&mut self) {
+        // Clear filter (show all items)
+        self.current_filter = None;
+        
+        // Reset to first page
+        self.current_page_index = 0;
+        
+        // Clear any selected item
+        self.selected_item_index = None;
+        
+        // Clear any active search
+        self.active_search_term = None;
+        
+        // Note: We preserve current_sort_method and last_sort_command
+        // because users typically want to keep their preferred sort order
+        // when refreshing/resetting the view
     }
 
     /// Set or toggle filter mode
@@ -5332,8 +5375,8 @@ pub fn file_fantastic() -> Result<()> {
                 Ok(action) => {
                     match action {
                         NavigationAction::Refresh => {
-                            // Clear any filters when refreshing
-                            nav_state.current_filter = None;
+                            // Reset navigation state to clean defaults (clear filters, pagination, etc.)
+                            nav_state.reset_to_clean_state();
                             break; // Break inner loop to refresh directory
                         },
                         // NavigationAction::Filter(filter_char) => {
