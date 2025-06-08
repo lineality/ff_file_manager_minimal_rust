@@ -4660,14 +4660,22 @@ fn display_directory_contents(
         );
     }
 
+    // // Add pagination footer if applicable
+    // if let Some((current_page, total_pages)) = page_info {
+    //     if total_pages > 1 {
+    //         println!("--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---", 
+    //                 current_page, total_pages);
+    //     }
+    // }
+
     // Add pagination footer if applicable
     if let Some((current_page, total_pages)) = page_info {
         if total_pages > 1 {
-            println!("--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---", 
-                    current_page, total_pages);
+            println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---{}", 
+                    YELLOW, current_page, total_pages, RESET);
         }
     }
-
+    
     io::stdout().flush()?;
     Ok(())
 }
