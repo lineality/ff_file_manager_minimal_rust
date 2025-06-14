@@ -4680,7 +4680,553 @@ fn display_directory_contents(
     Ok(())
 }
 
-/// Opens a file with user-selected editor in a new terminal window
+// /// Opens a file with user-selected editor in a new terminal window
+// /// 
+// /// # Arguments
+// /// * `file_path` - PathBuf of the file to open
+// /// 
+// /// # Returns
+// /// * `Result<()>` - Success or FileFantasticError with context
+// /// 
+// /// # Behavior
+// /// - Prompts user to select editor (e.g., nano, vim, code)
+// /// - Empty input uses system default opener
+// /// - Terminal-based editors open in new terminal window
+// /// - GUI editors (code, sublime, etc.) launch directly
+// /// - Falls back to system default if editor fails
+// /// 
+// /// # Error Handling
+// /// - Handles IO errors for user input/output
+// /// - Handles process spawn failures
+// /// - Provides fallbacks when editor launch fails
+// /// - Gives user feedback for all error cases
+// /// 
+// /// # Example Output
+// /// ```text
+// /// Open with (enter for default, or type: nano/vim/code/etc): vim
+// /// ```
+// fn open_file(file_path: &PathBuf) -> Result<()> {
+//     print!("Open with... (hit enter for default, or enter your software 'name' as called in a terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): ");
+//     io::stdout().flush().map_err(|e| {
+//         eprintln!("Failed to flush stdout: {}", e);
+//         FileFantasticError::Io(e)
+//     })?;
+    
+//     let mut editor = String::new();
+//     io::stdin().read_line(&mut editor).map_err(|e| {
+//         eprintln!("Failed to read input: {}", e);
+//         FileFantasticError::Io(e)
+//     })?;
+//     let editor = editor.trim();
+
+//     if editor.is_empty() {
+//         // Use system default
+//         #[cfg(target_os = "macos")]
+//         {
+//             std::process::Command::new("open")
+//                 .arg(file_path)
+//                 .spawn()
+//                 .map_err(|e| {
+//                     eprintln!("Failed to open file with default application: {}", e);
+//                     FileFantasticError::Io(e)
+//                 })?;
+//         }
+//         #[cfg(target_os = "linux")]
+//         {
+//             std::process::Command::new("xdg-open")
+//                 .arg(file_path)
+//                 .spawn()
+//                 .map_err(|e| {
+//                     eprintln!("Failed to open file with xdg-open: {}", e);
+//                     FileFantasticError::Io(e)
+//                 })?;
+//         }
+//         #[cfg(target_os = "windows")]
+//         {
+//             std::process::Command::new("cmd")
+//                 .args(["/C", "start", ""])
+//                 .arg(file_path)
+//                 .spawn()
+//                 .map_err(|e| {
+//                     eprintln!("Failed to open file with default application: {}", e);
+//                     FileFantasticError::Io(e)
+//                 })?;
+//         }
+//     } else {
+//         // List of known GUI editors that shouldn't need a terminal
+//         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+        
+//         if gui_editors.contains(&editor.to_lowercase().as_str()) {
+//             // Launch GUI editors directly - use EditorLaunchFailed
+//             match std::process::Command::new(editor)
+//                 .arg(file_path)
+//                 .spawn() 
+//             {
+//                 Ok(_) => return Ok(()),
+//                 Err(e) => {
+//                     eprintln!("Error launching {}: {}", editor, e);
+//                     let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+//                     println!("Falling back to system default due to: {}", error);
+//                     std::thread::sleep(std::time::Duration::from_secs(2));
+//                     return open_file(file_path);
+//                 }
+//             }
+//         } else {
+//             // Open terminal-based editors in new terminal window
+//             #[cfg(target_os = "macos")]
+//             {
+//                 std::process::Command::new("open")
+//                     .args(["-a", "Terminal"])
+//                     .arg(format!("{}; exit", editor))
+//                     .spawn()
+//                     .map_err(|e| {
+//                         eprintln!("Failed to open Terminal.app for editor: {}", e);
+//                         FileFantasticError::EditorLaunchFailed(editor.to_string())
+//                     })?;
+//             }
+//             #[cfg(target_os = "linux")]
+//             {
+//                 // Try different terminal emulators
+//                 let terminal_commands = [
+//                     ("gnome-terminal", vec!["--", editor]),
+//                     ("ptyxis", vec!["--", editor]),              // Fedora 41's default
+//                     ("konsole", vec!["--e", editor]),
+//                     ("xfce4-terminal", vec!["--command", editor]),
+//                     ("terminator", vec!["-e", editor]),
+//                     ("tilix", vec!["-e", editor]),
+//                     ("kitty", vec!["-e", editor]),
+//                     ("alacritty", vec!["-e", editor]),
+//                     ("terminology", vec!["-e", editor]),
+//                     ("xterm", vec!["-e", editor]),
+//                 ];
+
+//                 let mut success = false;
+//                 for (terminal, args) in terminal_commands.iter() {
+//                     let mut cmd = std::process::Command::new(terminal);
+//                     cmd.args(args).arg(file_path);
+                    
+//                     if let Ok(_) = cmd.spawn() {
+//                         success = true;
+//                         break;
+//                     }
+//                 }
+
+//                 if !success {
+//                     println!("No terminal available. Falling back to system default...");
+//                     let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+//                     eprintln!("Error: {}", error);
+//                     std::thread::sleep(std::time::Duration::from_secs(2));
+//                     return open_file(file_path);
+//                 }
+//             }
+//             #[cfg(target_os = "windows")]
+//             {
+//                 std::process::Command::new("cmd")
+//                     .args(["/C", "start", "cmd", "/C"])
+//                     .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+//                     .spawn()
+//                     .map_err(|e| {
+//                         eprintln!("Failed to open cmd.exe for editor: {}", e);
+//                         FileFantasticError::EditorLaunchFailed(editor.to_string())
+//                     })?;
+//             }
+//         }
+//     }
+    
+//     Ok(())
+// }
+
+
+/// Reads the partner programs configuration file and returns valid executable paths
+/// 
+/// # Purpose
+/// Manages the 'absolute_paths_to_local_partner_fileopening_executibles.txt' file
+/// that contains absolute paths to local executable programs. This file allows users
+/// to configure custom Rust executables or other local tools for opening files.
+/// 
+/// # Returns
+/// * `Vec<PathBuf>` - Vector of valid executable paths, empty if none found or errors occur
+/// 
+/// # File Location and Format
+/// The configuration file is located in the same directory as the File Fantastic executable.
+/// Each line should contain one absolute path to an executable:
+/// ```text
+/// /home/user/custom_tools/my_editor
+/// /opt/local/bin/special_viewer
+/// /usr/local/bin/custom_processor
+/// ```
+/// 
+/// # Behavior
+/// 1. **File doesn't exist**: Creates empty file with helpful comments and returns empty vector
+/// 2. **File exists**: Reads all lines, validates each path, returns only valid executables
+/// 3. **Any errors**: Returns empty vector (graceful degradation to standard functionality)
+/// 
+/// # Path Validation
+/// For each line in the file:
+/// - Skips empty lines and comments (lines starting with #)
+/// - Verifies path exists and points to a file
+/// - On Unix systems, checks if file has execute permissions
+/// - Invalid paths are logged as warnings but don't cause failure
+/// 
+/// # Error Handling Philosophy
+/// This function uses "graceful degradation" - any errors result in returning an empty
+/// vector, which causes the partner programs feature to be unavailable but doesn't
+/// break File Fantastic's core functionality. Specific error details are logged
+/// for user awareness but don't interrupt the workflow.
+/// 
+/// # Example Configuration File Content
+/// ```text
+/// # File Fantastic - Local Partner Programs Configuration
+/// # Add absolute paths to local executables, one per line
+/// # Example:
+/// # /home/user/my_tools/custom_editor
+/// # /opt/local/bin/special_viewer
+/// 
+/// /home/user/rust_projects/my_file_processor/target/release/my_processor
+/// /usr/local/bin/custom_text_editor
+/// ```
+/// 
+/// # Usage Context
+/// Called during file opening to provide additional program options beyond
+/// system-installed applications. Integrates seamlessly with existing file
+/// opening functionality as an optional enhancement.
+/// 
+/// # Example
+/// ```rust
+/// let partner_programs = read_partner_programs_file();
+/// if partner_programs.is_empty() {
+///     // Use standard program selection only
+///     show_standard_prompt();
+/// } else {
+///     // Show enhanced prompt with numbered partner program options
+///     show_enhanced_prompt(&partner_programs);
+/// }
+/// ```
+fn read_partner_programs_file() -> Vec<PathBuf> {
+    // Try to get the executable directory
+    let exe_dir = match std::env::current_exe() {
+        Ok(exe_path) => match exe_path.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => {
+                eprintln!("Warning: Cannot determine executable directory for partner programs");
+                return Vec::new();
+            }
+        },
+        Err(e) => {
+            eprintln!("Warning: Cannot locate executable for partner programs: {}", e);
+            return Vec::new();
+        }
+    };
+    
+    let config_file_path = exe_dir.join("absolute_paths_to_local_partner_fileopening_executibles.txt");
+    
+    // If file doesn't exist, create it with helpful comments
+    if !config_file_path.exists() {
+        let initial_content = "# File Fantastic - Local Partner Programs Configuration\n\
+                              # Add absolute paths to local executables, one per line\n\
+                              # Example:\n\
+                              # /home/user/my_tools/custom_editor\n\
+                              # /opt/local/bin/special_viewer\n\
+                              # /usr/local/bin/custom_processor\n\
+                              #\n\
+                              # Lines starting with # are comments and will be ignored\n\
+                              # Empty lines are also ignored\n\n";
+        
+        match fs::write(&config_file_path, initial_content) {
+            Ok(_) => {
+                println!("Created partner programs config file: {}", config_file_path.display());
+                println!("Edit this file to add your custom executables");
+            },
+            Err(e) => {
+                eprintln!("Warning: Could not create partner programs file: {}", e);
+            }
+        }
+        return Vec::new(); // New empty file, no programs configured yet
+    }
+    
+    // Read the existing file
+    let file_contents = match fs::read_to_string(&config_file_path) {
+        Ok(contents) => contents,
+        Err(e) => {
+            eprintln!("Warning: Could not read partner programs file: {}", e);
+            return Vec::new(); // Graceful degradation
+        }
+    };
+    
+    // Parse lines and validate paths
+    let mut valid_programs = Vec::new();
+    
+    for (line_number, line) in file_contents.lines().enumerate() {
+        let line = line.trim();
+        
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        
+        let program_path = PathBuf::from(line);
+        
+        // Validate the path exists
+        if !program_path.exists() {
+            eprintln!("Warning: Partner program path does not exist (line {}): {}", 
+                     line_number + 1, line);
+            continue;
+        }
+        
+        // Validate it's a file
+        if !program_path.is_file() {
+            eprintln!("Warning: Partner program path is not a file (line {}): {}", 
+                     line_number + 1, line);
+            continue;
+        }
+        
+        // On Unix systems, check if file is executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = program_path.metadata() {
+                let permissions = metadata.permissions();
+                if permissions.mode() & 0o111 == 0 {
+                    eprintln!("Warning: Partner program is not executable (line {}): {}", 
+                             line_number + 1, line);
+                    continue;
+                }
+            }
+        }
+        
+        // Path is valid, add to list
+        valid_programs.push(program_path);
+    }
+    
+    valid_programs
+}
+
+/// Extracts the filename from a path for user-friendly display in program selection menus
+/// 
+/// # Purpose
+/// Converts full absolute paths to just the executable name portion for clean
+/// display in the file opening prompt. This makes the numbered partner program
+/// options more readable and user-friendly.
+/// 
+/// # Arguments
+/// * `program_path` - The full absolute path to the executable
+/// 
+/// # Returns
+/// * `String` - The filename portion of the path, or a descriptive fallback
+/// 
+/// # Fallback Strategy
+/// If the filename cannot be extracted from the path (rare edge cases):
+/// 1. Attempts to use the last component of the path
+/// 2. If that fails, uses the full path as a string
+/// 3. As a last resort, returns a generic placeholder
+/// 
+/// # Examples
+/// ```rust
+/// let path1 = PathBuf::from("/home/user/my_tools/custom_editor");
+/// assert_eq!(extract_program_display_name(&path1), "custom_editor");
+/// 
+/// let path2 = PathBuf::from("/usr/local/bin/special-viewer");
+/// assert_eq!(extract_program_display_name(&path2), "special-viewer");
+/// 
+/// let path3 = PathBuf::from("/opt/tools/file_processor_v2");
+/// assert_eq!(extract_program_display_name(&path3), "file_processor_v2");
+/// ```
+/// 
+/// # Usage Context
+/// Used when building the enhanced file opening prompt that shows numbered
+/// partner program options. The extracted names are displayed as:
+/// "OR by number: 1. custom_editor 2. special_viewer 3. file_processor"
+/// 
+/// # Design Considerations
+/// - Prioritizes readability over technical accuracy
+/// - Handles edge cases gracefully without causing errors
+/// - Returns something meaningful even for unusual path structures
+/// - Keeps the display compact and scannable for users
+fn extract_program_display_name(program_path: &PathBuf) -> String {
+    program_path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| {
+            // Fallback: try to use the full path or a placeholder
+            program_path.to_string_lossy().to_string()
+        })
+}
+
+/// Launches a partner program in a new terminal window to open the specified file
+/// 
+/// # Purpose
+/// Executes a local partner executable in a new terminal window, similar to how
+/// terminal-based editors like vim and nano are launched. This ensures the partner
+/// program has proper terminal interaction capabilities and doesn't interfere with
+/// File Fantastic's interface.
+/// 
+/// # Arguments
+/// * `program_path` - Absolute path to the partner executable to launch
+/// * `file_path` - Path to the file that should be opened by the partner program
+/// 
+/// # Returns
+/// * `Result<()>` - Success or FileFantasticError with detailed context
+/// 
+/// # Terminal Launch Strategy
+/// Uses the same cross-platform terminal launching logic as File Fantastic's
+/// existing editor support:
+/// - **macOS**: Launches via Terminal.app using the `open` command
+/// - **Linux**: Tries multiple terminal emulators in preference order
+/// - **Windows**: Uses cmd.exe with appropriate arguments
+/// 
+/// # Command Execution
+/// The partner program is launched with the file path as its first argument:
+/// ```bash
+/// /path/to/partner_program /path/to/file_to_open
+/// ```
+/// 
+/// # Error Handling
+/// Follows File Fantastic's established error handling patterns:
+/// - Specific error types for different failure modes
+/// - Clear error messages with context
+/// - Graceful fallback opportunities for calling code
+/// - No silent failures - all errors are visible to users
+/// 
+/// # Platform-Specific Implementation
+/// 
+/// ## macOS
+/// ```bash
+/// open -a Terminal "/path/to/partner_program /path/to/file; exit"
+/// ```
+/// 
+/// ## Linux (tries in order)
+/// 1. gnome-terminal --  /path/to/partner_program /path/to/file
+/// 2. ptyxis --  /path/to/partner_program /path/to/file
+/// 3. konsole --e /path/to/partner_program /path/to/file
+/// 4. (additional terminal emulators...)
+/// 
+/// ## Windows
+/// ```cmd
+/// cmd /C start cmd /C "/path/to/partner_program /path/to/file && pause"
+/// ```
+/// 
+/// # Security Considerations
+/// - Validates that the program path exists before execution
+/// - Relies on filesystem permissions for execution control
+/// - Does not perform shell injection sanitization (paths come from config file)
+/// - Users are responsible for the security of their configured partner programs
+/// 
+/// # Example Usage
+/// ```rust
+/// let partner_program = PathBuf::from("/home/user/my_tools/file_processor");
+/// let file_to_open = PathBuf::from("/home/user/documents/data.txt");
+/// 
+/// match launch_partner_program_in_terminal(&partner_program, &file_to_open) {
+///     Ok(_) => println!("Partner program launched successfully"),
+///     Err(e) => {
+///         println!("Error launching partner program: {}. \nPress Enter to continue", e);
+///         let mut buf = String::new();
+///         io::stdin().read_line(&mut buf)?;
+///         // Continue with fallback options...
+///     }
+/// }
+/// ```
+fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBuf) -> Result<()> {
+    // Validate program still exists (it might have been deleted since config was read)
+    if !program_path.exists() {
+        return Err(FileFantasticError::NotFound(program_path.clone()));
+    }
+    
+    if !program_path.is_file() {
+        return Err(FileFantasticError::InvalidName(
+            format!("Partner program is not a file: {}", program_path.display())
+        ));
+    }
+    
+    // Launch using platform-specific terminal commands (reusing existing logic patterns)
+    #[cfg(target_os = "macos")]
+    {
+        // Build command string for macOS Terminal.app
+        let command_string = format!("{} {}", 
+                                    program_path.to_string_lossy(), 
+                                    file_path.to_string_lossy());
+        
+        std::process::Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(format!("{}; exit", command_string))
+            .spawn()
+            .map_err(|e| {
+                eprintln!("Failed to open Terminal.app for partner program: {}", e);
+                FileFantasticError::EditorLaunchFailed(
+                    extract_program_display_name(program_path)
+                )
+            })?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Try different terminal emulators in order of preference
+        // Pass program and file as separate arguments (safer than shell string)
+        let terminal_commands = [
+            ("gnome-terminal", vec!["--"]),
+            ("ptyxis", vec!["--"]),
+            ("konsole", vec!["--e"]),
+            ("xfce4-terminal", vec!["--command"]),
+            ("mate-terminal", vec!["--command"]),
+            ("terminator", vec!["-e"]),
+            ("alacritty", vec!["-e"]),
+            ("kitty", vec!["-e"]),
+            ("tilix", vec!["-e"]),
+            ("urxvt", vec!["-e"]),
+            ("rxvt", vec!["-e"]),
+            ("xterm", vec!["-e"]),
+        ];
+
+        let mut terminal_launched = false;
+        for (terminal, args) in terminal_commands.iter() {
+            let mut cmd = std::process::Command::new(terminal);
+            cmd.args(args)
+               .arg(program_path)
+               .arg(file_path);
+            
+            if cmd.spawn().is_ok() {
+                terminal_launched = true;
+                break;
+            }
+        }
+
+        if !terminal_launched {
+            return Err(FileFantasticError::NoTerminalFound);
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Build command string for Windows cmd.exe
+        let command_string = format!("{} {}", 
+                                    program_path.to_string_lossy(), 
+                                    file_path.to_string_lossy());
+        
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "cmd", "/C"])
+            .arg(format!("{} && pause", command_string))
+            .spawn()
+            .map_err(|e| {
+                eprintln!("Failed to open cmd.exe for partner program: {}", e);
+                FileFantasticError::EditorLaunchFailed(
+                    extract_program_display_name(program_path)
+                )
+            })?;
+    }
+    
+    println!("Launched partner program: {} with {}", 
+             extract_program_display_name(program_path),
+             file_path.file_name().unwrap_or_default().to_string_lossy());
+    
+    Ok(())
+}
+
+/// Opens a file with user-selected editor, partner program, or system default
+/// 
+/// # Purpose
+/// Enhanced file opening interface that supports traditional system applications,
+/// user-configured local partner programs, and system default file associations.
+/// Partner programs are custom executables defined in a configuration file.
 /// 
 /// # Arguments
 /// * `file_path` - PathBuf of the file to open
@@ -4688,39 +5234,116 @@ fn display_directory_contents(
 /// # Returns
 /// * `Result<()>` - Success or FileFantasticError with context
 /// 
-/// # Behavior
-/// - Prompts user to select editor (e.g., nano, vim, code)
-/// - Empty input uses system default opener
-/// - Terminal-based editors open in new terminal window
-/// - GUI editors (code, sublime, etc.) launch directly
-/// - Falls back to system default if editor fails
+/// # Enhanced User Experience
+/// The function now provides three types of file opening options:
+/// 1. **System Default**: Empty input uses OS file associations
+/// 2. **Named Programs**: Type program names (nano, vim, code, etc.)
+/// 3. **Partner Programs**: Select by number from configured local executables
 /// 
-/// # Error Handling
-/// - Handles IO errors for user input/output
-/// - Handles process spawn failures
-/// - Provides fallbacks when editor launch fails
-/// - Gives user feedback for all error cases
+/// # Partner Programs Integration
+/// - Reads from 'absolute_paths_to_local_partner_fileopening_executibles.txt'
+/// - File is located in the same directory as the File Fantastic executable
+/// - Shows partner programs as numbered options (1, 2, 3, etc.)
+/// - Launches partner programs in new terminal windows
+/// - Gracefully handles partner program failures with clear error messages
 /// 
-/// # Example Output
+/// # User Interface Examples
+/// 
+/// ## With Partner Programs Available
 /// ```text
-/// Open with (enter for default, or type: nano/vim/code/etc): vim
+/// Open with... (hit enter for default, or enter software 'name' as called in terminal: 
+/// gedit, firefox, vi, nano, hx, lapce, ... OR by number: 1. my_editor 2. file_processor): 
+/// ```
+/// 
+/// ## Without Partner Programs
+/// ```text
+/// Open with... (hit enter for default, or enter software 'name' as called in terminal: 
+/// gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): 
+/// ```
+/// 
+/// # Input Processing Priority
+/// 1. **Empty input**: System default application
+/// 2. **Numeric input**: Partner program selection (if valid number)
+/// 3. **Text input**: Named system application
+/// 
+/// # Error Handling Philosophy
+/// Maintains File Fantastic's established error handling patterns:
+/// - Clear error messages with context
+/// - "Press Enter to continue" user acknowledgment
+/// - Graceful fallback to system default when specific programs fail
+/// - No silent failures - all errors are visible and acknowledged
+/// 
+/// # Backwards Compatibility
+/// All existing functionality is preserved:
+/// - Traditional program name input works exactly as before
+/// - System default behavior is unchanged
+/// - GUI vs terminal editor detection logic is maintained
+/// - Platform-specific terminal launching is preserved
+/// 
+/// # Example User Workflows
+/// 
+/// ## Traditional Usage (unchanged)
+/// ```text
+/// User input: "nano"
+/// Result: Opens nano in new terminal
+/// ```
+/// 
+/// ## Partner Program Usage (new)
+/// ```text
+/// User input: "1"
+/// Result: Launches first configured partner program in new terminal
+/// ```
+/// 
+/// ## Default Usage (unchanged)
+/// ```text
+/// User input: [Enter]
+/// Result: Opens with system default application
 /// ```
 fn open_file(file_path: &PathBuf) -> Result<()> {
-    print!("Open with... (hit enter for default, or enter your software 'name' as called in a terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): ");
+    // Read partner programs configuration (gracefully handles all errors)
+    let partner_programs = read_partner_programs_file();
+    
+    // Build the user prompt based on whether partner programs are available
+    let prompt = if partner_programs.is_empty() {
+        // Standard prompt when no partner programs are configured
+        format!(
+            "{}Open with... (hit enter for default, or enter software 'name' as called in terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): {}",
+            YELLOW, RESET
+        )
+    } else {
+        // Enhanced prompt showing numbered partner program options
+        let mut numbered_options = String::new();
+        for (index, program_path) in partner_programs.iter().enumerate() {
+            if index > 0 {
+                numbered_options.push(' ');
+            }
+            numbered_options.push_str(&format!("{}. {}", 
+                                              index + 1, 
+                                              extract_program_display_name(program_path)));
+        }
+        
+        format!(
+            "{}Open with... (hit enter for default, or enter software 'name' as called in terminal: gedit, firefox, vi, nano, hx, lapce, ... OR by number: {}): {}",
+            YELLOW, numbered_options, RESET
+        )
+    };
+    
+    // Display the prompt and get user input
+    print!("{}", prompt);
     io::stdout().flush().map_err(|e| {
         eprintln!("Failed to flush stdout: {}", e);
         FileFantasticError::Io(e)
     })?;
     
-    let mut editor = String::new();
-    io::stdin().read_line(&mut editor).map_err(|e| {
+    let mut user_input = String::new();
+    io::stdin().read_line(&mut user_input).map_err(|e| {
         eprintln!("Failed to read input: {}", e);
         FileFantasticError::Io(e)
     })?;
-    let editor = editor.trim();
+    let user_input = user_input.trim();
 
-    if editor.is_empty() {
-        // Use system default
+    // Handle empty input - use system default (existing functionality)
+    if user_input.is_empty() {
         #[cfg(target_os = "macos")]
         {
             std::process::Command::new("open")
@@ -4752,84 +5375,134 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     FileFantasticError::Io(e)
                 })?;
         }
-    } else {
-        // List of known GUI editors that shouldn't need a terminal
-        let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-        
-        if gui_editors.contains(&editor.to_lowercase().as_str()) {
-            // Launch GUI editors directly - use EditorLaunchFailed
-            match std::process::Command::new(editor)
-                .arg(file_path)
-                .spawn() 
-            {
+        return Ok(());
+    }
+    
+    // Try to parse input as a number for partner program selection
+    if let Ok(program_number) = user_input.parse::<usize>() {
+        if program_number > 0 && program_number <= partner_programs.len() {
+            let selected_program = &partner_programs[program_number - 1];
+            println!("Launching partner program: {}", extract_program_display_name(selected_program));
+            
+            // Launch partner program in terminal with proper error handling
+            match launch_partner_program_in_terminal(selected_program, file_path) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    eprintln!("Error launching {}: {}", editor, e);
-                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-                    println!("Falling back to system default due to: {}", error);
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    return open_file(file_path);
-                }
-            }
-        } else {
-            // Open terminal-based editors in new terminal window
-            #[cfg(target_os = "macos")]
-            {
-                std::process::Command::new("open")
-                    .args(["-a", "Terminal"])
-                    .arg(format!("{}; exit", editor))
-                    .spawn()
-                    .map_err(|e| {
-                        eprintln!("Failed to open Terminal.app for editor: {}", e);
-                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    // Follow File Fantastic's error handling pattern
+                    println!("Error launching partner program: {}. \nPress Enter to continue", e);
+                    let mut buf = String::new();
+                    io::stdin().read_line(&mut buf).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
                     })?;
-            }
-            #[cfg(target_os = "linux")]
-            {
-                // Try different terminal emulators
-                let terminal_commands = [
-                    ("gnome-terminal", vec!["--", editor]),
-                    ("ptyxis", vec!["--", editor]),              // Fedora 41's default
-                    ("konsole", vec!["--e", editor]),
-                    ("xfce4-terminal", vec!["--command", editor]),
-                    ("terminator", vec!["-e", editor]),
-                    ("tilix", vec!["-e", editor]),
-                    ("kitty", vec!["-e", editor]),
-                    ("alacritty", vec!["-e", editor]),
-                    ("terminology", vec!["-e", editor]),
-                    ("xterm", vec!["-e", editor]),
-                ];
-
-                let mut success = false;
-                for (terminal, args) in terminal_commands.iter() {
-                    let mut cmd = std::process::Command::new(terminal);
-                    cmd.args(args).arg(file_path);
                     
-                    if let Ok(_) = cmd.spawn() {
-                        success = true;
-                        break;
-                    }
+                    // After user acknowledgment, fall back to asking again
+                    println!("Falling back to system default...");
+                    return open_file(file_path); // Recursive call for new selection
                 }
+            }
+        } else if !partner_programs.is_empty() {
+            // Invalid partner program number
+            println!("Invalid partner program number. Valid range: 1-{}. \nPress Enter to continue", 
+                     partner_programs.len());
+            let mut buf = String::new();
+            io::stdin().read_line(&mut buf).map_err(|e| {
+                eprintln!("Failed to read input: {}", e);
+                FileFantasticError::Io(e)
+            })?;
+            return open_file(file_path); // Ask again
+        }
+        // If no partner programs configured, fall through to treat as program name
+    }
+    
+    // Handle traditional program name input (existing functionality preserved)
+    let editor = user_input;
+    
+    // List of known GUI editors that shouldn't need a terminal (existing logic)
+    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+    
+    if gui_editors.contains(&editor.to_lowercase().as_str()) {
+        // Launch GUI editors directly (existing functionality)
+        match std::process::Command::new(editor)
+            .arg(file_path)
+            .spawn() 
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                // Follow existing error handling pattern
+                eprintln!("Error launching {}: {}", editor, e);
+                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                println!("Falling back to system default due to: {}. \nPress Enter to continue", error);
+                let mut buf = String::new();
+                io::stdin().read_line(&mut buf).map_err(|e| {
+                    eprintln!("Failed to read input: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
+                return open_file(file_path); // Ask again
+            }
+        }
+    } else {
+        // Open terminal-based editors in new terminal window (existing logic preserved)
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .args(["-a", "Terminal"])
+                .arg(format!("{} {}; exit", editor, file_path.to_string_lossy()))
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open Terminal.app for editor: {}", e);
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Try different terminal emulators (existing logic)
+            let terminal_commands = [
+                ("gnome-terminal", vec!["--", editor]),
+                ("ptyxis", vec!["--", editor]),
+                ("konsole", vec!["--e", editor]),
+                ("xfce4-terminal", vec!["--command", editor]),
+                ("terminator", vec!["-e", editor]),
+                ("tilix", vec!["-e", editor]),
+                ("kitty", vec!["-e", editor]),
+                ("alacritty", vec!["-e", editor]),
+                ("xterm", vec!["-e", editor]),
+            ];
 
-                if !success {
-                    println!("No terminal available. Falling back to system default...");
-                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-                    eprintln!("Error: {}", error);
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    return open_file(file_path);
+            let mut success = false;
+            for (terminal, args) in terminal_commands.iter() {
+                let mut cmd = std::process::Command::new(terminal);
+                cmd.args(args).arg(file_path);
+                
+                if cmd.spawn().is_ok() {
+                    success = true;
+                    break;
                 }
             }
-            #[cfg(target_os = "windows")]
-            {
-                std::process::Command::new("cmd")
-                    .args(["/C", "start", "cmd", "/C"])
-                    .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-                    .spawn()
-                    .map_err(|e| {
-                        eprintln!("Failed to open cmd.exe for editor: {}", e);
-                        FileFantasticError::EditorLaunchFailed(editor.to_string())
-                    })?;
+
+            if !success {
+                // Follow existing error handling pattern
+                println!("No terminal available. Falling back to system default... \nPress Enter to continue");
+                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                eprintln!("Error: {}", error);
+                let mut buf = String::new();
+                io::stdin().read_line(&mut buf).map_err(|e| {
+                    eprintln!("Failed to read input: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
+                return open_file(file_path); // Ask again
             }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "cmd", "/C"])
+                .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open cmd.exe for editor: {}", e);
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
         }
     }
     
