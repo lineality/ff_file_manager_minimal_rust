@@ -1,15 +1,14 @@
 # ff_file_manager_minimal_rust
 
 
-
 ## Build
 see https://github.com/lineality/rust_compile_optimizations_cheatsheet
 
-#### For smaller size, build (~0.53 mb)
+#### For smallest size, build (~0.48 mb)
 ```bash
 cargo build --profile release-small 
 ```
-#### Or for optimized performance (~6.4 mb)
+#### or for optimal performance (~6 mb)
 ```bash
 cargo build --profile release-performance
 ```
@@ -49,6 +48,15 @@ source ~/.bashrc
 or bash_profile
 
 Now you should be able to call File Fantastic by typing 'ff' (or whatever you choose) into a terminal.
+
+### Optional: config file
+Add a file called 'absolute_paths_to_local_partner_fileopening_executibles.txt',
+or one will be added automatically by ff.
+##### e.g.
+```path
+/home/USER-NAME-HERE/ff_file_browser/absolute_paths_to_local_partner_fileopening_executibles.txt
+```
+You can put the paths to local executable files as lines in this file.
 
 
 # ff is a minimal rust file manager
@@ -138,12 +146,16 @@ w for up, s for down, a for all
 16. Minimal file-moving ("Get-Send Mode")
 17. Save and Change Navigation-State ("Pocket Dimensions")
 18. Archive Selection: basic archive feature for versioning and backup
+19. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu') 
 
-# Scrolling
-1. MVP: use mouse wheel to scroll up and down
-2. pages using w and s to scroll up and down
+## Scrolling
+Instructions appear in info-bar:
+- Use various standard keys (and hit enter after that key)
+```text
+up/down, j/k, </>, w/x, arrows, etc.
+```
 
-# Get-Send Mode: Move Files
+## Get-Send Mode: Move Files
 This is a minimal/modular system of ~features for copying files.
 if the user enters any of these: v, c, y, p, g
 
@@ -174,5 +186,7 @@ if the size is no more than 99 of that unit
 - default terminal size 80/24
 - or first MVP, terminal size is default terminal size
 - for MVP...mouse to scroll up and down works fine for mvp
+
+
 
 
