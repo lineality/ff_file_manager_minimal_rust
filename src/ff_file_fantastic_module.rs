@@ -4596,9 +4596,8 @@ fn display_directory_contents(
     };
                     
     let legend = format!(
-        "{}{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}", 
+        "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}", 
         YELLOW,           // Overall legend color
-        filter_status,    // Filter status text
         RED, YELLOW,      // RED q + YELLOW uit
         RED, YELLOW,      // RED b + YELLOW ack
         RED, YELLOW,      // RED t + YELLOW erm
@@ -4615,15 +4614,9 @@ fn display_directory_contents(
         RED, YELLOW,      // RED enter + YELLOW ...
         RESET);
     
-    // // Updated legend to include Get-Send-Mode commands
-    // let legend = format!(
-    //     "{}{}(q)uit (b)ack|(t)erminal|(d)ir (f)ile|(n)ame (s)ize (m)od|(g)et|str>search|enter>reset{}", 
-    //     YELLOW,
-    //     filter_status,
-    //     RESET);
-
+    // directory/file mode on path-display line
     let path_display = format!("{}", current_directory_path.display());
-    println!("{}\n{}", legend, path_display);
+    println!("{}\n{}{}", legend, filter_status, path_display);
 
     // Rest of the function remains the same...
     // Column headers
