@@ -4673,163 +4673,6 @@ fn display_directory_contents(
     Ok(())
 }
 
-// /// Opens a file with user-selected editor in a new terminal window
-// /// 
-// /// # Arguments
-// /// * `file_path` - PathBuf of the file to open
-// /// 
-// /// # Returns
-// /// * `Result<()>` - Success or FileFantasticError with context
-// /// 
-// /// # Behavior
-// /// - Prompts user to select editor (e.g., nano, vim, code)
-// /// - Empty input uses system default opener
-// /// - Terminal-based editors open in new terminal window
-// /// - GUI editors (code, sublime, etc.) launch directly
-// /// - Falls back to system default if editor fails
-// /// 
-// /// # Error Handling
-// /// - Handles IO errors for user input/output
-// /// - Handles process spawn failures
-// /// - Provides fallbacks when editor launch fails
-// /// - Gives user feedback for all error cases
-// /// 
-// /// # Example Output
-// /// ```text
-// /// Open with (enter for default, or type: nano/vim/code/etc): vim
-// /// ```
-// fn open_file(file_path: &PathBuf) -> Result<()> {
-//     print!("Open with... (hit enter for default, or enter your software 'name' as called in a terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): ");
-//     io::stdout().flush().map_err(|e| {
-//         eprintln!("Failed to flush stdout: {}", e);
-//         FileFantasticError::Io(e)
-//     })?;
-    
-//     let mut editor = String::new();
-//     io::stdin().read_line(&mut editor).map_err(|e| {
-//         eprintln!("Failed to read input: {}", e);
-//         FileFantasticError::Io(e)
-//     })?;
-//     let editor = editor.trim();
-
-//     if editor.is_empty() {
-//         // Use system default
-//         #[cfg(target_os = "macos")]
-//         {
-//             std::process::Command::new("open")
-//                 .arg(file_path)
-//                 .spawn()
-//                 .map_err(|e| {
-//                     eprintln!("Failed to open file with default application: {}", e);
-//                     FileFantasticError::Io(e)
-//                 })?;
-//         }
-//         #[cfg(target_os = "linux")]
-//         {
-//             std::process::Command::new("xdg-open")
-//                 .arg(file_path)
-//                 .spawn()
-//                 .map_err(|e| {
-//                     eprintln!("Failed to open file with xdg-open: {}", e);
-//                     FileFantasticError::Io(e)
-//                 })?;
-//         }
-//         #[cfg(target_os = "windows")]
-//         {
-//             std::process::Command::new("cmd")
-//                 .args(["/C", "start", ""])
-//                 .arg(file_path)
-//                 .spawn()
-//                 .map_err(|e| {
-//                     eprintln!("Failed to open file with default application: {}", e);
-//                     FileFantasticError::Io(e)
-//                 })?;
-//         }
-//     } else {
-//         // List of known GUI editors that shouldn't need a terminal
-//         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-        
-//         if gui_editors.contains(&editor.to_lowercase().as_str()) {
-//             // Launch GUI editors directly - use EditorLaunchFailed
-//             match std::process::Command::new(editor)
-//                 .arg(file_path)
-//                 .spawn() 
-//             {
-//                 Ok(_) => return Ok(()),
-//                 Err(e) => {
-//                     eprintln!("Error launching {}: {}", editor, e);
-//                     let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-//                     println!("Falling back to system default due to: {}", error);
-//                     std::thread::sleep(std::time::Duration::from_secs(2));
-//                     return open_file(file_path);
-//                 }
-//             }
-//         } else {
-//             // Open terminal-based editors in new terminal window
-//             #[cfg(target_os = "macos")]
-//             {
-//                 std::process::Command::new("open")
-//                     .args(["-a", "Terminal"])
-//                     .arg(format!("{}; exit", editor))
-//                     .spawn()
-//                     .map_err(|e| {
-//                         eprintln!("Failed to open Terminal.app for editor: {}", e);
-//                         FileFantasticError::EditorLaunchFailed(editor.to_string())
-//                     })?;
-//             }
-//             #[cfg(target_os = "linux")]
-//             {
-//                 // Try different terminal emulators
-//                 let terminal_commands = [
-//                     ("gnome-terminal", vec!["--", editor]),
-//                     ("ptyxis", vec!["--", editor]),              // Fedora 41's default
-//                     ("konsole", vec!["--e", editor]),
-//                     ("xfce4-terminal", vec!["--command", editor]),
-//                     ("terminator", vec!["-e", editor]),
-//                     ("tilix", vec!["-e", editor]),
-//                     ("kitty", vec!["-e", editor]),
-//                     ("alacritty", vec!["-e", editor]),
-//                     ("terminology", vec!["-e", editor]),
-//                     ("xterm", vec!["-e", editor]),
-//                 ];
-
-//                 let mut success = false;
-//                 for (terminal, args) in terminal_commands.iter() {
-//                     let mut cmd = std::process::Command::new(terminal);
-//                     cmd.args(args).arg(file_path);
-                    
-//                     if let Ok(_) = cmd.spawn() {
-//                         success = true;
-//                         break;
-//                     }
-//                 }
-
-//                 if !success {
-//                     println!("No terminal available. Falling back to system default...");
-//                     let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-//                     eprintln!("Error: {}", error);
-//                     std::thread::sleep(std::time::Duration::from_secs(2));
-//                     return open_file(file_path);
-//                 }
-//             }
-//             #[cfg(target_os = "windows")]
-//             {
-//                 std::process::Command::new("cmd")
-//                     .args(["/C", "start", "cmd", "/C"])
-//                     .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-//                     .spawn()
-//                     .map_err(|e| {
-//                         eprintln!("Failed to open cmd.exe for editor: {}", e);
-//                         FileFantasticError::EditorLaunchFailed(editor.to_string())
-//                     })?;
-//             }
-//         }
-//     }
-    
-//     Ok(())
-// }
-
-
 /// Reads the partner programs configuration file and returns valid executable paths
 /// 
 /// # Purpose
@@ -5982,21 +5825,6 @@ pub fn file_fantastic() -> Result<()> {
             
             // Trim the input for processing
             let trimmed_input = user_input.trim();
-            
-            // // Handle pagination commands first
-            // if trimmed_input == "x" {
-            //     if dir_view.next_page() {
-            //         // Sync NavigationState with DirectoryView after successful page change
-            //         nav_state.current_page_index = dir_view.get_current_page();
-            //     }
-            //     continue; // Stay in inner loop, just change page
-            // } else if trimmed_input == "w" {
-            //     if dir_view.prev_page() {
-            //         // Sync NavigationState with DirectoryView after successful page change
-            //         nav_state.current_page_index = dir_view.get_current_page();
-            //     }
-            //     continue; // Stay in inner loop, just change page
-            // }
                         
             // Handle pagination commands with multiple key options
             if is_pagination_up_command(trimmed_input) {
@@ -6053,10 +5881,6 @@ pub fn file_fantastic() -> Result<()> {
                             nav_state.reset_to_clean_state();
                             break; // Break inner loop to refresh directory
                         },
-                        // NavigationAction::Filter(filter_char) => {
-                        //     nav_state.set_filter(filter_char);
-                        //     break; // Break inner loop to apply filter
-                        // },
                         NavigationAction::Filter(filter_char) => {
                             nav_state.set_filter(filter_char);
                             nav_state.current_page_index = 0; // Reset to first page after filter change
@@ -6084,22 +5908,6 @@ pub fn file_fantastic() -> Result<()> {
                                 }
                             }
                         }
-                        // NavigationAction::ChangeDirectory(new_path) => {
-                        //     current_directory_path = new_path;
-                        //     break; // Break inner loop to read new directory
-                        // }
-                        // NavigationAction::ParentDirectory => {
-                        //     match current_directory_path.parent() {
-                        //         Some(parent) => {
-                        //             current_directory_path = parent.to_path_buf();
-                        //             break; // Break inner loop to read new directory
-                        //         },
-                        //         None => {
-                        //             println!("Already at root directory");
-                        //             // Stay in current directory
-                        //         }
-                        //     }
-                        // }
                         NavigationAction::OpenFile(ref path) => {
                             match handle_file_open(path) {
                                 Ok(_) => {},
@@ -6110,11 +5918,15 @@ pub fn file_fantastic() -> Result<()> {
                                 }
                             }
                         }
-                        NavigationAction::Quit => return Ok(()),
-                        // NavigationAction::Sort(command) => {
-                        //     nav_state.toggle_sort(command);
-                        //     break; // Break inner loop to resort directory
-                        // }
+                        
+                        // give path blurb
+                        NavigationAction::Quit => {
+                            // Print the current directory path for cd command
+                            println!("\nTo continue from this location, run:");
+                            println!("cd {}", current_directory_path.display());
+                            return Ok(());
+                        },   
+                        
                         NavigationAction::OpenNewTerminal => {
                             match open_new_terminal(&current_directory_path) {
                                 Ok(_) => {
