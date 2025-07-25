@@ -3812,7 +3812,7 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
 
     print!("\x1B[2J\x1B[1;1H");
     println!("\nSearch Results   (Levenshtein < 3)");
-    println!("{:<5} {:<30} {:<10}", "Num", "Name", "Distance");
+    println!("{:<5} {:<30} {:<10}", " # ", "Name", "Distance");
     println!("{}", "-".repeat(45));
 
     for result in results {
@@ -4622,7 +4622,7 @@ fn display_directory_contents(
     // Column headers
     println!(
         "{:>4}  {:<53} {:>7} {:>11}",
-        "Num", "Name", "Size", "Modified"
+        " # ", "Name", "Size", "Modified"
     );
     println!(" {} ", "-".repeat(78));
 
