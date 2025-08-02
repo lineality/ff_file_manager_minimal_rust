@@ -743,104 +743,6 @@ fn create_directory_zip_archive(
     }
 }
 
-// /// Creates a zip archive of a directory with timestamped filename
-// /// 
-// /// # Purpose
-// /// Compresses an entire directory into a timestamped zip file for backup
-// /// or archival purposes, preserving the directory structure and all contents.
-// /// 
-// /// # Arguments
-// /// * `source_directory_path` - Path to the directory to archive
-// /// * `destination_directory_path` - Where to place the zip file
-// /// 
-// /// # Returns
-// /// * `Result<PathBuf>` - Path to the created zip file, or error
-// /// 
-// /// # Zip Creation Strategy
-// /// 1. Generate timestamped filename for the zip archive
-// /// 2. Use system zip command for cross-platform compatibility
-// /// 3. Create zip in destination directory with full directory contents
-// /// 4. Preserve directory structure and permissions when possible
-// /// 
-// /// # Platform Commands
-// /// - Linux/macOS: Uses `zip -r archive.zip source_directory`
-// /// - Windows: Uses PowerShell `Compress-Archive` command
-// /// 
-// /// # Error Conditions
-// /// - Source directory doesn't exist or isn't accessible
-// /// - Destination directory doesn't exist or isn't writable
-// /// - System zip command not available or fails
-// /// - Insufficient disk space for zip creation
-// /// 
-// /// # Example
-// /// ```rust
-// /// let source = PathBuf::from("/home/user/my_project");
-// /// let destination = PathBuf::from("/home/user/backups");
-// /// 
-// /// match create_directory_zip_archive(&source, &destination) {
-// ///     Ok(zip_path) => {
-// ///         println!("Directory archived: {}", zip_path.display());
-// ///     },
-// ///     Err(e) => {
-// ///         eprintln!("Failed to create archive: {}", e);
-// ///     }
-// /// }
-// /// ```
-// fn create_directory_zip_archive(
-//     source_directory_path: &PathBuf,
-//     destination_directory_path: &PathBuf,
-// ) -> Result<PathBuf> {
-//     // Validate source directory exists and is a directory
-//     if !source_directory_path.exists() {
-//         return Err(FileFantasticError::NotFound(source_directory_path.clone()));
-//     }
-    
-//     if !source_directory_path.is_dir() {
-//         return Err(FileFantasticError::InvalidName(
-//             format!("Source is not a directory: {}", source_directory_path.display())
-//         ));
-//     }
-    
-//     // Validate destination directory exists and is writable
-//     if !destination_directory_path.exists() {
-//         return Err(FileFantasticError::NotFound(destination_directory_path.clone()));
-//     }
-    
-//     if !destination_directory_path.is_dir() {
-//         return Err(FileFantasticError::InvalidName(
-//             format!("Destination is not a directory: {}", destination_directory_path.display())
-//         ));
-//     }
-    
-//     // Extract source directory name
-//     let source_directory_name = source_directory_path.file_name()
-//         .ok_or_else(|| FileFantasticError::InvalidName(
-//             format!("Cannot determine directory name from: {}", source_directory_path.display())
-//         ))?
-//         .to_string_lossy()
-//         .to_string();
-    
-//     // Generate timestamped zip filename
-//     let timestamp = generate_archive_timestamp();
-//     let zip_filename = format!("{}_{}.zip", source_directory_name, timestamp);
-//     let zip_destination_path = destination_directory_path.join(&zip_filename);
-    
-//     // Create zip archive using system commands
-//     let zip_result = create_zip_with_system_command(
-//         source_directory_path,
-//         &zip_destination_path,
-//     )?;
-    
-//     if zip_result {
-//         println!("Directory archived: {}", zip_destination_path.display());
-//         Ok(zip_destination_path)
-//     } else {
-//         Err(FileFantasticError::InvalidName(
-//             "Zip creation failed".to_string()
-//         ))
-//     }
-// }
-
 /// Creates a zip file using platform-appropriate system commands
 /// 
 /// # Purpose
@@ -1067,96 +969,6 @@ pub struct SavedNavigationState {
 }
 
 impl SavedNavigationState {
-    // /// Creates a new saved navigation state from current context
-    // /// 
-    // /// # Purpose
-    // /// Factory method that captures the complete current state of the file manager
-    // /// and packages it into a SavedNavigationState that can be stored and restored.
-    // /// 
-    // /// # Arguments
-    // /// * `current_directory_path` - Current directory being viewed
-    // /// * `nav_state` - Current NavigationState with sort/filter settings
-    // /// * `dir_view` - Current DirectoryView with pagination info
-    // /// * `selected_item` - Currently selected item index (if any)
-    // /// * `active_search` - Active search term (if any)
-    // /// * `nickname` - Optional user-provided nickname for this state
-    // /// 
-    // /// # Returns
-    // /// * `SavedNavigationState` - Complete state snapshot ready for storage
-    // /// 
-    // /// # State Capture Process
-    // /// 1. Records current directory path (always absolute)
-    // /// 2. Captures all navigation preferences (sort, filter)
-    // /// 3. Saves pagination state and selected item
-    // /// 4. Records search state if active
-    // /// 5. Captures terminal dimensions for display consistency
-    // /// 6. Generates nickname and description for user interface
-    // /// 7. Timestamps the state for management
-    // /// 
-    // /// # Nickname Generation
-    // /// If no nickname is provided, automatically generates one based on:
-    // /// - Directory name
-    // /// - Timestamp suffix for uniqueness
-    // /// - Truncation to reasonable length
-    // /// 
-    // /// # Example
-    // /// ```rust
-    // /// // Save current state as a pocket dimension
-    // /// let saved_state = SavedNavigationState::new(
-    // ///     current_directory_path.clone(),
-    // ///     &nav_state,
-    // ///     &dir_view,
-    // ///     Some(5), // Item 5 was selected
-    // ///     Some("rust".to_string()), // Search for "rust" was active
-    // ///     Some("my_workspace".to_string()), // User-provided nickname
-    // /// );
-    // /// ```
-    // pub fn new(
-    //     current_directory_path: PathBuf,
-    //     nav_state: &NavigationState,
-    //     dir_view: &DirectoryView,
-    //     selected_item: Option<usize>,
-    //     active_search: Option<String>,
-    //     nickname: Option<String>,
-    // ) -> Self {
-    //     let timestamp = SystemTime::now();
-        
-    //     // Generate automatic nickname if none provided
-    //     let auto_nickname = if let Some(name) = nickname {
-    //         name
-    //     } else {
-    //         Self::generate_auto_nickname(&current_directory_path, timestamp)
-    //     };
-        
-    //     // Generate description for display in pocket dimension lists
-    //     let description = Self::generate_description(
-    //         &current_directory_path,
-    //         nav_state.current_filter,
-    //         &nav_state.current_sort_method,
-    //     );
-        
-    //     // Get terminal size (simplified - in real implementation, get from terminal)
-    //     // TODO: Implement actual terminal size detection
-    //     let terminal_size = (80, 24); // Default terminal size for now
-        
-    //     SavedNavigationState {
-    //         current_directory_path,
-    //         current_sort_method: nav_state.current_sort_method,
-    //         current_filter: nav_state.current_filter,
-    //         current_page_number: dir_view.current_page,
-    //         // current_page_number: nav_state.current_page_index,
-    //         // total_pages: dir_view.total_pages(),
-    //         selected_item_index: selected_item,
-    //         active_search_term: active_search,
-    //         terminal_size,
-    //         // return_to_here_flag: false, // Default to false, can be set later
-    //         timestamp,
-    //         nickname: auto_nickname,
-    //         description,
-    //     }
-    // }
-    
-
     /// Creates a new saved navigation state from current context
     /// 
     /// # Purpose
@@ -1650,42 +1462,7 @@ impl NavigationStateManager {
             .cloned() // Return a copy of the state
             .ok_or_else(|| FileFantasticError::NotFound(PathBuf::from(nickname)))
     }
-    
-    // /// Removes a pocket dimension by nickname
-    // /// 
-    // /// # Purpose
-    // /// Deletes a saved pocket dimension from the collection, freeing up
-    // /// the nickname for reuse and cleaning up storage.
-    // /// 
-    // /// # Arguments
-    // /// * `nickname` - The nickname of the pocket dimension to remove
-    // /// 
-    // /// # Returns
-    // /// * `Result<()>` - Success or error if nickname not found
-    // /// 
-    // /// # Error Conditions
-    // /// - Nickname not found in the collection
-    // /// 
-    // /// # Usage Context
-    // /// Used for pocket dimension management:
-    // /// - Cleaning up old or unused states
-    // /// - Freeing up nickname for reuse
-    // /// - Managing memory usage
-    // /// 
-    // /// # Example
-    // /// ```rust
-    // /// match state_manager.remove_pocket_dimension("old_workspace") {
-    // ///     Ok(_) => println!("Pocket dimension removed"),
-    // ///     Err(e) => println!("Failed to remove: {}", e),
-    // /// }
-    // /// ```
-    // pub fn remove_pocket_dimension(&mut self, nickname: &str) -> Result<()> {
-    //     self.pocket_dimensions
-    //         .remove(nickname)
-    //         .map(|_| ()) // Convert Option<SavedNavigationState> to ()
-    //         .ok_or_else(|| FileFantasticError::NotFound(PathBuf::from(nickname)))
-    // }
-    
+
     /// Adds a file path to the file stack after validation
     /// 
     /// # Purpose
@@ -1822,37 +1599,6 @@ impl NavigationStateManager {
     pub fn pop_file_from_stack(&mut self) -> Option<PathBuf> {
         self.file_path_stack.pop()
     }
-    
-    // /// Gets and removes the most recent directory from the directory stack
-    // /// 
-    // /// # Purpose
-    // /// Removes and returns the most recently added directory from the directory stack,
-    // /// implementing LIFO (Last In, First Out) behavior.
-    // /// 
-    // /// # Returns
-    // /// * `Option<PathBuf>` - The most recent directory path, or None if stack is empty
-    // /// 
-    // /// # Stack Behavior
-    // /// - Removes the last element added to the stack
-    // /// - Returns None if the stack is empty
-    // /// - Modifies the stack by removing the returned element
-    // /// 
-    // /// # Usage Context
-    // /// Used when performing operations with collected directories:
-    // /// - Selecting destination directories
-    // /// - Quick navigation to recently accessed locations
-    // /// - Batch operations targeting multiple directories
-    // /// 
-    // /// # Example
-    // /// ```rust
-    // /// match state_manager.pop_directory_from_stack() {
-    // ///     Some(dir_path) => println!("Using directory: {}", dir_path.display()),
-    // ///     None => println!("No directories in stack"),
-    // /// }
-    // /// ```
-    // pub fn pop_directory_from_stack(&mut self) -> Option<PathBuf> {
-    //     self.directory_path_stack.pop()
-    // }
     
     /// Clears all stacks and pocket dimensions
     /// 
@@ -2104,150 +1850,7 @@ impl NavigationStateManager {
         
         Ok(())
     }
-        
-    // /// Interactive interface to add a file to the file stack
-    // /// 
-    // /// # Purpose
-    // /// Provides an interactive interface for adding files to the file stack,
-    // /// supporting both pre-selected files (with Y/n confirmation) and 
-    // /// numbered selection from the current directory listing. This maintains 
-    // /// consistency with the existing user interface while providing flexible
-    // /// workflows for different user scenarios.
-    // /// 
-    // /// # Arguments
-    // /// * `nav_state` - Current navigation state with lookup table for numbered selection
-    // /// * `selected_file` - Optional pre-selected file path to offer as default confirmation
-    // /// * `current_directory_entries` - Current directory entries to display for selection
-    // /// * `current_directory_path` - Current directory path for display context
-    // /// 
-    // /// # Returns
-    // /// * `Result<()>` - Success or error with context
-    // /// 
-    // /// # User Interface Flow
-    // /// 1. Clear any previous input to prevent buffer reuse bugs
-    // /// 2. If pre-selected file exists, offer Y/n confirmation
-    // /// 3. If declined or no pre-selection, show directory contents
-    // /// 4. Display "Add File to Stack" prompt with directory listing
-    // /// 5. User selects file by number (same as normal file browsing)
-    // /// 6. Validate selection is a file (not directory)
-    // /// 7. Add file to stack and show confirmation
-    // /// 
-    // /// # Integration with Existing System
-    // /// - Uses the same display_directory_contents function for consistency
-    // /// - Uses the same nav_state.lookup_item system for numbered selection
-    // /// - Maintains the same numbered selection interface as main browser
-    // /// - Only adds the stack-specific messaging and workflow
-    // /// - Preserves all existing user interface patterns
-    // /// 
-    // /// # Input Buffer Management
-    // /// - Clears stdin buffer to prevent reuse of previous menu selections
-    // /// - Forces fresh user input for file selection
-    // /// - Handles both confirmation and selection input patterns
-    // /// 
-    // /// # Example Interaction
-    // /// ```text
-    // /// === Add File to Stack ===
-    // /// Add 'document.txt' to file stack? (Y/n): n
-    // /// 
-    // /// Current Directory: /home/user/documents
-    // /// 
-    // /// Num  Name                    Size     Modified
-    // /// ------------------------------------------------
-    // ///  1)  folder1/               -        14:30
-    // ///  2)  document.txt           1.2 KB   15:45
-    // ///  3)  image.png              500 KB   16:20
-    // /// 
-    // /// === Add File to Stack ===
-    // /// Type file number & press Enter to add to file-stack.
-    // /// Enter file number (or 'c' to cancel): 2
-    // /// Added 'document.txt' to file stack. Total files: 1
-    // /// ```
-    // /// 
-    // /// # Error Handling
-    // /// - Validates numbered selections against lookup table
-    // /// - Ensures selected items are files, not directories
-    // /// - Provides clear error messages for invalid selections
-    // /// - Handles cancellation gracefully
-    // /// - Manages IO errors during user interaction
-    // /// 
-    // /// # Stack Integration
-    // /// - Validates file existence before adding to stack
-    // /// - Provides confirmation with updated stack count
-    // /// - Maintains LIFO stack behavior for consistent operations
-    // /// - Integrates with broader Get-Send-Mode workflow system
-    // pub fn interactive_add_file_to_stack(
-    //     &mut self,
-    //     nav_state: &NavigationState,
-    //     selected_file: Option<&PathBuf>,
-    //     current_directory_entries: &[FileSystemEntry],
-    //     current_directory_path: &PathBuf,
-    // ) -> Result<()> {
 
-    //     // If there's a pre-selected file, offer it as the default
-    //     if let Some(file_path) = selected_file {
-    //         println!("\n=== Add File to Stack ===");
-    //         print!("Add '{}' to file stack? (Y/n): ", file_path.file_name().unwrap_or_default().to_string_lossy());
-    //         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-            
-    //         let mut response = String::new();
-    //         io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
-            
-    //         // Default to 'yes' if user just presses enter
-    //         if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
-    //             self.add_file_to_stack(file_path.clone())?;
-    //             println!("Added '{}' to file stack. Total files: {}", 
-    //                     file_path.file_name().unwrap_or_default().to_string_lossy(),
-    //                     self.file_path_stack.len());
-    //             return Ok(());
-    //         }
-    //         // If user declined ('n'), continue to numbered selection below
-    //     }
-
-    //     // Display directory contents for file selection
-    //     display_directory_contents(
-    //         current_directory_entries,
-    //         current_directory_path,
-    //         None, // No pagination info needed for this context
-    //         nav_state.current_filter,
-    //     ).map_err(|e| FileFantasticError::Io(e))?;
-
-    //     println!("\n=== Add File to Stack ===");
-    //     println!("Type file number & press Enter to add to file-stack. (or 'c' to cancel)");
-    //     // print!("Enter file number (or 'c' to cancel): ");
-    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-        
-    //     let mut input = String::new();
-    //     io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
-    //     let input = input.trim();
-        
-    //     // Handle cancellation
-    //     if input.eq_ignore_ascii_case("c") {
-    //         println!("Cancelled.");
-    //         return Ok(());
-    //     }
-        
-    //     // Try to parse as number and validate using existing lookup system
-    //     if let Ok(number) = input.parse::<usize>() {
-    //         if let Some(item_info) = nav_state.lookup_item(number) {
-    //             // Ensure it's a file, not a directory
-    //             if item_info.item_type == FileSystemItemType::File {
-    //                 self.add_file_to_stack(item_info.item_path.clone())?;
-    //                 println!("Added '{}' to file stack. Total files: {}", 
-    //                         item_info.item_path.file_name().unwrap_or_default().to_string_lossy(),
-    //                         self.file_path_stack.len());
-    //             } else {
-    //                 println!("Error: Item {} is a directory. Please select a file.", number);
-    //             }
-    //         } else {
-    //             println!("Error: Invalid file number {}. Please try again.", number);
-    //         }
-    //     } else {
-    //         println!("Error: Please enter a valid number or 'c' to cancel.");
-    //     }
-        
-    //     Ok(())
-    // }
-    
     /// Interactive interface to add a file to the file stack
     /// 
     /// # Purpose
@@ -2620,9 +2223,7 @@ impl NavigationStateManager {
         
         Ok(None)
     }
-    
-    
-    
+
     /// Interactive Get-Send-Mode landing page and command processor
     /// 
     /// # Purpose
@@ -2781,7 +2382,6 @@ pub enum GetSendModeAction {
     /// Default action for cancellation or completion of workflows
     ReturnToBrowser,
 }
-
 /*
 End Of Pocket-Dimensions 
 */
@@ -3083,7 +2683,6 @@ fn copy_file_with_archive_handling(
     Ok(final_destination_path)
 }
 
-
 /// Handles paginated viewing of directory contents
 ///
 /// # Purpose
@@ -3161,15 +2760,6 @@ impl<'a> DirectoryView<'a> {
         }
     }
     
-    /// Creates new directory view with pagination
-    // fn new(entries: &'a [FileSystemEntry]) -> Self {
-    //     Self {
-    //         entries,
-    //         current_page: 0,
-    //         items_per_page: 16, // Show 25 items per page
-    //     }
-    // }
-    
     /// Returns only entries for current page
     fn current_page_entries(&self) -> &[FileSystemEntry] {
         let start = self.current_page * self.items_per_page;
@@ -3212,8 +2802,7 @@ impl<'a> DirectoryView<'a> {
             None
         }
     }
-    
-    
+
     /// Sets the current page to a specific index with bounds checking
     /// 
     /// # Purpose
@@ -3631,7 +3220,6 @@ fn sort_directory_entries(
         },
     }
 }
-
 
 /// Opens a new terminal window at the specified directory
 /// 
@@ -4555,104 +4143,6 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     Ok(())
 }
 
-// /// Manages navigation state, lookup tables, and sort/filter settings
-// /// 
-// /// This struct serves as the central state manager for the File Fantastic UI,
-// /// tracking display mappings, sort preferences, filter settings, and search capabilities.
-// /// It maintains the connection between what the user sees on screen and the underlying
-// /// file system entities.
-// /// 
-// /// # State Management
-// /// - Maps displayed item numbers to actual file system items
-// /// - Tracks current sort method and direction
-// /// - Maintains filter settings (showing files/directories/all)
-// /// - Provides fuzzy search capability
-// /// 
-// /// # Lifecycle
-// /// The NavigationState is created once at application start and persists
-// /// throughout the session, being updated as the user navigates, sorts,
-// /// filters, or searches the file system.
-// /// 
-// /// # Key Responsibilities
-// /// 1. **Display Mapping**: Maps display numbers (what user sees) to actual file paths
-// /// 2. **Sort Management**: Tracks and toggles sort methods/directions
-// /// 3. **Filter Application**: Applies file/directory filters to listings
-// /// 4. **Search Functionality**: Performs fuzzy text searches
-// /// 
-// /// # Usage Context
-// /// The NavigationState is passed to various UI functions to maintain
-// /// consistency between user actions and display state.
-// /// 
-// /// # Implementation Notes
-// /// - Uses HashMap for O(1) lookup of items by display number
-// /// - Maintains last sort command to enable toggling behavior
-// /// - Filters are implemented as Option<char> for three states
-// /// - Fuzzy search implements Levenshtein distance algorithm
-// /// Manages navigation state, lookup tables, and sort settings for the file manager
-// /// 
-// /// # Purpose
-// /// `NavigationState` is the central component that tracks:
-// /// - Display lookup tables to map list numbers to file system items
-// /// - Current sort method and direction
-// /// - Search and navigation history
-// /// 
-// /// # Fields
-// /// * `display_lookup_table` - Maps displayed numbers to item information
-// /// * `current_sort_method` - Current active sort method and direction
-// /// * `last_sort_command` - Tracks last sort command for toggling direction
-// /// 
-// /// # Usage
-// /// The `NavigationState` maintains the stateful aspects of the UI,
-// /// allowing the application to map user input (numbers) to file system 
-// /// operations, track sort preferences, and handle search functionality.
-// /// 
-// /// # Lifecycle
-// /// 1. Created at application start with default values
-// /// 2. Updated when directory contents change or sort preferences change
-// /// 3. Consulted when processing user input to resolve actions
-// /// 
-// /// # Example
-// /// ```
-// /// let mut nav_state = NavigationState::new();
-// /// // After reading directory contents:
-// /// nav_state.update_lookup_table(&directory_entries);
-// /// // When processing user input:
-// /// if let Some(item_info) = nav_state.lookup_item(user_input_number) {
-// ///     // Perform action on the item
-// /// }
-// /// // When changing sort method:
-// /// nav_state.toggle_sort('n'); // Toggle name sort
-// /// ```
-// pub struct NavigationState {
-//     /// Lookup table mapping displayed numbers to item information
-//     /// Key: displayed number (1-based index shown to user)
-//     /// Value: information about the item at that display position
-//     display_lookup_table: HashMap<usize, DisplayedItemInfo>,
-    
-//     /// Current sort method and direction for directory contents
-//     current_sort_method: DirectorySortingMethodEnum,
-    
-//     /// Tracks last sort command used to handle toggles between ascending/descending
-//     /// None if no sort command has been used yet
-//     last_sort_command: Option<char>,
-    
-//     /// Current filter setting (None = show all, Some('d') = dirs only, 
-//     /// Some('f') = files only)
-//     current_filter: Option<char>,
-    
-//     /// Currently selected item index (1-based, None if no selection)
-//     selected_item_index: Option<usize>,
-    
-//     /// Active search term if user is searching
-//     active_search_term: Option<String>,
-    
-//     /// Terminal size for display calculations (width, height)
-//     terminal_size: (usize, usize),
-    
-//     /// Current page index (0-based) - what page we're currently viewing
-//     current_page_index: usize,
-// }
-
 /// Manages navigation state, lookup tables, sort/filter settings, and TUI display preferences
 /// 
 /// This struct serves as the central state manager for the File Fantastic UI,
@@ -4745,37 +4235,6 @@ pub struct NavigationState {
 }
 
 impl NavigationState {
-    // /// Creates a new NavigationState with default settings
-    // /// 
-    // /// # Returns
-    // /// * `NavigationState` - A new instance with:
-    // ///   - Empty lookup table
-    // ///   - Name sort in ascending order as default
-    // ///   - No last sort command
-    // /// 
-    // /// # Default Configuration
-    // /// - Sort by name in ascending order
-    // /// - Empty lookup table (populated after directory read)
-    // /// - No last sort command recorded
-    // /// 
-    // /// # Example
-    // /// ```
-    // /// let nav_state = NavigationState::new();
-    // /// // nav_state is ready to be used with initial directory read
-    // /// ```
-    // fn new() -> Self {
-    //     NavigationState {
-    //         display_lookup_table: HashMap::new(),
-    //         current_sort_method: DirectorySortingMethodEnum::Name(true),
-    //         last_sort_command: None,
-    //         current_filter: None, // No filter initially
-    //         selected_item_index: None,
-    //         active_search_term: None,
-    //         terminal_size: (80, 24), // Default terminal size
-    //         current_page_index: 0, // Always start at page 0
-    //     }
-    // }
-    
     /// Creates a new NavigationState with default settings
     /// 
     /// # Returns
@@ -4931,16 +4390,6 @@ impl NavigationState {
             .map(|info| info.item_path.clone())
     }
 
-    // /// Sets the active search term
-    // fn set_search_term(&mut self, term: Option<String>) {
-    //     self.active_search_term = term;
-    // }
-
-    // /// Updates terminal size
-    // fn update_terminal_size(&mut self, width: usize, height: usize) {
-    //     self.terminal_size = (width, height);
-    // }
-    
     /// Apply current filter to entries
     /// 
     /// # Purpose
@@ -5186,7 +4635,6 @@ pub enum DirectorySortingMethodEnum {
     Modified(bool),
 }
 
-
 /// Reads contents of a directory and returns a Result containing a vector of FileSystemEntry items
 /// 
 /// # Arguments
@@ -5335,69 +4783,6 @@ mod tests {
     }
 }
 
-// /// Truncates a file name for display in CLI, keeping both the beginning and the file extension.
-// /// 
-// /// # Purpose
-// /// Ensures long filenames are displayed in a readable format that fits within
-// /// the terminal width constraints while preserving the most meaningful parts:
-// /// the beginning of the name and the file extension.
-// /// 
-// /// # Arguments
-// /// * `formatted_name` - The original filename to be truncated
-// /// 
-// /// # Returns
-// /// * `String` - Truncated name if necessary, or the original if it's short enough
-// /// 
-// /// # Truncation Method
-// /// If the name exceeds `MAX_NAME_LENGTH_DEFAULT` (55 characters):
-// /// 1. Takes the first (MAX_NAME_LENGTH_DEFAULT - SUFFIX_LENGTH - ellipsis.len()) characters
-// /// 2. Adds an ellipsis ("...")
-// /// 3. Keeps the last SUFFIX_LENGTH (5) characters (typically file extension)
-// /// 
-// /// # Examples
-// /// ```rust
-// /// let long_name = "really_long_filename_that_exceeds_the_maximum_length_for_display.txt";
-// /// assert_eq!(
-// ///     truncate_filename_for_display(long_name.to_string()),
-// ///     "really_long_filename_that_exceeds_the_maximum_leng...e.txt"
-// /// );
-// /// 
-// /// let short_name = "short.txt";
-// /// assert_eq!(
-// ///     truncate_filename_for_display(short_name.to_string()),
-// ///     "short.txt"
-// /// );
-// /// ```
-// /// 
-// /// # Constants Used
-// /// - MAX_NAME_LENGTH_DEFAULT = 55
-// /// - FILENAME_SUFFIX_LENGTH = 5
-// fn truncate_filename_for_display(formatted_name: String) -> String {
-//     // MAX_NAME_LENGTH_DEFAULT
-//     // FILENAME_SUFFIX_LENGTH
-//     let ellipsis = "...";
-    
-//     if formatted_name.chars().count() <= MAX_NAME_LENGTH_DEFAULT {
-//         return formatted_name;
-//     }
-    
-//     // Calculate how many characters we can take from the start
-//     // (max_length - suffix_length - ellipsis.len())
-//     let prefix_length = MAX_NAME_LENGTH_DEFAULT - FILENAME_SUFFIX_LENGTH - ellipsis.len();
-    
-//     // Get prefix (start of the filename)
-//     let prefix: String = formatted_name.chars().take(prefix_length).collect();
-    
-//     // Get suffix (end of the filename, including extension)
-//     let suffix: String = formatted_name
-//         .chars()
-//         .skip(formatted_name.chars().count() - FILENAME_SUFFIX_LENGTH)
-//         .collect();
-    
-//     // Combine prefix, ellipsis, and suffix
-//     format!("{}{}{}", prefix, ellipsis, suffix)
-// }
-
 /// Truncates a file name for display in CLI based on current TUI width settings
 /// 
 /// # Purpose
@@ -5464,143 +4849,6 @@ fn truncate_filename_for_display(formatted_name: String, max_name_width: usize) 
     // Combine prefix, ellipsis, and suffix
     format!("{}{}{}", prefix, ellipsis, suffix)
 }
-
-// /// Formats and displays directory contents as a numbered list with columns
-// /// 
-// /// For adjustments:
-// /// then name and data displays are different
-// /// the size date field uses a max of 6 char
-// /// the modified (date) uses a max of 11 char
-// /// the max text with elipsis is 55
-// /// so 52 is the trim point if over 55
-// /// numbering... if under 100 is 3 spaces
-// ///
-// /// # Arguments
-// /// * `directory_entries` - Vector of FileSystemEntry items to display
-// /// * `current_directory_path` - PathBuf of the directory being displayed
-// /// 
-// /// # Returns
-// /// * `io::Result<()>` - Success: () unit type
-// ///                      Error: IO error with description
-// /// 
-// /// # Display Format
-// /// ```text
-// /// Current Directory: /path/to/current/dir
-// /// 
-// /// Num  Name                    Size (B)    Modified
-// /// ------------------------------------------------
-// ///  1)  Documents/             0           1696789200
-// ///  2)  example.txt           1024        1696789100
-// /// ```
-// /// 
-// /// # Error Handling
-// /// - Handles display formatting errors
-// /// - Handles IO write errors
-// /// 
-// /// # Notes
-// /// - Directory entries are marked with a trailing '/'
-// /// - Sizes are displayed in bytes for MVP (future: human readable sizes)
-// /// - Modified times are in Unix timestamp for MVP (future: human readable dates)
-// /// Formats and displays directory contents as a numbered list with columns
-// /// Formats and displays directory contents as a numbered list with columns
-// /// Update display_directory_contents to use formatted timestamp
-// // fn display_directory_contents(
-// //     directory_entries: &[FileSystemEntry],
-// //     current_directory_path: &PathBuf,
-// // ) -> io::Result<()> {
-// /// Formats and displays directory contents as a numbered list with columns
-// fn display_directory_contents(
-//     directory_entries: &[FileSystemEntry],
-//     current_directory_path: &PathBuf,
-//     page_info: Option<(usize, usize)>,
-//     filter: Option<char>,
-// ) -> io::Result<()> {
-//     // clear screen
-//     print!("\x1B[2J\x1B[1;1H");
-
-//     let filter_status = match filter {
-//         Some('d') => "[Directories only] ",
-//         Some('f') => "[Files only] ",
-//         _ => "",
-//     };
-                    
-//     let legend = format!(
-//         "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}", 
-//         YELLOW,           // Overall legend color
-//         RED, YELLOW,      // RED q + YELLOW uit
-//         RED, YELLOW,      // RED b + YELLOW ack
-//         RED, YELLOW,      // RED t + YELLOW erm
-//         RED, YELLOW,      // RED d + YELLOW ir
-//         RED, YELLOW,      // RED f + YELLOW ile
-//         RED, YELLOW,      // RED n + YELLOW ame
-//         RED, YELLOW,      // RED s + YELLOW ize
-//         RED, YELLOW,      // RED m + YELLOW od
-//         RED, YELLOW,      // RED g + YELLOW et
-//         RED, YELLOW,      // RED v + YELLOW ,
-//         RED, YELLOW,      // RED y + YELLOW ,
-//         RED, YELLOW,      // RED p + YELLOW ,
-//         RED, YELLOW,      // RED str + YELLOW ...
-//         RED, YELLOW,      // RED enter + YELLOW ...
-//         RESET);
-    
-//     // directory/file mode on path-display line
-//     let path_display = format!("{}", current_directory_path.display());
-//     println!("{}\n{}{}", legend, filter_status, path_display);
-
-//     // Rest of the function remains the same...
-//     // Column headers
-//     println!(
-//         "{:>4}  {:<53} {:>7} {:>11}",
-//         " # ", "Name", "Size", "Modified"
-//     );
-//     println!(" {} ", "-".repeat(78));
-
-//     // Display entries
-//     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
-//         let formatted_name = if directory_entry.is_directory {
-//             format!("{}/", directory_entry.file_system_item_name)
-//         } else {
-//             directory_entry.file_system_item_name.clone()
-//         };
-
-//         let display_name = truncate_filename_for_display(formatted_name);
-
-//         let size_display = if directory_entry.is_directory {
-//             String::from("-")
-//         } else {
-//             format_file_size(directory_entry.file_system_item_size_in_bytes)
-//         };
-
-//         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
-
-//         println!(
-//             "{:>3}. {:<55} {:>6} {:>11}",
-//             entry_index + 1,
-//             display_name,
-//             size_display,
-//             time_display
-//         );
-//     }
-
-//     // // Add pagination footer if applicable
-//     // if let Some((current_page, total_pages)) = page_info {
-//     //     if total_pages > 1 {
-//     //         println!("--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---", 
-//     //                 current_page, total_pages);
-//     //     }
-//     // }
-
-//     // Add pagination footer if applicable
-//     if let Some((current_page, total_pages)) = page_info {
-//         if total_pages > 1 {
-//             println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---{}", 
-//                     YELLOW, current_page, total_pages, RESET);
-//         }
-//     }
-    
-//     io::stdout().flush()?;
-//     Ok(())
-// }
 
 /// Formats and displays directory contents as a numbered list with columns
 /// 
@@ -5722,8 +4970,8 @@ fn display_directory_contents(
                     YELLOW, current_page, total_pages, tall_display, wide_display, RESET);
         } else {
             // Show size info even when only one page
-            // println!("\x1b[1m{}--- Size: {} {} ---{}", 
-                    // YELLOW, tall_display, wide_display, RESET);
+            println!("\x1b[1m{}--- (Re)Size: {} {} ---{}", 
+                    YELLOW, tall_display, wide_display, RESET);
         }
     }
     
@@ -6866,7 +6114,8 @@ pub fn file_fantastic() -> Result<()> {
                 }
             }
 
-            print!("\n>> ");
+            // print!("\n>> "); // for extra space, maybe easier to see
+            print!(">> "); // saves space
             match io::stdout().flush() {
                 Ok(_) => {},
                 Err(e) => {
@@ -7112,31 +6361,6 @@ pub fn file_fantastic() -> Result<()> {
                                             Err(e) => println!("Error saving pocket dimension: {}", e),
                                         }
                                     },
-                                    // GetSendModeAction::GoToPocketDimension => {
-                                    //     match state_manager.interactive_select_pocket_dimension() {
-                                    //         Ok(Some(nickname)) => {
-                                    //             match state_manager.restore_pocket_dimension(&nickname) {
-                                    //                 Ok(saved_state) => {
-                                    //                     // Restore the complete navigation state
-                                    //                     current_directory_path = saved_state.current_directory_path;
-                                    //                     nav_state.current_sort_method = saved_state.current_sort_method;
-                                    //                     nav_state.current_filter = saved_state.current_filter;
-                                    //                     nav_state.selected_item_index = saved_state.selected_item_index;
-                                    //                     nav_state.active_search_term = saved_state.active_search_term;
-                                    //                     nav_state.terminal_size = saved_state.terminal_size;
-                                    //                     nav_state.current_page_index = saved_state.current_page_number; // Restore page
-                                                        
-                                    //                     println!("Jumped to pocket dimension: {} (page {})", 
-                                    //                             nickname, saved_state.current_page_number + 1);
-                                    //                     break; // Exit Get-Send-Mode and refresh directory
-                                    //                 },
-                                    //                 Err(e) => println!("Error restoring pocket dimension: {}", e),
-                                    //             }
-                                    //         },
-                                    //         Ok(None) => println!("No pocket dimension selected."),
-                                    //         Err(e) => println!("Error selecting pocket dimension: {}", e),
-                                    //     }
-                                    // },
                                     GetSendModeAction::GoToPocketDimension => {
                                         match state_manager.interactive_select_pocket_dimension() {
                                             Ok(Some(nickname)) => {
