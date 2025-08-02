@@ -147,6 +147,7 @@ w for up, s for down, a for all
 17. Save and Change Navigation-State ("Pocket Dimensions")
 18. Archive Selection: basic archive feature for versioning and backup
 19. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu') 
+20. User can resize TUI
 
 ## Scrolling
 Instructions appear in info-bar:
@@ -184,9 +185,5 @@ if the size is no more than 99 of that unit
 
 ## TUI Size:
 - default terminal size 80/24
-- or first MVP, terminal size is default terminal size
-- for MVP...mouse to scroll up and down works fine for mvp
-
-
-
+- 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
 
