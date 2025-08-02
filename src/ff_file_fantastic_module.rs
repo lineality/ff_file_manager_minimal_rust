@@ -319,8 +319,23 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
-const MAX_NAME_LENGTH: usize = 55;
+
+/// Default baseline values for TUI display calculations
+/// 
+/// These constants define the starting points for display dimensions before
+/// user adjustments are applied. Using u8 for memory efficiency since these
+/// values are all well within u8 range (0-255).
+const MAX_NAME_LENGTH_DEFAULT: usize = 55;
+// 16 allows an extra line for cases where there cwd/PWD path
+// is long enough to wrap around, a safer default
+const ITEMS_PER_PAGE_DEFAULT: u8 = 16;
 const FILENAME_SUFFIX_LENGTH: usize = 5;
+
+
+/*
+const MAX_NAME_LENGTH_DEFAULT: usize = 55;
+const ITEMS_PER_PAGE_DEFAULT: usize = 16;
+*/
 
 const RESET: &str = "\x1b[0m";
 const RED: &str = "\x1b[31m";
@@ -443,6 +458,193 @@ impl From<io::Error> for FileFantasticError {
             _ => Self::Io(err),
         }
     }
+}
+
+/// Calculates the actual name column width based on user adjustments
+/// 
+/// # Purpose
+/// Determines how many characters wide the name column should be by applying
+/// the user's adjustment to the default baseline. This width controls how much
+/// of each filename is visible before truncation.
+/// 
+/// # Arguments
+/// * `adjustment_magnitude` - The positive number of characters to add or remove
+/// * `adjustment_direction_true_is_positive_false_is_negative` - Direction of adjustment:
+///   - `true` = Add characters (wider column)
+///   - `false` = Remove characters (narrower column)
+/// 
+/// # Returns
+/// * `u16` - The calculated column width in characters
+/// 
+/// # Calculation Logic
+/// 1. Start with MAX_NAME_LENGTH_DEFAULT (55 characters)
+/// 2. Apply adjustment in the specified direction
+/// 3. Use saturating arithmetic to prevent overflow
+/// 4. Enforce minimum width of 8 characters (FILENAME_SUFFIX_LENGTH + 3 for "...")
+/// 
+/// # Minimum Width Rationale
+/// The minimum of 8 characters ensures we can always display:
+/// - 3 characters for ellipsis "..."
+/// - 5 characters for file suffix (e.g., ".docx")
+/// This prevents display corruption with very narrow columns.
+/// 
+/// # Examples
+/// ```rust
+/// // Default width (no adjustment)
+/// assert_eq!(calculate_name_width(0, true), 55);
+/// 
+/// // Increase width by 10
+/// assert_eq!(calculate_name_width(10, true), 65);
+/// 
+/// // Decrease width by 50 (hits minimum)
+/// assert_eq!(calculate_name_width(50, false), 8);
+/// 
+/// // Maximum possible width
+/// assert_eq!(calculate_name_width(u16::MAX, true), u16::MAX);
+/// ```
+fn calculate_name_width(
+    adjustment_magnitude: u16, 
+    adjustment_direction_true_is_positive_false_is_negative: bool
+) -> u16 {
+    // Convert default to u16 for calculation
+    let base_width: u16 = MAX_NAME_LENGTH_DEFAULT as u16;
+    
+    // Calculate minimum allowed width (suffix + ellipsis)
+    let minimum_width: u16 = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+    
+    // Apply adjustment based on direction
+    if adjustment_direction_true_is_positive_false_is_negative {
+        // Positive adjustment: add to base width
+        // saturating_add prevents overflow, returns u16::MAX if result would overflow
+        base_width.saturating_add(adjustment_magnitude)
+    } else {
+        // Negative adjustment: subtract from base width
+        // saturating_sub prevents underflow, returns 0 if result would be negative
+        // max ensures we never go below minimum_width
+        base_width.saturating_sub(adjustment_magnitude).max(minimum_width)
+    }
+}
+
+/// Calculates the actual number of items to display per page based on user adjustments
+/// 
+/// # Purpose
+/// Determines how many directory entries should be shown on each page by applying
+/// the user's height adjustment to the default baseline. This controls vertical
+/// pagination behavior.
+/// 
+/// # Arguments
+/// * `adjustment_magnitude` - The positive number of rows to add or remove
+/// * `adjustment_direction_true_is_positive_false_is_negative` - Direction of adjustment:
+///   - `true` = Add rows (show more items)
+///   - `false` = Remove rows (show fewer items)
+/// 
+/// # Returns
+/// * `u16` - The calculated number of items per page
+/// 
+/// # Calculation Logic
+/// 1. Start with ITEMS_PER_PAGE_DEFAULT (16 items)
+/// 2. Apply adjustment in the specified direction
+/// 3. Use saturating arithmetic to prevent overflow/underflow
+/// 4. Allow result to go to 0 (displays header only, no items)
+/// 
+/// # Zero Items Behavior
+/// When items per page is 0, the display shows:
+/// - Current directory path
+/// - Column headers
+/// - No file/directory entries
+/// - Navigation commands still work
+/// 
+/// # Examples
+/// ```rust
+/// // Default height (no adjustment)
+/// assert_eq!(calculate_items_per_page(0, true), 16);
+/// 
+/// // Increase by 10 rows
+/// assert_eq!(calculate_items_per_page(10, true), 26);
+/// 
+/// // Decrease by 20 rows (goes to 0)
+/// assert_eq!(calculate_items_per_page(20, false), 0);
+/// 
+/// // Maximum possible items
+/// assert_eq!(calculate_items_per_page(u16::MAX, true), u16::MAX);
+/// ```
+fn calculate_items_per_page(
+    adjustment_magnitude: u16,
+    adjustment_direction_true_is_positive_false_is_negative: bool
+) -> u16 {
+    // Convert default to u16 for calculation
+    let base_items: u16 = ITEMS_PER_PAGE_DEFAULT as u16;
+    
+    // Apply adjustment based on direction
+    if adjustment_direction_true_is_positive_false_is_negative {
+        // Positive adjustment: add to base count
+        // saturating_add prevents overflow, returns u16::MAX if result would overflow
+        base_items.saturating_add(adjustment_magnitude)
+    } else {
+        // Negative adjustment: subtract from base count
+        // saturating_sub prevents underflow, returns 0 if result would be negative
+        // No minimum enforced - 0 items per page is valid (header only display)
+        base_items.saturating_sub(adjustment_magnitude)
+    }
+}
+
+/// Calculates name width from NavigationState for convenience
+/// 
+/// # Purpose
+/// Convenience function that extracts TUI width settings from NavigationState
+/// and calculates the actual name column width. Reduces code duplication
+/// throughout the display functions.
+/// 
+/// # Arguments
+/// * `nav_state` - Reference to current navigation state containing TUI settings
+/// 
+/// # Returns
+/// * `u16` - The calculated name column width in characters
+/// 
+/// # Usage
+/// This function is typically called by display functions that need to know
+/// the current name column width for formatting purposes.
+/// 
+/// # Example
+/// ```rust
+/// let width = calculate_name_width_from_state(&nav_state);
+/// println!("{:>3}. {:<width$} {:>6} {:>11}", 
+///          index, name, size, modified, width = width);
+/// ```
+fn calculate_name_width_from_state(nav_state: &NavigationState) -> u16 {
+    calculate_name_width(
+        nav_state.tui_wide_adjustment,
+        nav_state.tui_wide_direction_sign
+    )
+}
+
+/// Calculates items per page from NavigationState for convenience
+/// 
+/// # Purpose
+/// Convenience function that extracts TUI height settings from NavigationState
+/// and calculates the actual items per page. Reduces code duplication
+/// throughout the pagination logic.
+/// 
+/// # Arguments
+/// * `nav_state` - Reference to current navigation state containing TUI settings
+/// 
+/// # Returns
+/// * `u16` - The calculated number of items to display per page
+/// 
+/// # Usage
+/// This function is typically called when creating or updating DirectoryView
+/// instances to ensure pagination respects user preferences.
+/// 
+/// # Example
+/// ```rust
+/// let items_per_page = calculate_items_per_page_from_state(&nav_state);
+/// let mut dir_view = DirectoryView::new(&entries, items_per_page);
+/// ```
+fn calculate_items_per_page_from_state(nav_state: &NavigationState) -> u16 {
+    calculate_items_per_page(
+        nav_state.tui_tall_adjustment,
+        nav_state.tui_tall_direction_sign
+    )
 }
 
 /// Creates a zip archive of a directory with timestamped filename and optional custom name
@@ -831,13 +1033,25 @@ pub struct SavedNavigationState {
     /// Preserves active search state for complete restoration
     pub active_search_term: Option<String>,
     
-    /// Terminal dimensions at save time (width, height)
-    /// Used to detect if display needs adjustment on restoration
-    pub terminal_size: (usize, usize),
+    /// Manual TUI height adjustment magnitude (rows to add/remove)
+    /// Stored as positive value, direction determined by tui_tall_direction_sign
+    /// Example: adjustment=3 with sign=false means "tall-3" (3 fewer rows)
+    pub tui_tall_adjustment: u16,
     
-    // /// Flag indicating this state should be returned to automatically
-    // /// Used for workflows that involve temporary navigation
-    // pub return_to_here_flag: bool,
+    /// Direction of height adjustment
+    /// true = positive adjustment (more rows), false = negative adjustment (fewer rows)
+    /// Combined with tui_tall_adjustment to represent adjustments like "tall+5" or "tall-3"
+    pub tui_tall_direction_sign: bool,
+    
+    /// Manual TUI width adjustment magnitude (characters to add/remove from name column)
+    /// Stored as positive value, direction determined by tui_wide_direction_sign
+    /// Example: adjustment=10 with sign=true means "wide+10" (10 more characters)
+    pub tui_wide_adjustment: u16,
+    
+    /// Direction of width adjustment  
+    /// true = positive adjustment (wider names), false = negative adjustment (narrower names)
+    /// Combined with tui_wide_adjustment to represent adjustments like "wide+20" or "wide-5"
+    pub tui_wide_direction_sign: bool,
     
     /// When this state was saved (for chronological sorting and cleanup)
     /// Enables automatic cleanup of old states and temporal organization
@@ -853,15 +1067,106 @@ pub struct SavedNavigationState {
 }
 
 impl SavedNavigationState {
+    // /// Creates a new saved navigation state from current context
+    // /// 
+    // /// # Purpose
+    // /// Factory method that captures the complete current state of the file manager
+    // /// and packages it into a SavedNavigationState that can be stored and restored.
+    // /// 
+    // /// # Arguments
+    // /// * `current_directory_path` - Current directory being viewed
+    // /// * `nav_state` - Current NavigationState with sort/filter settings
+    // /// * `dir_view` - Current DirectoryView with pagination info
+    // /// * `selected_item` - Currently selected item index (if any)
+    // /// * `active_search` - Active search term (if any)
+    // /// * `nickname` - Optional user-provided nickname for this state
+    // /// 
+    // /// # Returns
+    // /// * `SavedNavigationState` - Complete state snapshot ready for storage
+    // /// 
+    // /// # State Capture Process
+    // /// 1. Records current directory path (always absolute)
+    // /// 2. Captures all navigation preferences (sort, filter)
+    // /// 3. Saves pagination state and selected item
+    // /// 4. Records search state if active
+    // /// 5. Captures terminal dimensions for display consistency
+    // /// 6. Generates nickname and description for user interface
+    // /// 7. Timestamps the state for management
+    // /// 
+    // /// # Nickname Generation
+    // /// If no nickname is provided, automatically generates one based on:
+    // /// - Directory name
+    // /// - Timestamp suffix for uniqueness
+    // /// - Truncation to reasonable length
+    // /// 
+    // /// # Example
+    // /// ```rust
+    // /// // Save current state as a pocket dimension
+    // /// let saved_state = SavedNavigationState::new(
+    // ///     current_directory_path.clone(),
+    // ///     &nav_state,
+    // ///     &dir_view,
+    // ///     Some(5), // Item 5 was selected
+    // ///     Some("rust".to_string()), // Search for "rust" was active
+    // ///     Some("my_workspace".to_string()), // User-provided nickname
+    // /// );
+    // /// ```
+    // pub fn new(
+    //     current_directory_path: PathBuf,
+    //     nav_state: &NavigationState,
+    //     dir_view: &DirectoryView,
+    //     selected_item: Option<usize>,
+    //     active_search: Option<String>,
+    //     nickname: Option<String>,
+    // ) -> Self {
+    //     let timestamp = SystemTime::now();
+        
+    //     // Generate automatic nickname if none provided
+    //     let auto_nickname = if let Some(name) = nickname {
+    //         name
+    //     } else {
+    //         Self::generate_auto_nickname(&current_directory_path, timestamp)
+    //     };
+        
+    //     // Generate description for display in pocket dimension lists
+    //     let description = Self::generate_description(
+    //         &current_directory_path,
+    //         nav_state.current_filter,
+    //         &nav_state.current_sort_method,
+    //     );
+        
+    //     // Get terminal size (simplified - in real implementation, get from terminal)
+    //     // TODO: Implement actual terminal size detection
+    //     let terminal_size = (80, 24); // Default terminal size for now
+        
+    //     SavedNavigationState {
+    //         current_directory_path,
+    //         current_sort_method: nav_state.current_sort_method,
+    //         current_filter: nav_state.current_filter,
+    //         current_page_number: dir_view.current_page,
+    //         // current_page_number: nav_state.current_page_index,
+    //         // total_pages: dir_view.total_pages(),
+    //         selected_item_index: selected_item,
+    //         active_search_term: active_search,
+    //         terminal_size,
+    //         // return_to_here_flag: false, // Default to false, can be set later
+    //         timestamp,
+    //         nickname: auto_nickname,
+    //         description,
+    //     }
+    // }
+    
+
     /// Creates a new saved navigation state from current context
     /// 
     /// # Purpose
     /// Factory method that captures the complete current state of the file manager
     /// and packages it into a SavedNavigationState that can be stored and restored.
+    /// This includes all navigation preferences and TUI display size customizations.
     /// 
     /// # Arguments
     /// * `current_directory_path` - Current directory being viewed
-    /// * `nav_state` - Current NavigationState with sort/filter settings
+    /// * `nav_state` - Current NavigationState with sort/filter settings and TUI adjustments
     /// * `dir_view` - Current DirectoryView with pagination info
     /// * `selected_item` - Currently selected item index (if any)
     /// * `active_search` - Active search term (if any)
@@ -875,9 +1180,15 @@ impl SavedNavigationState {
     /// 2. Captures all navigation preferences (sort, filter)
     /// 3. Saves pagination state and selected item
     /// 4. Records search state if active
-    /// 5. Captures terminal dimensions for display consistency
+    /// 5. Captures TUI size adjustment settings
     /// 6. Generates nickname and description for user interface
     /// 7. Timestamps the state for management
+    /// 
+    /// # TUI Settings Preservation
+    /// The saved state includes the user's TUI size preferences, allowing
+    /// different pocket dimensions to have different optimal display configurations.
+    /// For example, a "code review" dimension might use wide+20 for long filenames,
+    /// while a "log browsing" dimension might use tall+10 for more visible entries.
     /// 
     /// # Nickname Generation
     /// If no nickname is provided, automatically generates one based on:
@@ -887,10 +1198,10 @@ impl SavedNavigationState {
     /// 
     /// # Example
     /// ```rust
-    /// // Save current state as a pocket dimension
+    /// // Save current state as a pocket dimension with custom display size
     /// let saved_state = SavedNavigationState::new(
     ///     current_directory_path.clone(),
-    ///     &nav_state,
+    ///     &nav_state, // Contains TUI adjustments like wide+10 tall+5
     ///     &dir_view,
     ///     Some(5), // Item 5 was selected
     ///     Some("rust".to_string()), // Search for "rust" was active
@@ -921,21 +1232,18 @@ impl SavedNavigationState {
             &nav_state.current_sort_method,
         );
         
-        // Get terminal size (simplified - in real implementation, get from terminal)
-        // TODO: Implement actual terminal size detection
-        let terminal_size = (80, 24); // Default terminal size for now
-        
         SavedNavigationState {
             current_directory_path,
             current_sort_method: nav_state.current_sort_method,
             current_filter: nav_state.current_filter,
             current_page_number: dir_view.current_page,
-            // current_page_number: nav_state.current_page_index,
-            // total_pages: dir_view.total_pages(),
             selected_item_index: selected_item,
             active_search_term: active_search,
-            terminal_size,
-            // return_to_here_flag: false, // Default to false, can be set later
+            // Capture the current TUI size adjustment settings
+            tui_tall_adjustment: nav_state.tui_tall_adjustment,
+            tui_tall_direction_sign: nav_state.tui_tall_direction_sign,
+            tui_wide_adjustment: nav_state.tui_wide_adjustment,
+            tui_wide_direction_sign: nav_state.tui_wide_direction_sign,
             timestamp,
             nickname: auto_nickname,
             description,
@@ -1687,6 +1995,7 @@ impl NavigationStateManager {
             current_directory_path,
             None, // No pagination info needed for this context
             nav_state.current_filter,
+            nav_state, // Pass nav_state for TUI size calculations
         ).map_err(|e| FileFantasticError::Io(e))?;
 
         println!("\n=== Archive Selection ===");
@@ -1796,6 +2105,149 @@ impl NavigationStateManager {
         Ok(())
     }
         
+    // /// Interactive interface to add a file to the file stack
+    // /// 
+    // /// # Purpose
+    // /// Provides an interactive interface for adding files to the file stack,
+    // /// supporting both pre-selected files (with Y/n confirmation) and 
+    // /// numbered selection from the current directory listing. This maintains 
+    // /// consistency with the existing user interface while providing flexible
+    // /// workflows for different user scenarios.
+    // /// 
+    // /// # Arguments
+    // /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    // /// * `selected_file` - Optional pre-selected file path to offer as default confirmation
+    // /// * `current_directory_entries` - Current directory entries to display for selection
+    // /// * `current_directory_path` - Current directory path for display context
+    // /// 
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // /// 
+    // /// # User Interface Flow
+    // /// 1. Clear any previous input to prevent buffer reuse bugs
+    // /// 2. If pre-selected file exists, offer Y/n confirmation
+    // /// 3. If declined or no pre-selection, show directory contents
+    // /// 4. Display "Add File to Stack" prompt with directory listing
+    // /// 5. User selects file by number (same as normal file browsing)
+    // /// 6. Validate selection is a file (not directory)
+    // /// 7. Add file to stack and show confirmation
+    // /// 
+    // /// # Integration with Existing System
+    // /// - Uses the same display_directory_contents function for consistency
+    // /// - Uses the same nav_state.lookup_item system for numbered selection
+    // /// - Maintains the same numbered selection interface as main browser
+    // /// - Only adds the stack-specific messaging and workflow
+    // /// - Preserves all existing user interface patterns
+    // /// 
+    // /// # Input Buffer Management
+    // /// - Clears stdin buffer to prevent reuse of previous menu selections
+    // /// - Forces fresh user input for file selection
+    // /// - Handles both confirmation and selection input patterns
+    // /// 
+    // /// # Example Interaction
+    // /// ```text
+    // /// === Add File to Stack ===
+    // /// Add 'document.txt' to file stack? (Y/n): n
+    // /// 
+    // /// Current Directory: /home/user/documents
+    // /// 
+    // /// Num  Name                    Size     Modified
+    // /// ------------------------------------------------
+    // ///  1)  folder1/               -        14:30
+    // ///  2)  document.txt           1.2 KB   15:45
+    // ///  3)  image.png              500 KB   16:20
+    // /// 
+    // /// === Add File to Stack ===
+    // /// Type file number & press Enter to add to file-stack.
+    // /// Enter file number (or 'c' to cancel): 2
+    // /// Added 'document.txt' to file stack. Total files: 1
+    // /// ```
+    // /// 
+    // /// # Error Handling
+    // /// - Validates numbered selections against lookup table
+    // /// - Ensures selected items are files, not directories
+    // /// - Provides clear error messages for invalid selections
+    // /// - Handles cancellation gracefully
+    // /// - Manages IO errors during user interaction
+    // /// 
+    // /// # Stack Integration
+    // /// - Validates file existence before adding to stack
+    // /// - Provides confirmation with updated stack count
+    // /// - Maintains LIFO stack behavior for consistent operations
+    // /// - Integrates with broader Get-Send-Mode workflow system
+    // pub fn interactive_add_file_to_stack(
+    //     &mut self,
+    //     nav_state: &NavigationState,
+    //     selected_file: Option<&PathBuf>,
+    //     current_directory_entries: &[FileSystemEntry],
+    //     current_directory_path: &PathBuf,
+    // ) -> Result<()> {
+
+    //     // If there's a pre-selected file, offer it as the default
+    //     if let Some(file_path) = selected_file {
+    //         println!("\n=== Add File to Stack ===");
+    //         print!("Add '{}' to file stack? (Y/n): ", file_path.file_name().unwrap_or_default().to_string_lossy());
+    //         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+            
+    //         let mut response = String::new();
+    //         io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+            
+    //         // Default to 'yes' if user just presses enter
+    //         if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //             self.add_file_to_stack(file_path.clone())?;
+    //             println!("Added '{}' to file stack. Total files: {}", 
+    //                     file_path.file_name().unwrap_or_default().to_string_lossy(),
+    //                     self.file_path_stack.len());
+    //             return Ok(());
+    //         }
+    //         // If user declined ('n'), continue to numbered selection below
+    //     }
+
+    //     // Display directory contents for file selection
+    //     display_directory_contents(
+    //         current_directory_entries,
+    //         current_directory_path,
+    //         None, // No pagination info needed for this context
+    //         nav_state.current_filter,
+    //     ).map_err(|e| FileFantasticError::Io(e))?;
+
+    //     println!("\n=== Add File to Stack ===");
+    //     println!("Type file number & press Enter to add to file-stack. (or 'c' to cancel)");
+    //     // print!("Enter file number (or 'c' to cancel): ");
+    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        
+    //     let mut input = String::new();
+    //     io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+    //     let input = input.trim();
+        
+    //     // Handle cancellation
+    //     if input.eq_ignore_ascii_case("c") {
+    //         println!("Cancelled.");
+    //         return Ok(());
+    //     }
+        
+    //     // Try to parse as number and validate using existing lookup system
+    //     if let Ok(number) = input.parse::<usize>() {
+    //         if let Some(item_info) = nav_state.lookup_item(number) {
+    //             // Ensure it's a file, not a directory
+    //             if item_info.item_type == FileSystemItemType::File {
+    //                 self.add_file_to_stack(item_info.item_path.clone())?;
+    //                 println!("Added '{}' to file stack. Total files: {}", 
+    //                         item_info.item_path.file_name().unwrap_or_default().to_string_lossy(),
+    //                         self.file_path_stack.len());
+    //             } else {
+    //                 println!("Error: Item {} is a directory. Please select a file.", number);
+    //             }
+    //         } else {
+    //             println!("Error: Invalid file number {}. Please try again.", number);
+    //         }
+    //     } else {
+    //         println!("Error: Please enter a valid number or 'c' to cancel.");
+    //     }
+        
+    //     Ok(())
+    // }
+    
     /// Interactive interface to add a file to the file stack
     /// 
     /// # Purpose
@@ -1806,13 +2258,19 @@ impl NavigationStateManager {
     /// workflows for different user scenarios.
     /// 
     /// # Arguments
-    /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    /// * `nav_state` - Current navigation state with lookup table for numbered selection and TUI settings
     /// * `selected_file` - Optional pre-selected file path to offer as default confirmation
     /// * `current_directory_entries` - Current directory entries to display for selection
     /// * `current_directory_path` - Current directory path for display context
     /// 
     /// # Returns
     /// * `Result<()>` - Success or error with context
+    /// 
+    /// # TUI Size Respect
+    /// The file selection display respects the user's TUI size adjustments:
+    /// - Name column width follows wide+N/wide-N settings
+    /// - Number of items shown follows tall+N/tall-N settings
+    /// - Ensures consistent display experience across all interfaces
     /// 
     /// # User Interface Flow
     /// 1. Clear any previous input to prevent buffer reuse bugs
@@ -1827,6 +2285,7 @@ impl NavigationStateManager {
     /// - Uses the same display_directory_contents function for consistency
     /// - Uses the same nav_state.lookup_item system for numbered selection
     /// - Maintains the same numbered selection interface as main browser
+    /// - Respects user's TUI size preferences throughout
     /// - Only adds the stack-specific messaging and workflow
     /// - Preserves all existing user interface patterns
     /// 
@@ -1894,12 +2353,13 @@ impl NavigationStateManager {
             // If user declined ('n'), continue to numbered selection below
         }
 
-        // Display directory contents for file selection
+        // Display directory contents for file selection with TUI size settings
         display_directory_contents(
             current_directory_entries,
             current_directory_path,
             None, // No pagination info needed for this context
             nav_state.current_filter,
+            nav_state, // Pass nav_state for TUI size calculations
         ).map_err(|e| FileFantasticError::Io(e))?;
 
         println!("\n=== Add File to Stack ===");
@@ -2674,14 +3134,41 @@ pub struct DirectoryView<'a> {
 }
 
 impl<'a> DirectoryView<'a> {
-    /// Creates new directory view with pagination
-    fn new(entries: &'a [FileSystemEntry]) -> Self {
+    /// Creates new directory view with dynamic pagination based on TUI settings
+    /// 
+    /// # Purpose
+    /// Initializes a paginated view of directory entries with user-configured
+    /// items per page, allowing for customizable display density.
+    /// 
+    /// # Arguments
+    /// * `entries` - Slice of FileSystemEntry items to paginate
+    /// * `items_per_page` - Number of items to show per page (from TUI settings)
+    /// 
+    /// # Edge Cases
+    /// - If items_per_page is 0, pagination still works (shows headers only)
+    /// - If items_per_page > total entries, shows all entries on one page
+    /// 
+    /// # Examples
+    /// ```rust
+    /// let items_per_page = calculate_items_per_page_from_state(&nav_state);
+    /// let dir_view = DirectoryView::new(&entries, items_per_page);
+    /// ```
+    fn new(entries: &'a [FileSystemEntry], items_per_page: u16) -> Self {
         Self {
             entries,
             current_page: 0,
-            items_per_page: 16, // Show 25 items per page
+            items_per_page: items_per_page as usize, // Convert to usize for slice operations
         }
     }
+    
+    /// Creates new directory view with pagination
+    // fn new(entries: &'a [FileSystemEntry]) -> Self {
+    //     Self {
+    //         entries,
+    //         current_page: 0,
+    //         items_per_page: 16, // Show 25 items per page
+    //     }
+    // }
     
     /// Returns only entries for current page
     fn current_page_entries(&self) -> &[FileSystemEntry] {
@@ -3280,6 +3767,230 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
     Err(FileFantasticError::UnsupportedPlatform)
 }
 
+/// Represents a TUI display size adjustment action with clear parameter names
+/// 
+/// # Purpose
+/// Encapsulates user requests to adjust the Text User Interface display dimensions,
+/// making the intent explicit through descriptive field names rather than ambiguous booleans.
+/// 
+/// # Fields
+/// * `adjustment_type_true_is_tall_false_is_wide` - Explicitly indicates adjustment type:
+///   - `true` = Adjusting height (tall command)  
+///   - `false` = Adjusting width (wide command)
+/// * `adjustment_magnitude` - The positive number of units to adjust (1-65535)
+/// * `adjustment_direction_true_is_positive_false_is_negative` - Explicitly indicates direction:
+///   - `true` = Positive adjustment (adding units)
+///   - `false` = Negative adjustment (removing units)
+/// 
+/// # Examples
+/// - Command "tall+5" creates: (true, 5, true)
+/// - Command "wide-10" creates: (false, 10, false)
+/// - Command "tall-3" creates: (true, 3, false)
+/// - Command "wide+20" creates: (false, 20, true)
+#[derive(Debug)]
+struct TuiAdjustmentAction {
+    /// true = height/tall adjustment, false = width/wide adjustment
+    adjustment_type_true_is_tall_false_is_wide: bool,
+    /// Positive integer representing units to adjust (never zero)
+    adjustment_magnitude: u16,
+    /// true = positive/increase adjustment, false = negative/decrease adjustment  
+    adjustment_direction_true_is_positive_false_is_negative: bool,
+}
+
+/// NavigationAction variant for TUI size adjustments
+/// 
+/// Add this variant to the NavigationAction enum:
+/// ```rust
+/// /// Adjust TUI display size settings
+/// /// 
+/// /// Contains explicit adjustment parameters that clearly indicate:
+/// /// - What dimension is being adjusted (height vs width)
+/// /// - By how much (magnitude in positive units)
+/// /// - In which direction (increase vs decrease)
+/// 
+/// AdjustTuiSize(TuiAdjustmentAction),
+/// ```
+
+/// Parses TUI size adjustment commands with explicit return values
+/// 
+/// # Purpose
+/// Converts user input strings like "tall+5" or "wide-10" into structured
+/// adjustment actions with clear, unambiguous field values.
+/// 
+/// # Command Format
+/// Commands must follow this exact format:
+/// - `tall+N` - Increase displayed rows by N (where N is 1-65535)
+/// - `tall-N` - Decrease displayed rows by N (where N is 1-65535)
+/// - `wide+N` - Increase name column width by N characters (where N is 1-65535)
+/// - `wide-N` - Decrease name column width by N characters (where N is 1-65535)
+/// 
+/// # Arguments
+/// * `input` - The trimmed user input string to parse
+/// 
+/// # Returns
+/// * `Some(TuiAdjustmentAction)` - Successfully parsed adjustment command
+/// * `None` - Input is not a valid TUI adjustment command
+/// 
+/// # Validation Rules
+/// - Commands are case-sensitive (must be lowercase "tall" or "wide")
+/// - No spaces allowed within the command
+/// - Zero adjustments are rejected (must be 1 or greater)
+/// - Numbers must parse completely (no trailing characters)
+/// - Numbers must fit in u16 range (1-65535)
+/// 
+/// # Examples
+/// ```rust
+/// // Valid commands
+/// assert!(parse_tui_adjustment_command("tall+5").is_some());
+/// assert!(parse_tui_adjustment_command("wide-10").is_some());
+/// assert!(parse_tui_adjustment_command("tall+65535").is_some());
+/// 
+/// // Invalid commands
+/// assert!(parse_tui_adjustment_command("tall+0").is_none()); // Zero not allowed
+/// assert!(parse_tui_adjustment_command("TALL+5").is_none()); // Wrong case
+/// assert!(parse_tui_adjustment_command("tall +5").is_none()); // Space not allowed
+/// assert!(parse_tui_adjustment_command("tall+abc").is_none()); // Not a number
+/// assert!(parse_tui_adjustment_command("tall+99999").is_none()); // Exceeds u16
+/// assert!(parse_tui_adjustment_command("height+5").is_none()); // Wrong keyword
+/// ```
+fn parse_tui_adjustment_command(input: &str) -> Option<TuiAdjustmentAction> {
+    // Determine if this is a tall or wide command
+    let (adjustment_type_true_is_tall_false_is_wide, remaining_after_keyword) = 
+        if input.starts_with("tall") {
+            (true, &input[4..])
+        } else if input.starts_with("wide") {
+            (false, &input[4..])
+        } else {
+            // Not a TUI adjustment command
+            return None;
+        };
+    
+    // Ensure there's a character after the keyword
+    if remaining_after_keyword.is_empty() {
+        return None;
+    }
+    
+    // Extract the direction character and remaining number
+    let first_char = remaining_after_keyword.chars().next()?;
+    let (adjustment_direction_true_is_positive_false_is_negative, number_string) = 
+        match first_char {
+            '+' => (true, &remaining_after_keyword[1..]),
+            '-' => (false, &remaining_after_keyword[1..]),
+            _ => return None, // Must have + or - after keyword
+        };
+    
+    // Parse the magnitude, ensuring it's valid and non-zero
+    match number_string.parse::<u16>() {
+        Ok(magnitude) if magnitude > 0 => {
+            Some(TuiAdjustmentAction {
+                adjustment_type_true_is_tall_false_is_wide,
+                adjustment_magnitude: magnitude,
+                adjustment_direction_true_is_positive_false_is_negative,
+            })
+        },
+        _ => None, // Parse failed or value was zero
+    }
+}
+
+/// Applies a TUI adjustment action to the navigation state
+/// 
+/// # Purpose
+/// Updates the NavigationState with new display size settings based on a parsed
+/// adjustment command, ensuring the state accurately reflects user preferences.
+/// 
+/// # Arguments
+/// * `nav_state` - Mutable reference to the navigation state to update
+/// * `adjustment_action` - The parsed adjustment action containing all parameters
+/// 
+/// # State Updates
+/// Based on the adjustment type:
+/// - **Height adjustments** (tall): Updates tui_tall_adjustment and tui_tall_direction_sign,
+///   then resets current_page_index to 0 (since items per page changes)
+/// - **Width adjustments** (wide): Updates tui_wide_adjustment and tui_wide_direction_sign,
+///   page index remains unchanged (same items, just displayed differently)
+/// 
+/// # Examples
+/// ```rust
+/// // User enters "tall+5"
+/// let action = TuiAdjustmentAction {
+///     adjustment_type_true_is_tall_false_is_wide: true,
+///     adjustment_magnitude: 5,
+///     adjustment_direction_true_is_positive_false_is_negative: true,
+/// };
+/// apply_tui_adjustment(&mut nav_state, &action);
+/// // Result: nav_state.tui_tall_adjustment = 5
+/// //         nav_state.tui_tall_direction_sign = true
+/// //         nav_state.current_page_index = 0
+/// ```
+fn apply_tui_adjustment(nav_state: &mut NavigationState, adjustment_action: &TuiAdjustmentAction) {
+    if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
+        // This is a height (tall) adjustment
+        nav_state.tui_tall_adjustment = adjustment_action.adjustment_magnitude;
+        nav_state.tui_tall_direction_sign = adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
+        // Reset to first page since the number of items per page has changed
+        nav_state.current_page_index = 0;
+    } else {
+        // This is a width (wide) adjustment
+        nav_state.tui_wide_adjustment = adjustment_action.adjustment_magnitude;
+        nav_state.tui_wide_direction_sign = adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
+        // Page index remains the same - only display width changes, not content
+    }
+}
+
+/// Formats TUI adjustment settings into human-readable display strings
+/// 
+/// # Purpose
+/// Converts the current TUI adjustment settings into formatted strings suitable
+/// for display in status bars, feedback messages, and pocket dimension descriptions.
+/// 
+/// # Arguments
+/// * `tall_adjustment` - The magnitude of height adjustment
+/// * `tall_direction_sign` - true for positive (more rows), false for negative (fewer rows)
+/// * `wide_adjustment` - The magnitude of width adjustment  
+/// * `wide_direction_sign` - true for positive (wider), false for negative (narrower)
+/// 
+/// # Returns
+/// * `(String, String)` - Tuple of (tall_display, wide_display) formatted strings
+/// 
+/// # Display Format
+/// - Zero adjustments display as "default"
+/// - Non-zero adjustments display as "tall+N", "tall-N", "wide+N", or "wide-N"
+/// 
+/// # Examples
+/// ```rust
+/// let (tall_str, wide_str) = format_tui_adjustments(5, true, 0, true);
+/// assert_eq!(tall_str, "tall+5");
+/// assert_eq!(wide_str, "default");
+/// 
+/// let (tall_str, wide_str) = format_tui_adjustments(3, false, 10, false);
+/// assert_eq!(tall_str, "tall-3");
+/// assert_eq!(wide_str, "wide-10");
+/// ```
+fn format_tui_adjustments(
+    tall_adjustment: u16, 
+    tall_direction_sign: bool,
+    wide_adjustment: u16,
+    wide_direction_sign: bool
+) -> (String, String) {
+    let tall_display = if tall_adjustment == 0 {
+        String::from("tall+N")
+    } else {
+        format!("tall{}{}", 
+                if tall_direction_sign { "+" } else { "-" },
+                tall_adjustment)
+    };
+    
+    let wide_display = if wide_adjustment == 0 {
+        String::from("wide-N")
+    } else {
+        format!("wide{}{}", 
+                if wide_direction_sign { "+" } else { "-" },
+                wide_adjustment)
+    };
+    
+    (tall_display, wide_display)
+}
+
 /// Processes user input and returns the corresponding NavigationAction
 /// 
 /// # Purpose
@@ -3365,6 +4076,11 @@ fn process_user_input(
             "v" | "c" | "y" | "p" | "g" => return Ok(NavigationAction::GetSendMode),
             _ => {}
         }
+    }
+    
+    // In process_user_input, check for TUI commands after single-char but before number parsing:
+    if let Some(adjustment_action) = parse_tui_adjustment_command(input) {
+        return Ok(NavigationAction::AdjustTuiSize(adjustment_action));
     }
 
     // Try to parse as number for direct selection
@@ -3536,6 +4252,16 @@ enum NavigationAction {
     
     /// Enter Get-Send-Mode for advanced file operations
     GetSendMode,
+    
+    /// Adjust TUI display size settings
+    /// 
+    /// Contains a TuiAdjustmentAction struct with clear parameter names that indicate:
+    /// - What dimension is being adjusted (height vs width)
+    /// - By how much (magnitude in positive units)
+    /// - In which direction (increase vs decrease)
+    /// 
+    /// Generated by commands like "tall+5", "wide-10", etc.
+    AdjustTuiSize(TuiAdjustmentAction),
 }
 
 /// Formats file size into human readable format
@@ -3829,29 +4555,135 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
     Ok(())
 }
 
-/// Manages navigation state, lookup tables, and sort/filter settings
+// /// Manages navigation state, lookup tables, and sort/filter settings
+// /// 
+// /// This struct serves as the central state manager for the File Fantastic UI,
+// /// tracking display mappings, sort preferences, filter settings, and search capabilities.
+// /// It maintains the connection between what the user sees on screen and the underlying
+// /// file system entities.
+// /// 
+// /// # State Management
+// /// - Maps displayed item numbers to actual file system items
+// /// - Tracks current sort method and direction
+// /// - Maintains filter settings (showing files/directories/all)
+// /// - Provides fuzzy search capability
+// /// 
+// /// # Lifecycle
+// /// The NavigationState is created once at application start and persists
+// /// throughout the session, being updated as the user navigates, sorts,
+// /// filters, or searches the file system.
+// /// 
+// /// # Key Responsibilities
+// /// 1. **Display Mapping**: Maps display numbers (what user sees) to actual file paths
+// /// 2. **Sort Management**: Tracks and toggles sort methods/directions
+// /// 3. **Filter Application**: Applies file/directory filters to listings
+// /// 4. **Search Functionality**: Performs fuzzy text searches
+// /// 
+// /// # Usage Context
+// /// The NavigationState is passed to various UI functions to maintain
+// /// consistency between user actions and display state.
+// /// 
+// /// # Implementation Notes
+// /// - Uses HashMap for O(1) lookup of items by display number
+// /// - Maintains last sort command to enable toggling behavior
+// /// - Filters are implemented as Option<char> for three states
+// /// - Fuzzy search implements Levenshtein distance algorithm
+// /// Manages navigation state, lookup tables, and sort settings for the file manager
+// /// 
+// /// # Purpose
+// /// `NavigationState` is the central component that tracks:
+// /// - Display lookup tables to map list numbers to file system items
+// /// - Current sort method and direction
+// /// - Search and navigation history
+// /// 
+// /// # Fields
+// /// * `display_lookup_table` - Maps displayed numbers to item information
+// /// * `current_sort_method` - Current active sort method and direction
+// /// * `last_sort_command` - Tracks last sort command for toggling direction
+// /// 
+// /// # Usage
+// /// The `NavigationState` maintains the stateful aspects of the UI,
+// /// allowing the application to map user input (numbers) to file system 
+// /// operations, track sort preferences, and handle search functionality.
+// /// 
+// /// # Lifecycle
+// /// 1. Created at application start with default values
+// /// 2. Updated when directory contents change or sort preferences change
+// /// 3. Consulted when processing user input to resolve actions
+// /// 
+// /// # Example
+// /// ```
+// /// let mut nav_state = NavigationState::new();
+// /// // After reading directory contents:
+// /// nav_state.update_lookup_table(&directory_entries);
+// /// // When processing user input:
+// /// if let Some(item_info) = nav_state.lookup_item(user_input_number) {
+// ///     // Perform action on the item
+// /// }
+// /// // When changing sort method:
+// /// nav_state.toggle_sort('n'); // Toggle name sort
+// /// ```
+// pub struct NavigationState {
+//     /// Lookup table mapping displayed numbers to item information
+//     /// Key: displayed number (1-based index shown to user)
+//     /// Value: information about the item at that display position
+//     display_lookup_table: HashMap<usize, DisplayedItemInfo>,
+    
+//     /// Current sort method and direction for directory contents
+//     current_sort_method: DirectorySortingMethodEnum,
+    
+//     /// Tracks last sort command used to handle toggles between ascending/descending
+//     /// None if no sort command has been used yet
+//     last_sort_command: Option<char>,
+    
+//     /// Current filter setting (None = show all, Some('d') = dirs only, 
+//     /// Some('f') = files only)
+//     current_filter: Option<char>,
+    
+//     /// Currently selected item index (1-based, None if no selection)
+//     selected_item_index: Option<usize>,
+    
+//     /// Active search term if user is searching
+//     active_search_term: Option<String>,
+    
+//     /// Terminal size for display calculations (width, height)
+//     terminal_size: (usize, usize),
+    
+//     /// Current page index (0-based) - what page we're currently viewing
+//     current_page_index: usize,
+// }
+
+/// Manages navigation state, lookup tables, sort/filter settings, and TUI display preferences
 /// 
 /// This struct serves as the central state manager for the File Fantastic UI,
-/// tracking display mappings, sort preferences, filter settings, and search capabilities.
-/// It maintains the connection between what the user sees on screen and the underlying
-/// file system entities.
+/// tracking display mappings, sort preferences, filter settings, search capabilities,
+/// and user-customized TUI size adjustments. It maintains the connection between 
+/// what the user sees on screen and the underlying file system entities.
 /// 
 /// # State Management
 /// - Maps displayed item numbers to actual file system items
 /// - Tracks current sort method and direction
 /// - Maintains filter settings (showing files/directories/all)
 /// - Provides fuzzy search capability
+/// - Manages TUI display size customization
+/// 
+/// # TUI Size Customization
+/// The TUI size adjustment system allows users to manually control display dimensions:
+/// - **Height (tall)**: Controls number of items shown per page
+/// - **Width (wide)**: Controls the width of the filename column
+/// These settings persist throughout the session and across directory navigation.
 /// 
 /// # Lifecycle
 /// The NavigationState is created once at application start and persists
 /// throughout the session, being updated as the user navigates, sorts,
-/// filters, or searches the file system.
+/// filters, searches, or adjusts display size preferences.
 /// 
 /// # Key Responsibilities
 /// 1. **Display Mapping**: Maps display numbers (what user sees) to actual file paths
 /// 2. **Sort Management**: Tracks and toggles sort methods/directions
 /// 3. **Filter Application**: Applies file/directory filters to listings
 /// 4. **Search Functionality**: Performs fuzzy text searches
+/// 5. **TUI Size Management**: Maintains user's display size preferences
 /// 
 /// # Usage Context
 /// The NavigationState is passed to various UI functions to maintain
@@ -3862,41 +4694,7 @@ fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
 /// - Maintains last sort command to enable toggling behavior
 /// - Filters are implemented as Option<char> for three states
 /// - Fuzzy search implements Levenshtein distance algorithm
-/// Manages navigation state, lookup tables, and sort settings for the file manager
-/// 
-/// # Purpose
-/// `NavigationState` is the central component that tracks:
-/// - Display lookup tables to map list numbers to file system items
-/// - Current sort method and direction
-/// - Search and navigation history
-/// 
-/// # Fields
-/// * `display_lookup_table` - Maps displayed numbers to item information
-/// * `current_sort_method` - Current active sort method and direction
-/// * `last_sort_command` - Tracks last sort command for toggling direction
-/// 
-/// # Usage
-/// The `NavigationState` maintains the stateful aspects of the UI,
-/// allowing the application to map user input (numbers) to file system 
-/// operations, track sort preferences, and handle search functionality.
-/// 
-/// # Lifecycle
-/// 1. Created at application start with default values
-/// 2. Updated when directory contents change or sort preferences change
-/// 3. Consulted when processing user input to resolve actions
-/// 
-/// # Example
-/// ```
-/// let mut nav_state = NavigationState::new();
-/// // After reading directory contents:
-/// nav_state.update_lookup_table(&directory_entries);
-/// // When processing user input:
-/// if let Some(item_info) = nav_state.lookup_item(user_input_number) {
-///     // Perform action on the item
-/// }
-/// // When changing sort method:
-/// nav_state.toggle_sort('n'); // Toggle name sort
-/// ```
+/// - TUI adjustments use u16 for memory efficiency on low-resource systems
 pub struct NavigationState {
     /// Lookup table mapping displayed numbers to item information
     /// Key: displayed number (1-based index shown to user)
@@ -3920,15 +4718,64 @@ pub struct NavigationState {
     /// Active search term if user is searching
     active_search_term: Option<String>,
     
-    /// Terminal size for display calculations (width, height)
-    terminal_size: (usize, usize),
+    /// Manual TUI height adjustment magnitude (always positive value)
+    /// Represents how many rows to add or remove from the default display
+    /// The actual direction is determined by tui_tall_direction_sign
+    /// Example: 5 with sign=true means "tall+5" (5 more rows than default)
+    tui_tall_adjustment: u16,
+    
+    /// Direction of height adjustment
+    /// true = positive adjustment (add rows), false = negative adjustment (remove rows)
+    /// This allows representing both "tall+N" and "tall-N" adjustments
+    tui_tall_direction_sign: bool,
+    
+    /// Manual TUI width adjustment magnitude (always positive value)
+    /// Represents how many characters to add or remove from the name column width
+    /// The actual direction is determined by tui_wide_direction_sign
+    /// Example: 10 with sign=false means "wide-10" (10 fewer characters for names)
+    tui_wide_adjustment: u16,
+    
+    /// Direction of width adjustment
+    /// true = positive adjustment (add characters), false = negative adjustment (remove characters)
+    /// This allows representing both "wide+N" and "wide-N" adjustments
+    tui_wide_direction_sign: bool,
     
     /// Current page index (0-based) - what page we're currently viewing
     current_page_index: usize,
 }
 
-
 impl NavigationState {
+    // /// Creates a new NavigationState with default settings
+    // /// 
+    // /// # Returns
+    // /// * `NavigationState` - A new instance with:
+    // ///   - Empty lookup table
+    // ///   - Name sort in ascending order as default
+    // ///   - No last sort command
+    // /// 
+    // /// # Default Configuration
+    // /// - Sort by name in ascending order
+    // /// - Empty lookup table (populated after directory read)
+    // /// - No last sort command recorded
+    // /// 
+    // /// # Example
+    // /// ```
+    // /// let nav_state = NavigationState::new();
+    // /// // nav_state is ready to be used with initial directory read
+    // /// ```
+    // fn new() -> Self {
+    //     NavigationState {
+    //         display_lookup_table: HashMap::new(),
+    //         current_sort_method: DirectorySortingMethodEnum::Name(true),
+    //         last_sort_command: None,
+    //         current_filter: None, // No filter initially
+    //         selected_item_index: None,
+    //         active_search_term: None,
+    //         terminal_size: (80, 24), // Default terminal size
+    //         current_page_index: 0, // Always start at page 0
+    //     }
+    // }
+    
     /// Creates a new NavigationState with default settings
     /// 
     /// # Returns
@@ -3936,16 +4783,27 @@ impl NavigationState {
     ///   - Empty lookup table
     ///   - Name sort in ascending order as default
     ///   - No last sort command
+    ///   - No active filters
+    ///   - Default TUI size (no adjustments)
     /// 
     /// # Default Configuration
     /// - Sort by name in ascending order
     /// - Empty lookup table (populated after directory read)
     /// - No last sort command recorded
+    /// - No filter applied (show all items)
+    /// - TUI adjustments set to 0 (use default sizes)
+    /// - Direction signs set to true (positive) by default
+    /// 
+    /// # TUI Size Defaults
+    /// When adjustments are 0, the display uses:
+    /// - Default name width: 55 characters
+    /// - Default items per page: 16 items
     /// 
     /// # Example
     /// ```
     /// let nav_state = NavigationState::new();
     /// // nav_state is ready to be used with initial directory read
+    /// // Display will use default sizes until user adjusts
     /// ```
     fn new() -> Self {
         NavigationState {
@@ -3955,8 +4813,12 @@ impl NavigationState {
             current_filter: None, // No filter initially
             selected_item_index: None,
             active_search_term: None,
-            terminal_size: (80, 24), // Default terminal size
-            current_page_index: 0, // Always start at page 0
+            // Initialize TUI size adjustments to defaults (no adjustment)
+            tui_tall_adjustment: 0,      // No height adjustment
+            tui_tall_direction_sign: true, // Positive direction by default
+            tui_wide_adjustment: 0,       // No width adjustment  
+            tui_wide_direction_sign: true, // Positive direction by default
+            current_page_index: 0,        // Always start at page 0
         }
     }
     
@@ -4473,55 +5335,122 @@ mod tests {
     }
 }
 
-/// Truncates a file name for display in CLI, keeping both the beginning and the file extension.
+// /// Truncates a file name for display in CLI, keeping both the beginning and the file extension.
+// /// 
+// /// # Purpose
+// /// Ensures long filenames are displayed in a readable format that fits within
+// /// the terminal width constraints while preserving the most meaningful parts:
+// /// the beginning of the name and the file extension.
+// /// 
+// /// # Arguments
+// /// * `formatted_name` - The original filename to be truncated
+// /// 
+// /// # Returns
+// /// * `String` - Truncated name if necessary, or the original if it's short enough
+// /// 
+// /// # Truncation Method
+// /// If the name exceeds `MAX_NAME_LENGTH_DEFAULT` (55 characters):
+// /// 1. Takes the first (MAX_NAME_LENGTH_DEFAULT - SUFFIX_LENGTH - ellipsis.len()) characters
+// /// 2. Adds an ellipsis ("...")
+// /// 3. Keeps the last SUFFIX_LENGTH (5) characters (typically file extension)
+// /// 
+// /// # Examples
+// /// ```rust
+// /// let long_name = "really_long_filename_that_exceeds_the_maximum_length_for_display.txt";
+// /// assert_eq!(
+// ///     truncate_filename_for_display(long_name.to_string()),
+// ///     "really_long_filename_that_exceeds_the_maximum_leng...e.txt"
+// /// );
+// /// 
+// /// let short_name = "short.txt";
+// /// assert_eq!(
+// ///     truncate_filename_for_display(short_name.to_string()),
+// ///     "short.txt"
+// /// );
+// /// ```
+// /// 
+// /// # Constants Used
+// /// - MAX_NAME_LENGTH_DEFAULT = 55
+// /// - FILENAME_SUFFIX_LENGTH = 5
+// fn truncate_filename_for_display(formatted_name: String) -> String {
+//     // MAX_NAME_LENGTH_DEFAULT
+//     // FILENAME_SUFFIX_LENGTH
+//     let ellipsis = "...";
+    
+//     if formatted_name.chars().count() <= MAX_NAME_LENGTH_DEFAULT {
+//         return formatted_name;
+//     }
+    
+//     // Calculate how many characters we can take from the start
+//     // (max_length - suffix_length - ellipsis.len())
+//     let prefix_length = MAX_NAME_LENGTH_DEFAULT - FILENAME_SUFFIX_LENGTH - ellipsis.len();
+    
+//     // Get prefix (start of the filename)
+//     let prefix: String = formatted_name.chars().take(prefix_length).collect();
+    
+//     // Get suffix (end of the filename, including extension)
+//     let suffix: String = formatted_name
+//         .chars()
+//         .skip(formatted_name.chars().count() - FILENAME_SUFFIX_LENGTH)
+//         .collect();
+    
+//     // Combine prefix, ellipsis, and suffix
+//     format!("{}{}{}", prefix, ellipsis, suffix)
+// }
+
+/// Truncates a file name for display in CLI based on current TUI width settings
 /// 
 /// # Purpose
 /// Ensures long filenames are displayed in a readable format that fits within
-/// the terminal width constraints while preserving the most meaningful parts:
-/// the beginning of the name and the file extension.
+/// the user-configured terminal width constraints while preserving the most 
+/// meaningful parts: the beginning of the name and the file extension.
 /// 
 /// # Arguments
 /// * `formatted_name` - The original filename to be truncated
+/// * `max_name_width` - The calculated maximum width for names based on TUI settings
 /// 
 /// # Returns
 /// * `String` - Truncated name if necessary, or the original if it's short enough
 /// 
 /// # Truncation Method
-/// If the name exceeds `MAX_NAME_LENGTH` (55 characters):
-/// 1. Takes the first (MAX_NAME_LENGTH - SUFFIX_LENGTH - ellipsis.len()) characters
+/// If the name exceeds max_name_width:
+/// 1. Takes the first (max_name_width - FILENAME_SUFFIX_LENGTH - ellipsis.len()) characters
 /// 2. Adds an ellipsis ("...")
-/// 3. Keeps the last SUFFIX_LENGTH (5) characters (typically file extension)
+/// 3. Keeps the last FILENAME_SUFFIX_LENGTH (5) characters (typically file extension)
+/// 
+/// # Edge Cases
+/// - If max_name_width is very small (≤ 8), still ensures minimum display
+/// - Handles Unicode characters correctly by counting chars, not bytes
 /// 
 /// # Examples
 /// ```rust
 /// let long_name = "really_long_filename_that_exceeds_the_maximum_length_for_display.txt";
+/// // With max_name_width = 20
 /// assert_eq!(
-///     truncate_filename_for_display(long_name.to_string()),
-///     "really_long_filename_that_exceeds_the_maximum_leng...e.txt"
+///     truncate_filename_for_display(long_name.to_string(), 20),
+///     "really_long...y.txt"
 /// );
 /// 
 /// let short_name = "short.txt";
+/// // With max_name_width = 20
 /// assert_eq!(
-///     truncate_filename_for_display(short_name.to_string()),
+///     truncate_filename_for_display(short_name.to_string(), 20),
 ///     "short.txt"
 /// );
 /// ```
-/// 
-/// # Constants Used
-/// - MAX_NAME_LENGTH = 55
-/// - FILENAME_SUFFIX_LENGTH = 5
-fn truncate_filename_for_display(formatted_name: String) -> String {
-    // MAX_NAME_LENGTH
-    // FILENAME_SUFFIX_LENGTH
+fn truncate_filename_for_display(formatted_name: String, max_name_width: usize) -> String {
     let ellipsis = "...";
     
-    if formatted_name.chars().count() <= MAX_NAME_LENGTH {
+    // Check if truncation is needed
+    if formatted_name.chars().count() <= max_name_width {
         return formatted_name;
     }
     
     // Calculate how many characters we can take from the start
-    // (max_length - suffix_length - ellipsis.len())
-    let prefix_length = MAX_NAME_LENGTH - FILENAME_SUFFIX_LENGTH - ellipsis.len();
+    // Ensure we don't underflow even with very small max_name_width
+    let prefix_length = max_name_width
+        .saturating_sub(FILENAME_SUFFIX_LENGTH)
+        .saturating_sub(ellipsis.len());
     
     // Get prefix (start of the filename)
     let prefix: String = formatted_name.chars().take(prefix_length).collect();
@@ -4529,65 +5458,185 @@ fn truncate_filename_for_display(formatted_name: String) -> String {
     // Get suffix (end of the filename, including extension)
     let suffix: String = formatted_name
         .chars()
-        .skip(formatted_name.chars().count() - FILENAME_SUFFIX_LENGTH)
+        .skip(formatted_name.chars().count().saturating_sub(FILENAME_SUFFIX_LENGTH))
         .collect();
     
     // Combine prefix, ellipsis, and suffix
     format!("{}{}{}", prefix, ellipsis, suffix)
 }
 
-/// Formats and displays directory contents as a numbered list with columns
-/// 
-/// For adjustments:
-/// then name and data displays are different
-/// the size date field uses a max of 6 char
-/// the modified (date) uses a max of 11 char
-/// the max text with elipsis is 55
-/// so 52 is the trim point if over 55
-/// numbering... if under 100 is 3 spaces
-///
-/// # Arguments
-/// * `directory_entries` - Vector of FileSystemEntry items to display
-/// * `current_directory_path` - PathBuf of the directory being displayed
-/// 
-/// # Returns
-/// * `io::Result<()>` - Success: () unit type
-///                      Error: IO error with description
-/// 
-/// # Display Format
-/// ```text
-/// Current Directory: /path/to/current/dir
-/// 
-/// Num  Name                    Size (B)    Modified
-/// ------------------------------------------------
-///  1)  Documents/             0           1696789200
-///  2)  example.txt           1024        1696789100
-/// ```
-/// 
-/// # Error Handling
-/// - Handles display formatting errors
-/// - Handles IO write errors
-/// 
-/// # Notes
-/// - Directory entries are marked with a trailing '/'
-/// - Sizes are displayed in bytes for MVP (future: human readable sizes)
-/// - Modified times are in Unix timestamp for MVP (future: human readable dates)
-/// Formats and displays directory contents as a numbered list with columns
-/// Formats and displays directory contents as a numbered list with columns
-/// Update display_directory_contents to use formatted timestamp
+// /// Formats and displays directory contents as a numbered list with columns
+// /// 
+// /// For adjustments:
+// /// then name and data displays are different
+// /// the size date field uses a max of 6 char
+// /// the modified (date) uses a max of 11 char
+// /// the max text with elipsis is 55
+// /// so 52 is the trim point if over 55
+// /// numbering... if under 100 is 3 spaces
+// ///
+// /// # Arguments
+// /// * `directory_entries` - Vector of FileSystemEntry items to display
+// /// * `current_directory_path` - PathBuf of the directory being displayed
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success: () unit type
+// ///                      Error: IO error with description
+// /// 
+// /// # Display Format
+// /// ```text
+// /// Current Directory: /path/to/current/dir
+// /// 
+// /// Num  Name                    Size (B)    Modified
+// /// ------------------------------------------------
+// ///  1)  Documents/             0           1696789200
+// ///  2)  example.txt           1024        1696789100
+// /// ```
+// /// 
+// /// # Error Handling
+// /// - Handles display formatting errors
+// /// - Handles IO write errors
+// /// 
+// /// # Notes
+// /// - Directory entries are marked with a trailing '/'
+// /// - Sizes are displayed in bytes for MVP (future: human readable sizes)
+// /// - Modified times are in Unix timestamp for MVP (future: human readable dates)
+// /// Formats and displays directory contents as a numbered list with columns
+// /// Formats and displays directory contents as a numbered list with columns
+// /// Update display_directory_contents to use formatted timestamp
+// // fn display_directory_contents(
+// //     directory_entries: &[FileSystemEntry],
+// //     current_directory_path: &PathBuf,
+// // ) -> io::Result<()> {
+// /// Formats and displays directory contents as a numbered list with columns
 // fn display_directory_contents(
 //     directory_entries: &[FileSystemEntry],
 //     current_directory_path: &PathBuf,
+//     page_info: Option<(usize, usize)>,
+//     filter: Option<char>,
 // ) -> io::Result<()> {
+//     // clear screen
+//     print!("\x1B[2J\x1B[1;1H");
+
+//     let filter_status = match filter {
+//         Some('d') => "[Directories only] ",
+//         Some('f') => "[Files only] ",
+//         _ => "",
+//     };
+                    
+//     let legend = format!(
+//         "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}", 
+//         YELLOW,           // Overall legend color
+//         RED, YELLOW,      // RED q + YELLOW uit
+//         RED, YELLOW,      // RED b + YELLOW ack
+//         RED, YELLOW,      // RED t + YELLOW erm
+//         RED, YELLOW,      // RED d + YELLOW ir
+//         RED, YELLOW,      // RED f + YELLOW ile
+//         RED, YELLOW,      // RED n + YELLOW ame
+//         RED, YELLOW,      // RED s + YELLOW ize
+//         RED, YELLOW,      // RED m + YELLOW od
+//         RED, YELLOW,      // RED g + YELLOW et
+//         RED, YELLOW,      // RED v + YELLOW ,
+//         RED, YELLOW,      // RED y + YELLOW ,
+//         RED, YELLOW,      // RED p + YELLOW ,
+//         RED, YELLOW,      // RED str + YELLOW ...
+//         RED, YELLOW,      // RED enter + YELLOW ...
+//         RESET);
+    
+//     // directory/file mode on path-display line
+//     let path_display = format!("{}", current_directory_path.display());
+//     println!("{}\n{}{}", legend, filter_status, path_display);
+
+//     // Rest of the function remains the same...
+//     // Column headers
+//     println!(
+//         "{:>4}  {:<53} {:>7} {:>11}",
+//         " # ", "Name", "Size", "Modified"
+//     );
+//     println!(" {} ", "-".repeat(78));
+
+//     // Display entries
+//     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
+//         let formatted_name = if directory_entry.is_directory {
+//             format!("{}/", directory_entry.file_system_item_name)
+//         } else {
+//             directory_entry.file_system_item_name.clone()
+//         };
+
+//         let display_name = truncate_filename_for_display(formatted_name);
+
+//         let size_display = if directory_entry.is_directory {
+//             String::from("-")
+//         } else {
+//             format_file_size(directory_entry.file_system_item_size_in_bytes)
+//         };
+
+//         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
+
+//         println!(
+//             "{:>3}. {:<55} {:>6} {:>11}",
+//             entry_index + 1,
+//             display_name,
+//             size_display,
+//             time_display
+//         );
+//     }
+
+//     // // Add pagination footer if applicable
+//     // if let Some((current_page, total_pages)) = page_info {
+//     //     if total_pages > 1 {
+//     //         println!("--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---", 
+//     //                 current_page, total_pages);
+//     //     }
+//     // }
+
+//     // Add pagination footer if applicable
+//     if let Some((current_page, total_pages)) = page_info {
+//         if total_pages > 1 {
+//             println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---{}", 
+//                     YELLOW, current_page, total_pages, RESET);
+//         }
+//     }
+    
+//     io::stdout().flush()?;
+//     Ok(())
+// }
+
 /// Formats and displays directory contents as a numbered list with columns
+/// 
+/// # Purpose
+/// Renders the file browser interface with user-configured column widths and
+/// pagination settings, providing a customizable display experience.
+/// 
+/// # Arguments
+/// * `directory_entries` - Vector of FileSystemEntry items to display
+/// * `current_directory_path` - PathBuf of the directory being displayed
+/// * `page_info` - Optional pagination info (current_page, total_pages)
+/// * `filter` - Current filter setting (Some('d'), Some('f'), or None)
+/// * `nav_state` - Navigation state containing TUI size adjustments
+/// 
+/// # Display Adjustments
+/// - Name column width adjusts based on nav_state TUI settings
+/// - Number of items shown determined by TUI height settings
+/// - Other columns (Size, Modified) remain fixed width
+/// 
+/// # Layout Calculation
+/// The name column width is calculated dynamically:
+/// - Base width: 55 characters (MAX_NAME_LENGTH_DEFAULT)
+/// - Adjusted by user's wide+N or wide-N settings
+/// - Minimum width: 8 characters (for "...suffix" display)
 fn display_directory_contents(
     directory_entries: &[FileSystemEntry],
     current_directory_path: &PathBuf,
     page_info: Option<(usize, usize)>,
     filter: Option<char>,
+    nav_state: &NavigationState,  // Add nav_state parameter
 ) -> io::Result<()> {
-    // clear screen
+    // Clear screen
     print!("\x1B[2J\x1B[1;1H");
+
+    // Calculate the actual name column width based on TUI settings
+    let name_column_width = calculate_name_width_from_state(nav_state) as usize;
 
     let filter_status = match filter {
         Some('d') => "[Directories only] ",
@@ -4614,19 +5663,22 @@ fn display_directory_contents(
         RED, YELLOW,      // RED enter + YELLOW ...
         RESET);
     
-    // directory/file mode on path-display line
+    // Directory/file mode on path-display line
     let path_display = format!("{}", current_directory_path.display());
     println!("{}\n{}{}", legend, filter_status, path_display);
 
-    // Rest of the function remains the same...
-    // Column headers
+    // Column headers with dynamic name width
     println!(
-        "{:>4}  {:<53} {:>7} {:>11}",
-        " # ", "Name", "Size", "Modified"
+        "{:>4}  {:<width$} {:>5} {:>11}",
+        " # ", "Name", "Size", "Modified",
+        width = name_column_width
     );
-    println!(" {} ", "-".repeat(78));
+    
+    // Separator line adjusted for dynamic width
+    let separator_length = 4 + name_column_width + 7 + 1 + 11;
+    println!(" {} ", "-".repeat(separator_length));
 
-    // Display entries
+    // Display entries with dynamic width
     for (entry_index, directory_entry) in directory_entries.iter().enumerate() {
         let formatted_name = if directory_entry.is_directory {
             format!("{}/", directory_entry.file_system_item_name)
@@ -4634,7 +5686,8 @@ fn display_directory_contents(
             directory_entry.file_system_item_name.clone()
         };
 
-        let display_name = truncate_filename_for_display(formatted_name);
+        // Use dynamic width for truncation
+        let display_name = truncate_filename_for_display(formatted_name, name_column_width);
 
         let size_display = if directory_entry.is_directory {
             String::from("-")
@@ -4645,27 +5698,32 @@ fn display_directory_contents(
         let time_display = format_timestamp(directory_entry.file_system_item_last_modified_time);
 
         println!(
-            "{:>3}. {:<55} {:>6} {:>11}",
+            "{:>3}. {:<width$} {:>6} {:>11}",
             entry_index + 1,
             display_name,
             size_display,
-            time_display
+            time_display,
+            width = name_column_width
         );
     }
 
-    // // Add pagination footer if applicable
-    // if let Some((current_page, total_pages)) = page_info {
-    //     if total_pages > 1 {
-    //         println!("--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---", 
-    //                 current_page, total_pages);
-    //     }
-    // }
-
-    // Add pagination footer if applicable
+    // Add pagination footer with TUI size info
     if let Some((current_page, total_pages)) = page_info {
+        // Format TUI adjustments for display
+        let (tall_display, wide_display) = format_tui_adjustments(
+            nav_state.tui_tall_adjustment,
+            nav_state.tui_tall_direction_sign,
+            nav_state.tui_wide_adjustment,
+            nav_state.tui_wide_direction_sign
+        );
+        
         if total_pages > 1 {
-            println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. ---{}", 
-                    YELLOW, current_page, total_pages, RESET);
+            println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. Size: {} {} ---{}", 
+                    YELLOW, current_page, total_pages, tall_display, wide_display, RESET);
+        } else {
+            // Show size info even when only one page
+            // println!("\x1b[1m{}--- Size: {} {} ---{}", 
+                    // YELLOW, tall_display, wide_display, RESET);
         }
     }
     
@@ -5771,7 +6829,9 @@ pub fn file_fantastic() -> Result<()> {
             .collect();
 
         // Create paginated view starting at current page from navigation state
-        let mut dir_view = DirectoryView::new(&directory_entries);
+        // Calculate items per page based on TUI height settings
+        let items_per_page = calculate_items_per_page_from_state(&nav_state);
+        let mut dir_view = DirectoryView::new(&directory_entries, items_per_page);
         dir_view.set_current_page(nav_state.current_page_index);
 
         // Inner loop for pagination within the same directory
@@ -5786,6 +6846,7 @@ pub fn file_fantastic() -> Result<()> {
                 &current_directory_path,
                 Some((dir_view.current_page + 1, dir_view.total_pages())),
                 nav_state.current_filter,
+                &nav_state, // Pass nav_state for TUI size calculations
             ) {
                 Ok(_) => {},
                 Err(e) => {
@@ -5880,6 +6941,44 @@ pub fn file_fantastic() -> Result<()> {
                             // Reset navigation state to clean defaults (clear filters, pagination, etc.)
                             nav_state.reset_to_clean_state();
                             break; // Break inner loop to refresh directory
+                        },
+                        NavigationAction::AdjustTuiSize(adjustment_action) => {
+                            // Apply the adjustment to the navigation state
+                            apply_tui_adjustment(&mut nav_state, &adjustment_action);
+                            
+                            // Format current settings for display
+                            let (tall_display, wide_display) = format_tui_adjustments(
+                                nav_state.tui_tall_adjustment,
+                                nav_state.tui_tall_direction_sign,
+                                nav_state.tui_wide_adjustment,
+                                nav_state.tui_wide_direction_sign
+                            );
+                            
+                            // Provide clear feedback about what changed
+                            let dimension_name = if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
+                                "Height"
+                            } else {
+                                "Width"
+                            };
+                            
+                            let change_description = if adjustment_action.adjustment_direction_true_is_positive_false_is_negative {
+                                "increased"
+                            } else {
+                                "decreased"
+                            };
+                            
+                            println!("{} {} by {}. Current settings: {} {}", 
+                                    dimension_name, 
+                                    change_description, 
+                                    adjustment_action.adjustment_magnitude,
+                                    tall_display,
+                                    wide_display);
+                            
+                            // Brief pause so user can see the feedback
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            
+                            // Break inner loop to refresh display with new settings
+                            break;
                         },
                         NavigationAction::Filter(filter_char) => {
                             nav_state.set_filter(filter_char);
@@ -6013,29 +7112,97 @@ pub fn file_fantastic() -> Result<()> {
                                             Err(e) => println!("Error saving pocket dimension: {}", e),
                                         }
                                     },
+                                    // GetSendModeAction::GoToPocketDimension => {
+                                    //     match state_manager.interactive_select_pocket_dimension() {
+                                    //         Ok(Some(nickname)) => {
+                                    //             match state_manager.restore_pocket_dimension(&nickname) {
+                                    //                 Ok(saved_state) => {
+                                    //                     // Restore the complete navigation state
+                                    //                     current_directory_path = saved_state.current_directory_path;
+                                    //                     nav_state.current_sort_method = saved_state.current_sort_method;
+                                    //                     nav_state.current_filter = saved_state.current_filter;
+                                    //                     nav_state.selected_item_index = saved_state.selected_item_index;
+                                    //                     nav_state.active_search_term = saved_state.active_search_term;
+                                    //                     nav_state.terminal_size = saved_state.terminal_size;
+                                    //                     nav_state.current_page_index = saved_state.current_page_number; // Restore page
+                                                        
+                                    //                     println!("Jumped to pocket dimension: {} (page {})", 
+                                    //                             nickname, saved_state.current_page_number + 1);
+                                    //                     break; // Exit Get-Send-Mode and refresh directory
+                                    //                 },
+                                    //                 Err(e) => println!("Error restoring pocket dimension: {}", e),
+                                    //             }
+                                    //         },
+                                    //         Ok(None) => println!("No pocket dimension selected."),
+                                    //         Err(e) => println!("Error selecting pocket dimension: {}", e),
+                                    //     }
+                                    // },
                                     GetSendModeAction::GoToPocketDimension => {
                                         match state_manager.interactive_select_pocket_dimension() {
                                             Ok(Some(nickname)) => {
                                                 match state_manager.restore_pocket_dimension(&nickname) {
                                                     Ok(saved_state) => {
-                                                        // Restore the complete navigation state
+                                                        // Restore the complete navigation state including all preferences
                                                         current_directory_path = saved_state.current_directory_path;
                                                         nav_state.current_sort_method = saved_state.current_sort_method;
                                                         nav_state.current_filter = saved_state.current_filter;
                                                         nav_state.selected_item_index = saved_state.selected_item_index;
                                                         nav_state.active_search_term = saved_state.active_search_term;
-                                                        nav_state.terminal_size = saved_state.terminal_size;
-                                                        nav_state.current_page_index = saved_state.current_page_number; // Restore page
                                                         
-                                                        println!("Jumped to pocket dimension: {} (page {})", 
-                                                                nickname, saved_state.current_page_number + 1);
-                                                        break; // Exit Get-Send-Mode and refresh directory
+                                                        // Restore TUI size adjustment settings
+                                                        // These settings allow each pocket dimension to have its own optimal display configuration
+                                                        nav_state.tui_tall_adjustment = saved_state.tui_tall_adjustment;
+                                                        nav_state.tui_tall_direction_sign = saved_state.tui_tall_direction_sign;
+                                                        nav_state.tui_wide_adjustment = saved_state.tui_wide_adjustment;
+                                                        nav_state.tui_wide_direction_sign = saved_state.tui_wide_direction_sign;
+                                                        
+                                                        // Restore pagination state
+                                                        nav_state.current_page_index = saved_state.current_page_number;
+                                                        
+                                                        // Build a human-readable size adjustment string for display
+                                                        let tall_adjustment_display = if saved_state.tui_tall_adjustment == 0 {
+                                                            String::from("default")
+                                                        } else {
+                                                            format!("tall{}{}", 
+                                                                    if saved_state.tui_tall_direction_sign { "+" } else { "-" },
+                                                                    saved_state.tui_tall_adjustment)
+                                                        };
+                                                        
+                                                        let wide_adjustment_display = if saved_state.tui_wide_adjustment == 0 {
+                                                            String::from("default")
+                                                        } else {
+                                                            format!("wide{}{}", 
+                                                                    if saved_state.tui_wide_direction_sign { "+" } else { "-" },
+                                                                    saved_state.tui_wide_adjustment)
+                                                        };
+                                                        
+                                                        // Inform user of successful restoration with details
+                                                        println!("Jumped to pocket dimension: {} (page {}, size: {} {})", 
+                                                                nickname, 
+                                                                saved_state.current_page_number + 1,
+                                                                tall_adjustment_display,
+                                                                wide_adjustment_display);
+                                                        
+                                                        break; // Exit Get-Send-Mode and refresh directory with restored settings
                                                     },
-                                                    Err(e) => println!("Error restoring pocket dimension: {}", e),
+                                                    Err(e) => {
+                                                        // Handle restoration errors gracefully
+                                                        println!("Error restoring pocket dimension: {}", e);
+                                                        println!("Press Enter to continue...");
+                                                        let _ = io::stdin().read_line(&mut String::new());
+                                                    }
                                                 }
                                             },
-                                            Ok(None) => println!("No pocket dimension selected."),
-                                            Err(e) => println!("Error selecting pocket dimension: {}", e),
+                                            Ok(None) => {
+                                                // User cancelled selection
+                                                println!("No pocket dimension selected.");
+                                            },
+                                            Err(e) => {
+                                                // Handle selection errors
+                                                println!("Error selecting pocket dimension: {}", e);
+                                                println!("Press Enter to continue...");
+                                                let _ = io::stdin().read_line(&mut String::new());
+                                            }
                                         }
                                     },
                                     GetSendModeAction::ViewStacks => {
