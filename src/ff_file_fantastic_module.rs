@@ -189,9 +189,9 @@ if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
 ## TUI Size:
+## TUI Size:
 - default terminal size 80/24
-- or first MVP, terminal size is default terminal size
-- for MVP...mouse to scroll up and down works fine for mvp
+- 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
 */
 
 /// ff - A minimal file manager in Rust
