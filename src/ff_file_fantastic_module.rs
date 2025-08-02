@@ -135,10 +135,10 @@ not work. In such cases it is nice to have a stable backup option.
 8. Module to be used by other projects
 
 # Main functions/features:
-1. (very) minimal text user interface
+1. minimal text user interface (TUI)
 - path, then numbered lines
 - like bash: ls, but list by number
-- show as columns: item number name size modified
+- shown as columns: item-number name size modified
 2. primarily int + enter/return for user-input
 3. select directory to go to by number
 4. 'b' to go back; back-up directory path, go to parent directory
@@ -148,20 +148,28 @@ not work. In such cases it is nice to have a stable backup option.
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
-(q)uit (b)ack|(t)erminal|(d)ir (f)ile|(n)ame (s)ize (m)od|str>search|enter>reset
-w for up, s for down, a for all 
-13. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
-14. Type a string for a partial match search.
-15. 'f' or 'd' to show only files or only directories
-16. Minimal file-moving ("Get-Send Mode")
-17. Save and Change Navigation-State ("Pocket Dimensions")
-18. Archive Selection: basic archive feature for versioning and backup
+```
+quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
+```
+13. Pagination: up/down, j/k, </>, w/x, arrows, etc.
+14. 'sort by size' ' 'sort by name' 'sort by last-modified': re-selecting a sort option reverses the order
+15. Type a string for a partial match search.
+16. 'f' or 'd' to show only files or only directories
+17. Minimal file-moving ("Get-Send Mode") in get-send file v,y,p
+18. Save and Change Navigation-State ("Pocket Dimensions") in get-send file v,y,p
+19. Archive Selection: basic archive feature for versioning and backup
+20. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu') 
+21. User can resize TUI: tall+/-N or wide+/-N (e.g. tall+2 or wide-4)
+22. modular to easy integration into other projects
 
-# Scrolling
-1. MVP: use mouse wheel to scroll up and down
-2. pages using w and s to scroll up and down
+## Scrolling
+Instructions appear in info-bar:
+- Use various standard keys (and hit enter after that key)
+```text
+up/down, j/k, </>, w/x, arrows, etc.
+```
 
-# Get-Send Mode: Move Files
+## Get-Send Mode: Move Files
 This is a minimal/modular system of ~features for copying files.
 if the user enters any of these: v, c, y, p, g
 
@@ -189,9 +197,9 @@ if the size is no more than 99 of that unit
 .1 mb, 99 k, 99 b etc.
 
 ## TUI Size:
-## TUI Size:
 - default terminal size 80/24
 - 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
+
 */
 
 /// ff - A minimal file manager in Rust
