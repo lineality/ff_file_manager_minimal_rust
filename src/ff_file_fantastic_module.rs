@@ -2648,31 +2648,44 @@ fn copy_file_with_archive_handling(
     // Determine destination path
     let primary_destination_path = destination_directory.join(&source_filename);
     
+    // archive old file, replace with new file
     let final_destination_path = if primary_destination_path.exists() {
-        // File exists, use archive strategy
+        // File exists, use archive strategy - archive the OLD file first
         println!("File '{}' already exists in destination.", source_filename);
-        println!("Creating archived copy to avoid overwrite...");
+        println!("Archiving existing file to avoid overwrite...");
         
         // Ensure archive directory exists
         let archive_directory_path = ensure_archive_directory_exists(destination_directory)?;
         
-        // Generate timestamped filename
+        // Generate timestamped filename for the OLD file
         let timestamp = generate_archive_timestamp();
         let archive_filename = generate_archive_filename(&source_filename, &timestamp);
         let archive_destination_path = archive_directory_path.join(&archive_filename);
         
-        // Copy to archive location
-        fs::copy(source_file_path, &archive_destination_path).map_err(|e| {
+        // FIXED: Move the OLD (existing) file to archive location
+        fs::rename(&primary_destination_path, &archive_destination_path).map_err(|e| {
             match e.kind() {
                 io::ErrorKind::PermissionDenied => {
-                    FileFantasticError::PermissionDenied(archive_destination_path.clone())
+                    FileFantasticError::PermissionDenied(primary_destination_path.clone())
                 },
                 _ => FileFantasticError::Io(e)
             }
         })?;
         
-        println!("Archived copy created: {}", archive_destination_path.display());
-        archive_destination_path
+        println!("Existing file archived to: {}", archive_destination_path.display());
+        
+        // Now copy the NEW file to the primary destination
+        fs::copy(source_file_path, &primary_destination_path).map_err(|e| {
+            match e.kind() {
+                io::ErrorKind::PermissionDenied => {
+                    FileFantasticError::PermissionDenied(primary_destination_path.clone())
+                },
+                _ => FileFantasticError::Io(e)
+            }
+        })?;
+        
+        println!("New file copied to: {}", primary_destination_path.display());
+        primary_destination_path  // Return the primary destination, not archive
     } else {
         // No conflict, copy directly to destination
         fs::copy(source_file_path, &primary_destination_path).map_err(|e| {
@@ -2687,7 +2700,7 @@ fn copy_file_with_archive_handling(
         println!("File copied to: {}", primary_destination_path.display());
         primary_destination_path
     };
-    
+        
     Ok(final_destination_path)
 }
 
