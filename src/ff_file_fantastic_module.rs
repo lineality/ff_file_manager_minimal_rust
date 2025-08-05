@@ -6263,6 +6263,7 @@ pub fn file_fantastic() -> Result<()> {
                         NavigationAction::ChangeDirectory(new_path) => {
                             current_directory_path = new_path;
                             nav_state.current_page_index = 0; // Reset to first page in new directory
+                            nav_state.selected_item_index = None;  // clears selection upon new directroy
                             break; // Break inner loop to read new directory
                         }
                         NavigationAction::ParentDirectory => {
@@ -6270,6 +6271,7 @@ pub fn file_fantastic() -> Result<()> {
                                 Some(parent) => {
                                     current_directory_path = parent.to_path_buf();
                                     nav_state.current_page_index = 0; // Reset to first page
+                                    nav_state.selected_item_index = None;  // clears fields
                                     break; // Break inner loop to read new directory
                                 },
                                 None => {
