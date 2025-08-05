@@ -1948,6 +1948,7 @@ impl NavigationStateManager {
         let valid_suggestion = selected_file.filter(|file_path| {
             // Check if file exists AND is in current directory
             file_path.exists() && 
+            file_path.is_file() && 
             file_path.parent() == Some(current_directory_path.as_path())
         });
         
@@ -6358,6 +6359,8 @@ pub fn file_fantastic() -> Result<()> {
                         
                         if entry.is_directory {
                             current_directory_path = entry.file_system_item_path.clone();
+                            // IMPORTANT: Clear the selected item when changing directories
+                            nav_state.selected_item_index = None;
                             break; // Break inner loop to read new directory
                         } else {
                             match handle_file_open(&entry.file_system_item_path) {
