@@ -1944,10 +1944,18 @@ impl NavigationStateManager {
         current_directory_path: &PathBuf,
     ) -> Result<()> {
 
+        // Validate that the suggested file is actually in the current directory
+        let valid_suggestion = selected_file.filter(|file_path| {
+            // Check if file exists AND is in current directory
+            file_path.exists() && 
+            file_path.parent() == Some(current_directory_path.as_path())
+        });
+        
         // If there's a pre-selected file, offer it as the default
-        if let Some(file_path) = selected_file {
+        if let Some(file_path) = valid_suggestion {
             println!("\n=== Add File to Stack ===");
-            print!("Add '{}' to file stack? (Y/n): ", file_path.file_name().unwrap_or_default().to_string_lossy());
+            // print!("Add '{}' to file stack? (Y/n): ", file_path.file_name().unwrap_or_default().to_string_lossy());
+            print!("Add '{}' to file stack? (Y/n): ", file_path.to_string_lossy());
             io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
             
             let mut response = String::new();
@@ -2555,8 +2563,8 @@ fn generate_archive_filename(original_filename: &str, timestamp: &str) -> String
 /// 
 /// # Purpose
 /// Safely copies a file from the source path to the destination directory,
-/// automatically handling filename conflicts by creating archived versions
-/// with timestamps when necessary.
+/// automatically handling filename conflicts by archiving the EXISTING file
+/// (not the new one) and replacing it with the new file.
 /// 
 /// # Arguments
 /// * `source_file_path` - Absolute path to the source file to copy
@@ -2568,49 +2576,21 @@ fn generate_archive_filename(original_filename: &str, timestamp: &str) -> String
 /// # Conflict Resolution Strategy
 /// 1. If destination file doesn't exist: copy directly to destination
 /// 2. If destination file exists:
-///    a. Create "archive" subdirectory if it doesn't exist
-///    b. Generate timestamped filename for the copy
-///    c. Copy to archive directory with timestamped name
+///    a. Create temporary backup of existing file
+///    b. Copy new file with temporary name
+///    c. Move existing file to archive directory
+///    d. Rename temporary new file to final name
+///    e. Clean up temporary backup on success
 /// 
-/// # Error Conditions
-/// - Source file doesn't exist or isn't readable
-/// - Destination directory doesn't exist or isn't writable
-/// - IO errors during file copy operation
-/// - Permission denied for file or directory access
-/// - Insufficient disk space for copy operation
+/// # Error Recovery
+/// If any step fails after modifying files, attempts to restore original state
+/// using the temporary backup file.
 /// 
 /// # File Preservation Guarantee
-/// - Never overwrites existing files
-/// - Preserves original file permissions and timestamps when possible
-/// - Creates complete directory structure as needed
-/// 
-/// # Example Workflow
-/// ```text
-/// Source: /path/to/source/document.txt
-/// Destination: /current/working/directory/
-/// 
-/// Scenario 1 - No conflict:
-/// Result: /current/working/directory/document.txt
-/// 
-/// Scenario 2 - File exists:
-/// Creates: /current/working/directory/archive/
-/// Result: /current/working/directory/archive/document_2025_01_15_14_30_45.txt
-/// ```
-/// 
-/// # Usage
-/// ```rust
-/// let source = PathBuf::from("/home/user/important.txt");
-/// let destination = PathBuf::from("/home/user/projects");
-/// 
-/// match copy_file_with_archive_handling(&source, &destination) {
-///     Ok(final_path) => {
-///         println!("File copied to: {}", final_path.display());
-///     },
-///     Err(e) => {
-///         eprintln!("Copy failed: {}", e);
-///     }
-/// }
-/// ```
+/// - Never loses the existing file (archived or restored on failure)
+/// - Never overwrites without archiving
+/// - Atomic operations where possible
+/// - Full rollback on failure
 fn copy_file_with_archive_handling(
     source_file_path: &PathBuf,
     destination_directory: &PathBuf,
@@ -2648,44 +2628,239 @@ fn copy_file_with_archive_handling(
     // Determine destination path
     let primary_destination_path = destination_directory.join(&source_filename);
     
-    // archive old file, replace with new file
+    // Check if file exists at destination
     let final_destination_path = if primary_destination_path.exists() {
-        // File exists, use archive strategy - archive the OLD file first
+        // File exists, use safe archive strategy with temp files
         println!("File '{}' already exists in destination.", source_filename);
-        println!("Archiving existing file to avoid overwrite...");
+        println!("Creating safe archive of existing file...");
         
-        // Ensure archive directory exists
-        let archive_directory_path = ensure_archive_directory_exists(destination_directory)?;
-        
-        // Generate timestamped filename for the OLD file
+        // Generate timestamp for unique temp names
         let timestamp = generate_archive_timestamp();
+        
+        // Step 1: Create temporary backup of the existing file (for rollback if needed)
+        // Add process ID to make temp names more unique
+        let pid = std::process::id();
+        let temp_backup_filename = format!("backup_{}_{}_{}", pid, timestamp, source_filename);
+        let temp_backup_path = destination_directory.join(&temp_backup_filename);
+        
+        // Check if temp backup already exists (very unlikely but possible)
+        if temp_backup_path.exists() {
+            return Err(FileFantasticError::InvalidName(
+                format!("Temporary backup file already exists: {}", temp_backup_path.display())
+            ));
+        }
+        
+        // Copy existing file to temporary backup - handle race condition where file might have been deleted
+        match fs::copy(&primary_destination_path, &temp_backup_path) {
+            Ok(_) => {
+                println!("Created temporary backup: {}", temp_backup_path.display());
+            },
+            Err(e) => {
+                // Check if the error is because the file no longer exists (race condition)
+                if e.kind() == io::ErrorKind::NotFound {
+                    // File was deleted between our check and now - just do a normal copy
+                    println!("Original file no longer exists, proceeding with normal copy...");
+                    
+                    fs::copy(source_file_path, &primary_destination_path).map_err(|copy_err| {
+                        match copy_err.kind() {
+                            io::ErrorKind::PermissionDenied => {
+                                FileFantasticError::PermissionDenied(primary_destination_path.clone())
+                            },
+                            _ => FileFantasticError::Io(copy_err)
+                        }
+                    })?;
+                    
+                    println!("File copied to: {}", primary_destination_path.display());
+                    return Ok(primary_destination_path);
+                }
+                
+                // Other error - fail
+                return Err(match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        FileFantasticError::PermissionDenied(primary_destination_path.clone())
+                    },
+                    _ => FileFantasticError::Io(e)
+                });
+            }
+        }
+        
+        // Step 2: Copy new file with temporary name
+        let temp_new_filename = format!("newfile_{}_{}_{}", pid, timestamp, source_filename);
+        let temp_new_path = destination_directory.join(&temp_new_filename);
+        
+        // Check if temp new file already exists
+        if temp_new_path.exists() {
+            // Clean up temp backup before returning error
+            let _ = fs::remove_file(&temp_backup_path);
+            return Err(FileFantasticError::InvalidName(
+                format!("Temporary new file already exists: {}", temp_new_path.display())
+            ));
+        }
+        
+        // Copy source file to temporary location
+        match fs::copy(source_file_path, &temp_new_path) {
+            Ok(_) => {
+                println!("Copied new file to temporary location: {}", temp_new_path.display());
+            },
+            Err(e) => {
+                // Rollback: remove temp backup since we're failing
+                let _ = fs::remove_file(&temp_backup_path);
+                
+                return Err(match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        FileFantasticError::PermissionDenied(temp_new_path)
+                    },
+                    _ => FileFantasticError::Io(e)
+                });
+            }
+        }
+        
+        // Step 3: Ensure archive directory exists
+        let archive_directory_path = match ensure_archive_directory_exists(destination_directory) {
+            Ok(path) => path,
+            Err(e) => {
+                // Rollback: remove temp files
+                let _ = fs::remove_file(&temp_new_path);
+                let _ = fs::remove_file(&temp_backup_path);
+                return Err(e);
+            }
+        };
+        
+        // Step 4: Move the existing file to archive (from primary location)
         let archive_filename = generate_archive_filename(&source_filename, &timestamp);
         let archive_destination_path = archive_directory_path.join(&archive_filename);
         
-        // FIXED: Move the OLD (existing) file to archive location
-        fs::rename(&primary_destination_path, &archive_destination_path).map_err(|e| {
-            match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    FileFantasticError::PermissionDenied(primary_destination_path.clone())
-                },
-                _ => FileFantasticError::Io(e)
+        // Check if archive destination already exists
+        if archive_destination_path.exists() {
+            // Clean up temp files before returning error
+            let _ = fs::remove_file(&temp_new_path);
+            let _ = fs::remove_file(&temp_backup_path);
+            return Err(FileFantasticError::InvalidName(
+                format!("Archive file already exists: {}", archive_destination_path.display())
+            ));
+        }
+        
+        // Try to rename first (atomic on same filesystem), fall back to copy+delete
+        // Explicitly specify the type for the Result
+        let archive_result: std::result::Result<(), io::Error> = fs::rename(&primary_destination_path, &archive_destination_path)
+            .or_else(|rename_err| {
+                // Rename failed, probably cross-filesystem - try copy then delete
+                eprintln!("Rename to archive failed ({}), trying copy+delete...", rename_err);
+                fs::copy(&primary_destination_path, &archive_destination_path).map_err(|copy_err| {
+                    eprintln!("Failed to copy to archive: {}", copy_err);
+                    copy_err
+                })?;
+                fs::remove_file(&primary_destination_path).map_err(|rm_err| {
+                    eprintln!("Failed to remove original after archive copy: {} {}", rm_err, rename_err);
+                    rm_err
+                })?;
+                Ok(())
+            });
+        
+        match archive_result {
+            Ok(_) => {
+                println!("Archived existing file to: {}", archive_destination_path.display());
+            },
+            Err(e) => {
+                // Rollback: remove temp new file, keep temp backup for manual recovery
+                let _ = fs::remove_file(&temp_new_path);
+                
+                eprintln!("Failed to archive existing file. Backup preserved at: {}", 
+                         temp_backup_path.display());
+                
+                return Err(match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        FileFantasticError::PermissionDenied(archive_destination_path)
+                    },
+                    _ => FileFantasticError::Io(e)
+                });
             }
-        })?;
+        }
         
-        println!("Existing file archived to: {}", archive_destination_path.display());
+        // Step 5: Move temp new file to final destination
+        // Try rename first (atomic), fall back to copy+delete
+        // Explicitly specify the type for the Result
+        let rename_result: std::result::Result<(), io::Error> = fs::rename(&temp_new_path, &primary_destination_path)
+            .or_else(|rename_err| {
+                // Rename failed - try copy then delete
+                eprintln!("Rename of new file failed ({}), trying copy+delete...", rename_err);
+                fs::copy(&temp_new_path, &primary_destination_path).map_err(|copy_err| {
+                    eprintln!("Failed to copy new file to destination: {}", copy_err);
+                    copy_err
+                })?;
+                fs::remove_file(&temp_new_path).map_err(|rm_err| {
+                    eprintln!("Failed to remove temp new file after copy: {} {}", rm_err, rename_err);
+                    rm_err
+                })?;
+                Ok(())
+            });
         
-        // Now copy the NEW file to the primary destination
-        fs::copy(source_file_path, &primary_destination_path).map_err(|e| {
-            match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    FileFantasticError::PermissionDenied(primary_destination_path.clone())
-                },
-                _ => FileFantasticError::Io(e)
+        match rename_result {
+            Ok(_) => {
+                println!("New file installed at: {}", primary_destination_path.display());
+                
+                // Step 6: Clean up temp backup (success case)
+                match fs::remove_file(&temp_backup_path) {
+                    Ok(_) => {
+                        println!("Cleaned up temporary backup.");
+                    },
+                    Err(e) => {
+                        // Non-critical error, just warn
+                        eprintln!("Warning: Could not remove temporary backup at {}: {}", 
+                                 temp_backup_path.display(), e);
+                    }
+                }
+                
+                primary_destination_path
+            },
+            Err(e) => {
+                // Critical failure: try to restore original state
+                eprintln!("Failed to move new file to destination: {}", e);
+                eprintln!("Attempting to restore original state...");
+                
+                // Try to restore from temp backup (more reliable than from archive)
+                match fs::copy(&temp_backup_path, &primary_destination_path) {
+                    Ok(_) => {
+                        eprintln!("Successfully restored original file from backup.");
+                        // Remove the file we put in archive since we're restoring
+                        let _ = fs::remove_file(&archive_destination_path);
+                    },
+                    Err(restore_err) => {
+                        // Try to restore from archive as last resort
+                        // Explicitly specify type
+                        let restore_from_archive: std::result::Result<(), io::Error> = 
+                            fs::rename(&archive_destination_path, &primary_destination_path)
+                            .or_else(|_rename_err| {
+                                fs::copy(&archive_destination_path, &primary_destination_path)?;
+                                fs::remove_file(&archive_destination_path)?;
+                                Ok(())
+                            });
+                            
+                        match restore_from_archive {
+                            Ok(_) => {
+                                eprintln!("Successfully restored original file from archive.");
+                            },
+                            Err(archive_restore_err) => {
+                                eprintln!("Could not restore original file: {}", restore_err);
+                                eprintln!("Archive restore also failed: {}", archive_restore_err);
+                                eprintln!("Original file is in archive: {}", archive_destination_path.display());
+                                eprintln!("Backup available at: {}", temp_backup_path.display());
+                            }
+                        }
+                    }
+                }
+                
+                // Clean up temp new file if it still exists
+                let _ = fs::remove_file(&temp_new_path);
+                
+                return Err(match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        FileFantasticError::PermissionDenied(primary_destination_path)
+                    },
+                    _ => FileFantasticError::Io(e)
+                });
             }
-        })?;
-        
-        println!("New file copied to: {}", primary_destination_path.display());
-        primary_destination_path  // Return the primary destination, not archive
+        }
     } else {
         // No conflict, copy directly to destination
         fs::copy(source_file_path, &primary_destination_path).map_err(|e| {
@@ -2700,7 +2875,7 @@ fn copy_file_with_archive_handling(
         println!("File copied to: {}", primary_destination_path.display());
         primary_destination_path
     };
-        
+    
     Ok(final_destination_path)
 }
 
