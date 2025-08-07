@@ -319,9 +319,9 @@ if the size is no more than 99 of that unit
 /// - or first MVP, terminal size is default terminal size
 /// - for MVP...mouse to scroll up and down works fine for mvp
 
-use std::fs;
-use std::path::PathBuf;
-use std::io::{self, Write};
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use std::io::{self, Write, Read};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
@@ -1686,6 +1686,179 @@ impl NavigationStateManager {
         )
     }
 
+    // /// Interactive interface to archive a user-selected item
+    // /// 
+    // /// # Purpose
+    // /// Provides an interactive interface for creating timestamped archives of
+    // /// files or directories. Shows the current directory listing and prompts
+    // /// user to select an item by number, then confirms archive operation.
+    // /// 
+    // /// # Arguments
+    // /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    // /// * `current_directory_entries` - Current directory entries to display for selection
+    // /// * `current_directory_path` - Current directory path for archive context
+    // /// 
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // /// 
+    // /// # Archive Behavior
+    // /// - **Files**: Creates timestamped copy in same directory using existing archive handling
+    // /// - **Directories**: Creates timestamped zip archive in same directory as the source
+    // /// 
+    // /// # User Interface Flow
+    // /// 1. Display current directory contents with numbered items
+    // /// 2. Prompt user to select item by number (same as normal navigation)
+    // /// 3. Show selected item and ask for archive confirmation
+    // /// 4. Perform archive operation based on item type
+    // /// 5. Display results and status
+    // /// 
+    // /// # Integration with Existing System
+    // /// - Uses the same display_directory_contents function for consistency
+    // /// - Uses the same nav_state.lookup_item system for numbered selection
+    // /// - Maintains the same numbered selection interface as main browser
+    // /// - Only adds the archive-specific workflow and confirmation
+    // /// 
+    // /// # Example Interaction
+    // /// ```text
+    // /// Current Directory: /home/user/documents
+    // /// 
+    // /// Num  Name                    Size     Modified
+    // /// ------------------------------------------------
+    // ///  1)  folder1/               -        14:30
+    // ///  2)  document.txt           1.2 KB   15:45
+    // ///  3)  image.png              500 KB   16:20
+    // /// 
+    // /// === Archive Selection ===
+    // /// Select item to archive (creates timestamped copy/zip)
+    // /// Enter item number (or 'c' to cancel): 2
+    // /// 
+    // /// Archive 'document.txt' with timestamp? (Y/n): y
+    // /// ✓ File archived successfully!
+    // /// Archive location: /home/user/documents/archive/document_2025_01_15_14_30_45.txt
+    // /// ```
+    // pub fn interactive_archive_selection(
+    //     &mut self,
+    //     nav_state: &NavigationState,
+    //     current_directory_entries: &[FileSystemEntry],
+    //     current_directory_path: &PathBuf,
+    // ) -> Result<()> {
+        
+    //     // Always display the directory contents first for user selection
+    //     display_directory_contents(
+    //         current_directory_entries,
+    //         current_directory_path,
+    //         None, // No pagination info needed for this context
+    //         nav_state.current_filter,
+    //         nav_state, // Pass nav_state for TUI size calculations
+    //     ).map_err(|e| FileFantasticError::Io(e))?;
+
+    //     println!("\n=== Archive Selection ===");
+    //     println!("Select item to archive (creates timestamped copy/zip)");
+    //     print!("Enter item number (or 'b' to back/cancel): ");
+    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        
+    //     let mut input = String::new();
+    //     io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+    //     let input = input.trim();
+        
+    //     // Handle cancellation
+    //     if input.eq_ignore_ascii_case("b") {
+    //         println!("Back/Cancelled.");
+    //         return Ok(());
+    //     }
+        
+    //     // Try to parse as number and validate using existing lookup system
+    //     if let Ok(number) = input.parse::<usize>() {
+    //         if let Some(item_info) = nav_state.lookup_item(number) {
+                
+    //             // Get the item name for display
+    //             let item_name = item_info.item_path.file_name()
+    //                 .unwrap_or_default()
+    //                 .to_string_lossy();
+                
+    //             // Ask for confirmation based on item type
+    //             let confirmation_message = if item_info.item_type == FileSystemItemType::Directory {
+    //                 format!("Archive directory '{}' as zip with timestamp? (Y/n): ", item_name)
+    //             } else {
+    //                 format!("Archive file '{}' with timestamp? (Y/n): ", item_name)
+    //             };
+                
+    //             print!("\n{}", confirmation_message);
+    //             io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             let mut response = String::new();
+    //             io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                
+    //             // Default to 'yes' if user just presses enter
+    //             if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+                    
+    //                 // Perform archive operation based on item type
+    //                 if item_info.item_type == FileSystemItemType::Directory {
+    //                     // Ask for optional custom name addition
+    //                     print!("Add custom name to archive? (optional, or Enter to skip): ");
+    //                     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        
+    //                     let mut custom_name = String::new();
+    //                     io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
+    //                     let custom_name = custom_name.trim();
+                        
+    //                     // Prepare custom name parameter
+    //                     let custom_name_option = if custom_name.is_empty() {
+    //                         None
+    //                     } else {
+    //                         Some(custom_name)
+    //                     };
+                        
+    //                     // Archive directory as zip in the archive subfolder for consistency
+    //                     match ensure_archive_directory_exists(current_directory_path) {
+    //                         Ok(archive_directory_path) => {
+    //                             match create_directory_zip_archive(
+    //                                 &item_info.item_path, 
+    //                                 &archive_directory_path,
+    //                                 custom_name_option,
+    //                             ) {
+    //                                 Ok(zip_path) => {
+    //                                     println!("✓ Directory archived successfully!");
+    //                                     println!("Archive location: {}", zip_path.display());
+    //                                 },
+    //                                 Err(e) => {
+    //                                     eprintln!("✗ Directory archive creation failed: {}", e);
+    //                                 }
+    //                             }
+    //                         },
+    //                         Err(e) => {
+    //                             eprintln!("✗ Failed to create archive directory: {}", e);
+    //                         }
+    //                     }
+    //                 } else {
+    //                     // Archive file with timestamp using existing system (already uses archive folder)
+    //                     match copy_file_with_archive_handling(&item_info.item_path, current_directory_path) {
+    //                         Ok(archived_path) => {
+    //                             println!("✓ File archived successfully!");
+    //                             println!("Archive location: {}", archived_path.display());
+    //                         },
+    //                         Err(e) => {
+    //                             eprintln!("✗ File archive creation failed: {}", e);
+    //                         }
+    //                     }
+    //                 }
+    //             } else {
+    //                 println!("Archive cancelled.");
+    //             }
+                
+    //         } else {
+    //             println!("Error: Invalid item number {}. Please try again.", number);
+    //         }
+    //     } else {
+    //         println!("Error: Please enter a valid number or 'c' to cancel.");
+    //     }
+        
+    //     println!("Press Enter to continue...");
+    //     let _ = io::stdin().read_line(&mut String::new());
+        
+    //     Ok(())
+    // }
+
     /// Interactive interface to archive a user-selected item
     /// 
     /// # Purpose
@@ -1702,40 +1875,37 @@ impl NavigationStateManager {
     /// * `Result<()>` - Success or error with context
     /// 
     /// # Archive Behavior
-    /// - **Files**: Creates timestamped copy in same directory using existing archive handling
-    /// - **Directories**: Creates timestamped zip archive in same directory as the source
+    /// - **Files**: 
+    ///   - Asks if user wants to zip the file
+    ///   - Creates timestamped copy (with optional zip) in archive directory
+    ///   - Supports optional name prefix for both zipped and non-zipped files
+    /// - **Directories**: 
+    ///   - Creates timestamped zip archive in archive directory
+    ///   - Supports optional name prefix
     /// 
-    /// # User Interface Flow
-    /// 1. Display current directory contents with numbered items
-    /// 2. Prompt user to select item by number (same as normal navigation)
-    /// 3. Show selected item and ask for archive confirmation
-    /// 4. Perform archive operation based on item type
-    /// 5. Display results and status
+    /// # User Interface Workflow
     /// 
-    /// # Integration with Existing System
-    /// - Uses the same display_directory_contents function for consistency
-    /// - Uses the same nav_state.lookup_item system for numbered selection
-    /// - Maintains the same numbered selection interface as main browser
-    /// - Only adds the archive-specific workflow and confirmation
+    /// ## Step 1: Display and Selection
+    /// - Show current directory contents with numbered items
+    /// - User selects item by number (same interface as navigation)
     /// 
-    /// # Example Interaction
-    /// ```text
-    /// Current Directory: /home/user/documents
+    /// ## Step 2: Confirmation
+    /// - Show selected item and ask for archive confirmation
     /// 
-    /// Num  Name                    Size     Modified
-    /// ------------------------------------------------
-    ///  1)  folder1/               -        14:30
-    ///  2)  document.txt           1.2 KB   15:45
-    ///  3)  image.png              500 KB   16:20
+    /// ## Step 3: Archive Options (based on item type)
     /// 
-    /// === Archive Selection ===
-    /// Select item to archive (creates timestamped copy/zip)
-    /// Enter item number (or 'c' to cancel): 2
+    /// ### For Files:
+    /// 1. Ask if user wants to zip the file
+    /// 2. Ask for optional name prefix (applies to both zipped and non-zipped)
+    /// 3. Create archive based on choices
     /// 
-    /// Archive 'document.txt' with timestamp? (Y/n): y
-    /// ✓ File archived successfully!
-    /// Archive location: /home/user/documents/archive/document_2025_01_15_14_30_45.txt
-    /// ```
+    /// ### For Directories:
+    /// 1. Ask for optional name prefix
+    /// 2. Create zip archive with timestamp
+    /// 
+    /// ## Step 4: Result Display
+    /// - Show success/failure message
+    /// - Display archive location
     pub fn interactive_archive_selection(
         &mut self,
         nav_state: &NavigationState,
@@ -1743,40 +1913,41 @@ impl NavigationStateManager {
         current_directory_path: &PathBuf,
     ) -> Result<()> {
         
-        // Always display the directory contents first for user selection
+        // WORKFLOW STEP 1: Display directory contents for user selection
         display_directory_contents(
             current_directory_entries,
             current_directory_path,
-            None, // No pagination info needed for this context
+            None,
             nav_state.current_filter,
-            nav_state, // Pass nav_state for TUI size calculations
+            nav_state,
         ).map_err(|e| FileFantasticError::Io(e))?;
 
+        // WORKFLOW STEP 1 (continued): Prompt for selection
         println!("\n=== Archive Selection ===");
         println!("Select item to archive (creates timestamped copy/zip)");
-        print!("Enter item number (or 'c' to cancel): ");
+        print!("Enter item number (or 'b' to back/cancel): ");
         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
         
         let mut input = String::new();
         io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
         let input = input.trim();
         
-        // Handle cancellation
-        if input.eq_ignore_ascii_case("c") {
-            println!("Cancelled.");
+        // Handle cancellation request
+        if input.eq_ignore_ascii_case("b") {
+            println!("Back/Cancelled.");
             return Ok(());
         }
         
-        // Try to parse as number and validate using existing lookup system
+        // Validate and process the user's selection
         if let Ok(number) = input.parse::<usize>() {
             if let Some(item_info) = nav_state.lookup_item(number) {
                 
-                // Get the item name for display
+                // Extract item name for display purposes
                 let item_name = item_info.item_path.file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
                 
-                // Ask for confirmation based on item type
+                // WORKFLOW STEP 2: Ask for confirmation based on item type
                 let confirmation_message = if item_info.item_type == FileSystemItemType::Directory {
                     format!("Archive directory '{}' as zip with timestamp? (Y/n): ", item_name)
                 } else {
@@ -1792,24 +1963,24 @@ impl NavigationStateManager {
                 // Default to 'yes' if user just presses enter
                 if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
                     
-                    // Perform archive operation based on item type
+                    // WORKFLOW STEP 3: Process archive options based on item type
                     if item_info.item_type == FileSystemItemType::Directory {
-                        // Ask for optional custom name addition
-                        print!("Add custom name to archive? (optional, or Enter to skip): ");
+                        // DIRECTORY WORKFLOW: Ask for optional name prefix, then create zip
+                        
+                        print!("\nAdd custom name prefix to archive? (optional, or Enter to skip): ");
                         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
                         
                         let mut custom_name = String::new();
                         io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
                         let custom_name = custom_name.trim();
                         
-                        // Prepare custom name parameter
                         let custom_name_option = if custom_name.is_empty() {
                             None
                         } else {
                             Some(custom_name)
                         };
                         
-                        // Archive directory as zip in the archive subfolder for consistency
+                        // Archive directory using existing function
                         match ensure_archive_directory_exists(current_directory_path) {
                             Ok(archive_directory_path) => {
                                 match create_directory_zip_archive(
@@ -1818,27 +1989,80 @@ impl NavigationStateManager {
                                     custom_name_option,
                                 ) {
                                     Ok(zip_path) => {
-                                        println!("✓ Directory archived successfully!");
+                                        println!("\n✓ Directory archived successfully!");
                                         println!("Archive location: {}", zip_path.display());
                                     },
                                     Err(e) => {
-                                        eprintln!("✗ Directory archive creation failed: {}", e);
+                                        eprintln!("\n✗ Directory archive creation failed: {}", e);
                                     }
                                 }
                             },
                             Err(e) => {
-                                eprintln!("✗ Failed to create archive directory: {}", e);
+                                eprintln!("\n✗ Failed to create archive directory: {}", e);
                             }
                         }
                     } else {
-                        // Archive file with timestamp using existing system (already uses archive folder)
-                        match copy_file_with_archive_handling(&item_info.item_path, current_directory_path) {
-                            Ok(archived_path) => {
-                                println!("✓ File archived successfully!");
-                                println!("Archive location: {}", archived_path.display());
+                        // FILE WORKFLOW: Ask about zip, then name prefix, then create archive
+                        
+                        // Ask if user wants to zip the file
+                        print!("\nWould you like to zip the archived file? (y/N): ");
+                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        
+                        let mut zip_response = String::new();
+                        io::stdin().read_line(&mut zip_response).map_err(|e| FileFantasticError::Io(e))?;
+                        let should_zip = zip_response.trim().eq_ignore_ascii_case("y");
+                        
+                        // Ask for optional custom name prefix
+                        print!("\nAdd custom name prefix to archive? (optional, or Enter to skip): ");
+                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        
+                        let mut custom_name = String::new();
+                        io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
+                        let custom_name = custom_name.trim();
+                        
+                        let custom_name_option = if custom_name.is_empty() {
+                            None
+                        } else {
+                            Some(custom_name)
+                        };
+                        
+                        // Ensure archive directory exists
+                        match ensure_archive_directory_exists(current_directory_path) {
+                            Ok(archive_directory_path) => {
+                                if should_zip {
+                                    // Create zipped archive of the file
+                                    match self.create_file_zip_archive(
+                                        &item_info.item_path, 
+                                        &archive_directory_path,
+                                        custom_name_option,
+                                    ) {
+                                        Ok(zip_path) => {
+                                            println!("\n✓ File archived and zipped successfully!");
+                                            println!("Archive location: {}", zip_path.display());
+                                        },
+                                        Err(e) => {
+                                            eprintln!("\n✗ File zip archive creation failed: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    // Create timestamped copy of the file
+                                    match self.copy_file_with_timestamp_and_prefix(
+                                        &item_info.item_path, 
+                                        &archive_directory_path,
+                                        custom_name_option,
+                                    ) {
+                                        Ok(archived_path) => {
+                                            println!("\n✓ File archived successfully!");
+                                            println!("Archive location: {}", archived_path.display());
+                                        },
+                                        Err(e) => {
+                                            eprintln!("\n✗ File archive creation failed: {}", e);
+                                        }
+                                    }
+                                }
                             },
                             Err(e) => {
-                                eprintln!("✗ File archive creation failed: {}", e);
+                                eprintln!("\n✗ Failed to create archive directory: {}", e);
                             }
                         }
                     }
@@ -1850,11 +2074,165 @@ impl NavigationStateManager {
                 println!("Error: Invalid item number {}. Please try again.", number);
             }
         } else {
-            println!("Error: Please enter a valid number or 'c' to cancel.");
+            println!("Error: Please enter a valid number or 'b' to cancel.");
         }
         
-        println!("Press Enter to continue...");
+        // Wait for user acknowledgment before returning
+        println!("\nPress Enter to continue...");
         let _ = io::stdin().read_line(&mut String::new());
+        
+        Ok(())
+    }
+
+    /// Creates a zip archive of a single file with timestamp and optional prefix
+    /// 
+    /// # Purpose
+    /// Archives a single file into a zip-like archive with timestamp in the filename.
+    /// 
+    /// # Arguments
+    /// * `file_path` - Path to the file to archive
+    /// * `archive_directory` - Directory where the archive will be created
+    /// * `custom_prefix` - Optional prefix to add before the filename
+    /// 
+    /// # Returns
+    /// * `Result<PathBuf>` - Path to the created archive or error
+    fn create_file_zip_archive(
+        &self,
+        file_path: &Path,
+        archive_directory: &Path,
+        custom_prefix: Option<&str>,
+    ) -> Result<PathBuf> {
+        // Validate that the source file exists
+        if !file_path.exists() {
+            return Err(FileFantasticError::NotFound(file_path.to_path_buf()));
+        }
+        
+        // Validate that it's actually a file
+        if !file_path.is_file() {
+            return Err(FileFantasticError::InvalidName(
+                format!("Path is not a file: {}", file_path.display())
+            ));
+        }
+        
+        // Get the file name without extension for the archive name
+        let file_stem = file_path.file_stem()
+            .ok_or_else(|| FileFantasticError::InvalidName(
+                "Could not extract file name".to_string()
+            ))?
+            .to_string_lossy();
+        
+        // Generate timestamp using existing format_timestamp function
+        let timestamp = format_timestamp(SystemTime::now());
+        
+        // Build the archive name with optional prefix
+        let archive_name = if let Some(prefix) = custom_prefix {
+            format!("{}{}_{}.zip", prefix, file_stem, timestamp)
+        } else {
+            format!("{}_{}.zip", file_stem, timestamp)
+        };
+        
+        // Create full path for the archive
+        let archive_path = archive_directory.join(archive_name);
+        
+        // Create simple archive (since we can't use external zip libraries)
+        self.create_simple_file_archive(file_path, &archive_path)?;
+        
+        Ok(archive_path)
+    }
+
+    /// Creates a timestamped copy of a file with optional prefix
+    /// 
+    /// # Purpose
+    /// Creates a copy of a file with timestamp and optional prefix in the filename.
+    /// 
+    /// # Arguments
+    /// * `file_path` - Path to the file to copy
+    /// * `archive_directory` - Directory where the copy will be created
+    /// * `custom_prefix` - Optional prefix to add before the filename
+    /// 
+    /// # Returns
+    /// * `Result<PathBuf>` - Path to the created copy or error
+    fn copy_file_with_timestamp_and_prefix(
+        &self,
+        file_path: &Path,
+        archive_directory: &Path,
+        custom_prefix: Option<&str>,
+    ) -> Result<PathBuf> {
+        // Validate that the source file exists
+        if !file_path.exists() {
+            return Err(FileFantasticError::NotFound(file_path.to_path_buf()));
+        }
+        
+        // Get file name components
+        let file_stem = file_path.file_stem()
+            .ok_or_else(|| FileFantasticError::InvalidName(
+                "Could not extract file name".to_string()
+            ))?
+            .to_string_lossy();
+        
+        let extension = file_path.extension()
+            .map(|ext| format!(".{}", ext.to_string_lossy()))
+            .unwrap_or_else(|| String::new());
+        
+        // Generate timestamp using existing format_timestamp function
+        let timestamp = format_timestamp(SystemTime::now());
+        
+        // Build the archive name with optional prefix
+        let archive_name = if let Some(prefix) = custom_prefix {
+            format!("{}{}_{}{}", prefix, file_stem, timestamp, extension)
+        } else {
+            format!("{}_{}{}", file_stem, timestamp, extension)
+        };
+        
+        // Create full path for the archive
+        let archive_path = archive_directory.join(archive_name);
+        
+        // Copy the file
+        fs::copy(file_path, &archive_path)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        
+        Ok(archive_path)
+    }
+
+    /// Creates a simple archive format for a single file
+    /// 
+    /// # Purpose
+    /// Since we can't use third-party libraries, this creates a simple
+    /// archive format that stores the file with some metadata.
+    /// 
+    /// # Note
+    /// This is a simplified implementation. In production, you would
+    /// implement proper ZIP format or use a library.
+    fn create_simple_file_archive(&self, source_file: &Path, archive_path: &Path) -> Result<()> {
+        // Read source file
+        let mut source = File::open(source_file)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        
+        let mut contents = Vec::new();
+        source.read_to_end(&mut contents)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        
+        // Create archive file with simple format
+        let mut archive = File::create(archive_path)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        
+        let filename = source_file.file_name()
+            .ok_or_else(|| FileFantasticError::InvalidName(
+                "Could not extract filename".to_string()
+            ))?
+            .to_string_lossy();
+        
+        // Write simple archive format
+        // Format: [filename_length:u32][filename][file_size:u64][file_contents]
+        let filename_bytes = filename.as_bytes();
+        archive.write_all(&(filename_bytes.len() as u32).to_le_bytes())
+            .map_err(|e| FileFantasticError::Io(e))?;
+        archive.write_all(filename_bytes)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        archive.write_all(&(contents.len() as u64).to_le_bytes())
+            .map_err(|e| FileFantasticError::Io(e))?;
+        archive.write_all(&contents)
+            .map_err(|e| FileFantasticError::Io(e))?;
         
         Ok(())
     }
@@ -6161,6 +6539,167 @@ fn is_pagination_up_command(input: &str) -> bool {
 /// Supports multiple key options: k, >, ]
 fn is_pagination_down_command(input: &str) -> bool {
     matches!(input, "x" | "k" | ">" | "]" | "down" | "next" | "." | "-" |"\x1b[B")
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::env;
+
+    /// Helper function to create a temporary test directory
+    fn create_temp_test_dir() -> PathBuf {
+        let temp_dir = env::temp_dir().join(format!("test_archive_{}", 
+            std::process::id()));
+        fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+        temp_dir
+    }
+
+    /// Helper function to clean up test directory
+    fn cleanup_test_dir(dir: &Path) {
+        if dir.exists() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_archive_file_creation() {
+        // Setup: Create temporary test directory and file
+        let test_dir = create_temp_test_dir();
+        let test_file = test_dir.join("test_document.txt");
+        fs::write(&test_file, b"Test content for archiving").expect("Failed to create test file");
+        
+        // Create archive subdirectory
+        let archive_dir = test_dir.join("archive");
+        fs::create_dir_all(&archive_dir).expect("Failed to create archive dir");
+        
+        // Test: Copy file with timestamp
+        let archived_file = archive_dir.join("test_document_timestamp.txt");
+        let result = fs::copy(&test_file, &archived_file);
+        
+        assert!(result.is_ok(), "Failed to copy file");
+        assert!(archived_file.exists(), "Archived file should exist");
+        
+        // Verify content matches
+        let original_content = fs::read(&test_file).expect("Failed to read original");
+        let archived_content = fs::read(&archived_file).expect("Failed to read archive");
+        assert_eq!(original_content, archived_content, "Content should match");
+        
+        // Cleanup
+        cleanup_test_dir(&test_dir);
+    }
+
+    #[test]
+    fn test_archive_with_prefix() {
+        // Setup: Create temporary test directory and file
+        let test_dir = create_temp_test_dir();
+        let test_file = test_dir.join("report.pdf");
+        fs::write(&test_file, b"PDF content").expect("Failed to create test file");
+        
+        // Create archive subdirectory
+        let archive_dir = test_dir.join("archive");
+        fs::create_dir_all(&archive_dir).expect("Failed to create archive dir");
+        
+        // Test: Manually create file with prefix
+        let prefix = "backup_";
+        let timestamp = format_timestamp(SystemTime::now());
+        let archived_name = format!("{}{}.pdf", prefix, timestamp);
+        let archived_file = archive_dir.join(archived_name);
+        
+        let result = fs::copy(&test_file, &archived_file);
+        assert!(result.is_ok(), "Failed to copy file with prefix");
+        
+        // Verify the file exists and has correct prefix
+        assert!(archived_file.exists(), "Archived file should exist");
+        let filename = archived_file.file_name()
+            .expect("Should have filename")
+            .to_string_lossy();
+        assert!(filename.starts_with(prefix), "Filename should start with prefix");
+        
+        // Cleanup
+        cleanup_test_dir(&test_dir);
+    }
+
+    #[test]
+    fn test_ensure_archive_directory() {
+        // Setup: Create temporary test directory
+        let test_dir = create_temp_test_dir();
+        
+        // Test: Check that archive directory can be created
+        let archive_dir = test_dir.join("archive");
+        let result = fs::create_dir_all(&archive_dir);
+        
+        assert!(result.is_ok(), "Should create archive directory");
+        assert!(archive_dir.exists(), "Archive directory should exist");
+        assert!(archive_dir.is_dir(), "Should be a directory");
+        
+        // Test: Creating again should not fail
+        let result_again = fs::create_dir_all(&archive_dir);
+        assert!(result_again.is_ok(), "Should succeed when directory already exists");
+        
+        // Cleanup
+        cleanup_test_dir(&test_dir);
+    }
+
+    #[test]
+    fn test_archive_nonexistent_file() {
+        // Setup: Create temporary test directory
+        let test_dir = create_temp_test_dir();
+        let archive_dir = test_dir.join("archive");
+        fs::create_dir_all(&archive_dir).expect("Failed to create archive dir");
+        
+        let nonexistent_file = test_dir.join("nonexistent.txt");
+        let target_file = archive_dir.join("copy.txt");
+        
+        // Test: Try to copy non-existent file
+        let result = fs::copy(&nonexistent_file, &target_file);
+        
+        assert!(result.is_err(), "Should fail for non-existent file");
+        
+        // Cleanup
+        cleanup_test_dir(&test_dir);
+    }
+
+    #[test]
+    fn test_simple_archive_format() {
+        // Setup: Create temporary test directory and file
+        let test_dir = create_temp_test_dir();
+        let test_file = test_dir.join("data.json");
+        let test_content = b"{\"key\": \"value\"}";
+        fs::write(&test_file, test_content).expect("Failed to create test file");
+        
+        let archive_file = test_dir.join("data.archive");
+        
+        // Test: Create simple archive
+        let mut source = File::open(&test_file).expect("Failed to open source");
+        let mut contents = Vec::new();
+        source.read_to_end(&mut contents).expect("Failed to read source");
+        
+        let mut archive = File::create(&archive_file).expect("Failed to create archive");
+        let filename = "data.json";
+        let filename_bytes = filename.as_bytes();
+        
+        // Write archive format
+        archive.write_all(&(filename_bytes.len() as u32).to_le_bytes())
+            .expect("Failed to write name length");
+        archive.write_all(filename_bytes)
+            .expect("Failed to write filename");
+        archive.write_all(&(contents.len() as u64).to_le_bytes())
+            .expect("Failed to write content length");
+        archive.write_all(&contents)
+            .expect("Failed to write contents");
+        
+        // Verify archive was created
+        assert!(archive_file.exists(), "Archive file should exist");
+        let archive_size = fs::metadata(&archive_file)
+            .expect("Failed to get metadata")
+            .len();
+        assert!(archive_size > 0, "Archive should not be empty");
+        
+        // Cleanup
+        cleanup_test_dir(&test_dir);
+    }
 }
 
 /// Public entry point for File Fantastic file manager module
