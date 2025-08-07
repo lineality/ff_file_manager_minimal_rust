@@ -5,7 +5,7 @@ see https://github.com/lineality/rust_compile_optimizations_cheatsheet
 
 #### For smallest size, build (~0.48 mb)
 ```bash
-cargo build --profile release-small 
+cargo build --profile release-small
 ```
 #### or for optimal performance (~6 mb)
 ```bash
