@@ -1859,56 +1859,48 @@ impl NavigationStateManager {
         Ok(())
     }
 
-    /// Interactive interface to add a file to the file stack
+    /// Interactive interface to add a file to the file stack with pagination support
     /// 
     /// # Purpose
     /// Provides an interactive interface for adding files to the file stack,
-    /// supporting both pre-selected files (with Y/n confirmation) and 
-    /// numbered selection from the current directory listing. This maintains 
-    /// consistency with the existing user interface while providing flexible
-    /// workflows for different user scenarios.
+    /// supporting paginated directory browsing when selecting files from large directories.
+    /// This maintains consistency with the existing user interface pagination while
+    /// providing the specialized workflow for file stack operations.
     /// 
     /// # Arguments
-    /// * `nav_state` - Current navigation state with lookup table for numbered selection and TUI settings
-    /// * `selected_file` - Optional pre-selected file path to offer as default confirmation
-    /// * `current_directory_entries` - Current directory entries to display for selection
+    /// * `nav_state` - Current navigation state with TUI settings for display calculations
+    /// * `all_directory_entries` - Complete list of all directory entries (not just current page)
     /// * `current_directory_path` - Current directory path for display context
     /// 
     /// # Returns
     /// * `Result<()>` - Success or error with context
     /// 
-    /// # TUI Size Respect
-    /// The file selection display respects the user's TUI size adjustments:
-    /// - Name column width follows wide+N/wide-N settings
-    /// - Number of items shown follows tall+N/tall-N settings
-    /// - Ensures consistent display experience across all interfaces
+    /// # Pagination Behavior
+    /// The function creates its own independent pagination context, allowing users to:
+    /// - Navigate through pages using standard pagination keys (w/x, j/k, </>, arrows)
+    /// - Select files by number from the currently visible page
+    /// - See pagination status (page X of Y) when multiple pages exist
+    /// - Respect user's TUI height settings for items per page
     /// 
     /// # User Interface Flow
-    /// 1. Clear any previous input to prevent buffer reuse bugs
-    /// 2. If pre-selected file exists, offer Y/n confirmation
-    /// 3. If declined or no pre-selection, show directory contents
-    /// 4. Display "Add File to Stack" prompt with directory listing
-    /// 5. User selects file by number (same as normal file browsing)
-    /// 6. Validate selection is a file (not directory)
-    /// 7. Add file to stack and show confirmation
+    /// 1. Create paginated view of all directory entries
+    /// 2. Display current page with "Add File to Stack" header
+    /// 3. Process user input for:
+    ///    - Page navigation (w/x, j/k, </>, arrows, etc.)
+    ///    - File selection by number (validates it's a file, not directory)
+    ///    - Cancellation ('c' or 'C')
+    /// 4. Add selected file to stack and show confirmation
     /// 
     /// # Integration with Existing System
+    /// - Uses the same DirectoryView pagination as the main browser
     /// - Uses the same display_directory_contents function for consistency
-    /// - Uses the same nav_state.lookup_item system for numbered selection
-    /// - Maintains the same numbered selection interface as main browser
     /// - Respects user's TUI size preferences throughout
-    /// - Only adds the stack-specific messaging and workflow
-    /// - Preserves all existing user interface patterns
-    /// 
-    /// # Input Buffer Management
-    /// - Clears stdin buffer to prevent reuse of previous menu selections
-    /// - Forces fresh user input for file selection
-    /// - Handles both confirmation and selection input patterns
+    /// - Maintains independent pagination state from main browser
+    /// - Uses same key bindings for page navigation as main interface
     /// 
     /// # Example Interaction
     /// ```text
     /// === Add File to Stack ===
-    /// Add 'document.txt' to file stack? (Y/n): n
     /// 
     /// Current Directory: /home/user/documents
     /// 
@@ -1918,14 +1910,15 @@ impl NavigationStateManager {
     ///  2)  document.txt           1.2 KB   15:45
     ///  3)  image.png              500 KB   16:20
     /// 
-    /// === Add File to Stack ===
+    /// --- Page 1 of 3: up/down, j/k, </>, w/x, arrows, etc. ---
+    /// 
     /// Type file number & press Enter to add to file-stack.
-    /// Enter file number (or 'c' to cancel): 2
+    /// Navigation: w/x, j/k for pages. Selection: number, 'c' to cancel: 2
     /// Added 'document.txt' to file stack. Total files: 1
     /// ```
     /// 
     /// # Error Handling
-    /// - Validates numbered selections against lookup table
+    /// - Validates numbered selections against current page entries
     /// - Ensures selected items are files, not directories
     /// - Provides clear error messages for invalid selections
     /// - Handles cancellation gracefully
@@ -1935,90 +1928,143 @@ impl NavigationStateManager {
     /// - Validates file existence before adding to stack
     /// - Provides confirmation with updated stack count
     /// - Maintains LIFO stack behavior for consistent operations
-    /// - Integrates with broader Get-Send-Mode workflow system
+    /// - Returns to main browser after selection or cancellation
     pub fn interactive_add_file_to_stack(
         &mut self,
         nav_state: &NavigationState,
-        selected_file: Option<&PathBuf>,
-        current_directory_entries: &[FileSystemEntry],
+        all_directory_entries: &[FileSystemEntry],
         current_directory_path: &PathBuf,
     ) -> Result<()> {
 
-        // Validate that the suggested file is actually in the current directory
-        let valid_suggestion = selected_file.filter(|file_path| {
-            // Check if file exists AND is in current directory
-            file_path.exists() && 
-            file_path.is_file() && 
-            file_path.parent() == Some(current_directory_path.as_path())
-        });
-        
-        // If there's a pre-selected file, offer it as the default
-        if let Some(file_path) = valid_suggestion {
-            println!("\n=== Add File to Stack ===");
-            // print!("Add '{}' to file stack? (Y/n): ", file_path.file_name().unwrap_or_default().to_string_lossy());
-            print!("Add '{}' to file stack? (Y/n): ", file_path.to_string_lossy());
-            io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-            
-            let mut response = String::new();
-            io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
-            
-            // Default to 'yes' if user just presses enter
-            if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
-                self.add_file_to_stack(file_path.clone())?;
-                println!("Added '{}' to file stack. Total files: {}", 
-                        file_path.file_name().unwrap_or_default().to_string_lossy(),
-                        self.file_path_stack.len());
-                return Ok(());
-            }
-            // If user declined ('n'), continue to numbered selection below
-        }
-
-        // Display directory contents for file selection with TUI size settings
-        display_directory_contents(
-            current_directory_entries,
-            current_directory_path,
-            None, // No pagination info needed for this context
-            nav_state.current_filter,
-            nav_state, // Pass nav_state for TUI size calculations
-        ).map_err(|e| FileFantasticError::Io(e))?;
-
-        println!("\n=== Add File to Stack ===");
-        println!("Type file number & press Enter to add to file-stack. (or 'c' to cancel)");
-        // print!("Enter file number (or 'c' to cancel): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-        
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
-        let input = input.trim();
-        
-        // Handle cancellation
-        if input.eq_ignore_ascii_case("c") {
-            println!("Cancelled.");
+        // Check if there are any entries to display
+        if all_directory_entries.is_empty() {
+            println!("No files or directories in current location.");
+            println!("Press Enter to continue...");
+            let _ = io::stdin().read_line(&mut String::new());
             return Ok(());
         }
         
-        // Try to parse as number and validate using existing lookup system
-        if let Ok(number) = input.parse::<usize>() {
-            if let Some(item_info) = nav_state.lookup_item(number) {
-                // Ensure it's a file, not a directory
-                if item_info.item_type == FileSystemItemType::File {
-                    self.add_file_to_stack(item_info.item_path.clone())?;
-                    println!("Added '{}' to file stack. Total files: {}", 
-                            item_info.item_path.file_name().unwrap_or_default().to_string_lossy(),
-                            self.file_path_stack.len());
-                } else {
-                    println!("Error: Item {} is a directory. Please select a file.", number);
-                }
-            } else {
-                println!("Error: Invalid file number {}. Please try again.", number);
-            }
-        } else {
-            println!("Error: Please enter a valid number or 'c' to cancel.");
-        }
+        // Calculate items per page based on user's TUI settings
+        let items_per_page = calculate_items_per_page_from_state(nav_state);
         
-        Ok(())
+        // Create paginated view for file selection
+        let mut dir_view = DirectoryView::new(all_directory_entries, items_per_page);
+        
+        // Clear screen once before starting pagination loop
+        print!("\x1B[2J\x1B[1;1H");
+        
+        // Pagination loop for file selection
+        loop {
+            // Get current page entries
+            let current_page_entries = dir_view.current_page_entries();
+            
+            // Display current page with pagination info
+            display_directory_contents(
+                current_page_entries,
+                current_directory_path,
+                Some((dir_view.current_page + 1, dir_view.total_pages())),
+                nav_state.current_filter,
+                nav_state,
+            ).map_err(|e| FileFantasticError::Io(e))?;
+            
+            // Display Add File to Stack prompt with navigation instructions
+            println!("=== Add File to Stack: Enter file # or (b)ack/cancel ===");
+            io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+            
+            // Get user input
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+            let input = input.trim();
+            
+            // Handle cancellation
+            if input.eq_ignore_ascii_case("b") {
+                println!("Back/Cancelled.");
+                // Brief pause so user can see the cancellation message
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                return Ok(());
+            }
+            
+            // Handle pagination commands - check these first before number parsing
+            if is_pagination_up_command(input) {
+                if dir_view.prev_page() {
+                    // Successfully moved to previous page, redraw
+                    print!("\x1B[2J\x1B[1;1H"); // Clear screen for clean redraw
+                    continue;
+                } else {
+                    // Already at first page
+                    println!("Already at first page. Press Enter to continue...");
+                    let _ = io::stdin().read_line(&mut String::new());
+                    continue;
+                }
+            } else if is_pagination_down_command(input) {
+                if dir_view.next_page() {
+                    // Successfully moved to next page, redraw
+                    print!("\x1B[2J\x1B[1;1H"); // Clear screen for clean redraw
+                    continue;
+                } else {
+                    // Already at last page
+                    println!("Already at last page. Press Enter to continue...");
+                    let _ = io::stdin().read_line(&mut String::new());
+                    continue;
+                }
+            }
+            
+            // Try to parse as number for file selection
+            if let Ok(display_number) = input.parse::<usize>() {
+                // Convert display number to actual index in full entries list
+                if let Some(actual_index) = dir_view.get_actual_index(display_number) {
+                    // Validate index is within bounds
+                    if actual_index < all_directory_entries.len() {
+                        let selected_entry = &all_directory_entries[actual_index];
+                        
+                        // Ensure it's a file, not a directory
+                        if selected_entry.is_directory {
+                            println!("Error: '{}' is a directory. Please select a file.", 
+                                    selected_entry.file_system_item_name);
+                            println!("Press Enter to continue...");
+                            let _ = io::stdin().read_line(&mut String::new());
+                            // Stay on same page, let user try again
+                            continue;
+                        } else {
+                            // It's a file - add to stack
+                            self.add_file_to_stack(selected_entry.file_system_item_path.clone())?;
+                            println!("Added '{}' to file stack. Total files: {}", 
+                                    selected_entry.file_system_item_name,
+                                    self.file_path_stack.len());
+                            
+                            // Brief pause so user can see the success message
+                            std::thread::sleep(std::time::Duration::from_millis(1000));
+                            return Ok(());
+                        }
+                    } else {
+                        // Index out of bounds (shouldn't happen with get_actual_index, but be safe)
+                        println!("Error: Invalid selection. Please try again.");
+                        println!("Press Enter to continue...");
+                        let _ = io::stdin().read_line(&mut String::new());
+                        continue;
+                    }
+                } else {
+                    // Display number not valid for current page
+                    println!("Error: Number {} is not valid on this page. Valid range: 1-{}", 
+                            display_number,
+                            current_page_entries.len());
+                    println!("Press Enter to continue...");
+                    let _ = io::stdin().read_line(&mut String::new());
+                    continue;
+                }
+            } else if !input.is_empty() {
+                // Non-empty input that's not a number or recognized command
+                println!("Error: Please enter a valid number, pagination key, or 'c' to cancel.");
+                println!("Press Enter to continue...");
+                let _ = io::stdin().read_line(&mut String::new());
+                continue;
+            }
+            
+            // Empty input - just redraw the current page
+            print!("\x1B[2J\x1B[1;1H");
+        }
     }
-    
+            
     /// Q&A interface to select and return file from stack
     /// 
     /// # Purpose
@@ -4580,13 +4626,6 @@ impl NavigationState {
         self.selected_item_index = index;
     }
 
-    /// Gets the currently selected item path if any
-    fn get_selected_item_path(&self) -> Option<PathBuf> {
-        self.selected_item_index
-            .and_then(|idx| self.lookup_item(idx))
-            .map(|info| info.item_path.clone())
-    }
-
     /// Apply current filter to entries
     /// 
     /// # Purpose
@@ -6495,12 +6534,11 @@ pub fn file_fantastic() -> Result<()> {
                                 match state_manager.interactive_get_send_mode()? {
                                     GetSendModeAction::AddFileToStack => {
                                         // Get currently selected file if any
-                                        let selected_file_path = nav_state.get_selected_item_path();
+                                        // let selected_file_path = nav_state.get_selected_item_path();
                                         
                                         match state_manager.interactive_add_file_to_stack(
                                             &nav_state, 
-                                            selected_file_path.as_ref(),
-                                            page_entries, // Pass current page entries for display
+                                            &all_entries, // Pass ALL page entries for pagination
                                             &current_directory_path, // Pass current directory path
                                         ) {
                                             Ok(_) => println!("File stack operation completed."),
