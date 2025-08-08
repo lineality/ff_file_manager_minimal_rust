@@ -1948,8 +1948,11 @@ impl NavigationStateManager {
             ))?
             .to_string_lossy();
         
-        // Generate timestamp using existing format_timestamp function
-        let timestamp = format_timestamp(SystemTime::now());
+        // Generate full timestamp 
+        let timestamp = create_archive_timestamp_with_precision(
+            SystemTime::now(),
+            true,
+            );
         
         // Build the archive name with optional prefix
         let archive_name = if let Some(prefix) = custom_prefix {
@@ -2001,8 +2004,11 @@ impl NavigationStateManager {
             .map(|ext| format!(".{}", ext.to_string_lossy()))
             .unwrap_or_else(|| String::new());
         
-        // Generate timestamp using existing format_timestamp function
-        let timestamp = format_timestamp(SystemTime::now());
+        // Generate full timestamp
+        let timestamp = create_archive_timestamp_with_precision(
+            SystemTime::now(),
+            true,
+            );
         
         // Build the archive name with optional prefix
         let archive_name = if let Some(prefix) = custom_prefix {
@@ -2064,49 +2070,41 @@ impl NavigationStateManager {
         Ok(())
     }
 
-    /// Interactive interface to add a file to the file stack with pagination support
+    /// Interactive interface to add a file to the file stack
     /// 
     /// # Purpose
-    /// Provides an interactive interface for adding files to the file stack,
-    /// supporting paginated directory browsing when selecting files from large directories.
-    /// This maintains consistency with the existing user interface pagination while
-    /// providing the specialized workflow for file stack operations.
+    /// Provides a simple interactive interface for adding files to the file stack.
+    /// Shows the current directory listing and prompts user to select a file by number.
+    /// Works with the current page view only, utilizing existing navigation state.
     /// 
     /// # Arguments
-    /// * `nav_state` - Current navigation state with TUI settings for display calculations
-    /// * `all_directory_entries` - Complete list of all directory entries (not just current page)
+    /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    /// * `current_directory_entries` - Current directory entries to display for selection (current page only)
     /// * `current_directory_path` - Current directory path for display context
     /// 
     /// # Returns
     /// * `Result<()>` - Success or error with context
     /// 
-    /// # Pagination Behavior
-    /// The function creates its own independent pagination context, allowing users to:
-    /// - Navigate through pages using standard pagination keys (w/x, j/k, </>, arrows)
-    /// - Select files by number from the currently visible page
-    /// - See pagination status (page X of Y) when multiple pages exist
-    /// - Respect user's TUI height settings for items per page
+    /// # User Interface Workflow
     /// 
-    /// # User Interface Flow
-    /// 1. Create paginated view of all directory entries
-    /// 2. Display current page with "Add File to Stack" header
-    /// 3. Process user input for:
-    ///    - Page navigation (w/x, j/k, </>, arrows, etc.)
-    ///    - File selection by number (validates it's a file, not directory)
-    ///    - Cancellation ('c' or 'C')
-    /// 4. Add selected file to stack and show confirmation
+    /// ## Step 1: Display Current View
+    /// - Show current directory contents with numbered items (same as main navigation)
+    /// - This respects current filter and pagination state
     /// 
-    /// # Integration with Existing System
-    /// - Uses the same DirectoryView pagination as the main browser
-    /// - Uses the same display_directory_contents function for consistency
-    /// - Respects user's TUI size preferences throughout
-    /// - Maintains independent pagination state from main browser
-    /// - Uses same key bindings for page navigation as main interface
+    /// ## Step 2: Selection Prompt
+    /// - User selects item by number (same interface as navigation)
+    /// - Can cancel with 'b' for back
+    /// 
+    /// ## Step 3: Validation
+    /// - Verify selected item exists in lookup table
+    /// - Ensure selected item is a file (not a directory)
+    /// 
+    /// ## Step 4: Add to Stack
+    /// - Add file path to the file stack
+    /// - Display confirmation with updated stack count
     /// 
     /// # Example Interaction
     /// ```text
-    /// === Add File to Stack ===
-    /// 
     /// Current Directory: /home/user/documents
     /// 
     /// Num  Name                    Size     Modified
@@ -2115,161 +2113,104 @@ impl NavigationStateManager {
     ///  2)  document.txt           1.2 KB   15:45
     ///  3)  image.png              500 KB   16:20
     /// 
-    /// --- Page 1 of 3: up/down, j/k, </>, w/x, arrows, etc. ---
+    /// === Add File to Stack ===
+    /// Select file to add to stack
+    /// Enter file number (or 'b' to back/cancel): 2
     /// 
-    /// Type file number & press Enter to add to file-stack.
-    /// Navigation: w/x, j/k for pages. Selection: number, 'c' to cancel: 2
-    /// Added 'document.txt' to file stack. Total files: 1
+    /// ✓ Added 'document.txt' to file stack. Total files: 1
     /// ```
     /// 
     /// # Error Handling
-    /// - Validates numbered selections against current page entries
+    /// - Validates numbered selections against navigation lookup table
     /// - Ensures selected items are files, not directories
     /// - Provides clear error messages for invalid selections
     /// - Handles cancellation gracefully
     /// - Manages IO errors during user interaction
-    /// 
-    /// # Stack Integration
-    /// - Validates file existence before adding to stack
-    /// - Provides confirmation with updated stack count
-    /// - Maintains LIFO stack behavior for consistent operations
-    /// - Returns to main browser after selection or cancellation
     pub fn interactive_add_file_to_stack(
         &mut self,
         nav_state: &NavigationState,
-        all_directory_entries: &[FileSystemEntry],
+        current_directory_entries: &[FileSystemEntry],
         current_directory_path: &PathBuf,
     ) -> Result<()> {
+        
+        // WORKFLOW STEP 1: Display current directory contents
+        // This shows the current page with existing filters and numbering
+        display_directory_contents(
+            current_directory_entries,
+            current_directory_path,
+            None,  // Pagination info handled by main navigation
+            nav_state.current_filter,
+            nav_state,
+        ).map_err(|e| FileFantasticError::Io(e))?;
 
-        // Check if there are any entries to display
-        if all_directory_entries.is_empty() {
-            println!("No files or directories in current location.");
-            println!("Press Enter to continue...");
-            let _ = io::stdin().read_line(&mut String::new());
+        // WORKFLOW STEP 2: Prompt for file selection
+        println!("\n=== Add File to Stack ===");
+        println!("Select file to add to stack");
+        print!("Enter file number (or 'b' to back/cancel): ");
+        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        
+        // Read user input
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        let input = input.trim();
+        
+        // Handle cancellation request
+        if input.eq_ignore_ascii_case("b") {
+            println!("Back/Cancelled.");
             return Ok(());
         }
         
-        // Calculate items per page based on user's TUI settings
-        let items_per_page = calculate_items_per_page_from_state(nav_state);
-        
-        // Create paginated view for file selection
-        let mut dir_view = DirectoryView::new(all_directory_entries, items_per_page);
-        
-        // Clear screen once before starting pagination loop
-        print!("\x1B[2J\x1B[1;1H");
-        
-        // Pagination loop for file selection
-        loop {
-            // Get current page entries
-            let current_page_entries = dir_view.current_page_entries();
-            
-            // Display current page with pagination info
-            display_directory_contents(
-                current_page_entries,
-                current_directory_path,
-                Some((dir_view.current_page + 1, dir_view.total_pages())),
-                nav_state.current_filter,
-                nav_state,
-            ).map_err(|e| FileFantasticError::Io(e))?;
-            
-            // Display Add File to Stack prompt with navigation instructions
-            println!("=== Add File to Stack: Enter file # or (b)ack/cancel ===");
-            io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
-            
-            // Get user input
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
-            let input = input.trim();
-            
-            // Handle cancellation
-            if input.eq_ignore_ascii_case("b") {
-                println!("Back/Cancelled.");
-                // Brief pause so user can see the cancellation message
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                return Ok(());
-            }
-            
-            // Handle pagination commands - check these first before number parsing
-            if is_pagination_up_command(input) {
-                if dir_view.prev_page() {
-                    // Successfully moved to previous page, redraw
-                    print!("\x1B[2J\x1B[1;1H"); // Clear screen for clean redraw
-                    continue;
+        // WORKFLOW STEP 3: Validate and process the user's selection
+        if let Ok(number) = input.parse::<usize>() {
+            // Use navigation state's lookup to find the selected item
+            if let Some(item_info) = nav_state.lookup_item(number) {
+                
+                // Check if selected item is a file (not a directory)
+                if item_info.item_type == FileSystemItemType::Directory {
+                    // User selected a directory - show error and return
+                    let item_name = item_info.item_path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    eprintln!("\n✗ Error: '{}' is a directory. Please select a file.", item_name);
                 } else {
-                    // Already at first page
-                    println!("Already at first page. Press Enter to continue...");
-                    let _ = io::stdin().read_line(&mut String::new());
-                    continue;
-                }
-            } else if is_pagination_down_command(input) {
-                if dir_view.next_page() {
-                    // Successfully moved to next page, redraw
-                    print!("\x1B[2J\x1B[1;1H"); // Clear screen for clean redraw
-                    continue;
-                } else {
-                    // Already at last page
-                    println!("Already at last page. Press Enter to continue...");
-                    let _ = io::stdin().read_line(&mut String::new());
-                    continue;
-                }
-            }
-            
-            // Try to parse as number for file selection
-            if let Ok(display_number) = input.parse::<usize>() {
-                // Convert display number to actual index in full entries list
-                if let Some(actual_index) = dir_view.get_actual_index(display_number) {
-                    // Validate index is within bounds
-                    if actual_index < all_directory_entries.len() {
-                        let selected_entry = &all_directory_entries[actual_index];
-                        
-                        // Ensure it's a file, not a directory
-                        if selected_entry.is_directory {
-                            println!("Error: '{}' is a directory. Please select a file.", 
-                                    selected_entry.file_system_item_name);
-                            println!("Press Enter to continue...");
-                            let _ = io::stdin().read_line(&mut String::new());
-                            // Stay on same page, let user try again
-                            continue;
-                        } else {
-                            // It's a file - add to stack
-                            self.add_file_to_stack(selected_entry.file_system_item_path.clone())?;
-                            println!("Added '{}' to file stack. Total files: {}", 
-                                    selected_entry.file_system_item_name,
+                    // WORKFLOW STEP 4: It's a file - add to stack
+                    
+                    // Extract file name for display
+                    let file_name = item_info.item_path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    
+                    // Add the file to the stack
+                    match self.add_file_to_stack(item_info.item_path.clone()) {
+                        Ok(()) => {
+                            // Success - show confirmation with stack count
+                            println!("\n✓ Added '{}' to file stack. Total files: {}", 
+                                    file_name,
                                     self.file_path_stack.len());
-                            
-                            // Brief pause so user can see the success message
-                            std::thread::sleep(std::time::Duration::from_millis(1000));
-                            return Ok(());
+                        },
+                        Err(e) => {
+                            // Failed to add to stack - show error
+                            eprintln!("\n✗ Failed to add file to stack: {}", e);
                         }
-                    } else {
-                        // Index out of bounds (shouldn't happen with get_actual_index, but be safe)
-                        println!("Error: Invalid selection. Please try again.");
-                        println!("Press Enter to continue...");
-                        let _ = io::stdin().read_line(&mut String::new());
-                        continue;
                     }
-                } else {
-                    // Display number not valid for current page
-                    println!("Error: Number {} is not valid on this page. Valid range: 1-{}", 
-                            display_number,
-                            current_page_entries.len());
-                    println!("Press Enter to continue...");
-                    let _ = io::stdin().read_line(&mut String::new());
-                    continue;
                 }
-            } else if !input.is_empty() {
-                // Non-empty input that's not a number or recognized command
-                println!("Error: Please enter a valid number, pagination key, or 'c' to cancel.");
-                println!("Press Enter to continue...");
-                let _ = io::stdin().read_line(&mut String::new());
-                continue;
+                
+            } else {
+                // Invalid item number - not in lookup table
+                println!("Error: Invalid item number {}. Please try again.", number);
             }
-            
-            // Empty input - just redraw the current page
-            print!("\x1B[2J\x1B[1;1H");
+        } else {
+            // Input was not a valid number
+            println!("Error: Please enter a valid number or 'b' to cancel.");
         }
+        
+        // Wait for user acknowledgment before returning to main interface
+        println!("\nPress Enter to continue...");
+        let _ = io::stdin().read_line(&mut String::new());
+        
+        Ok(())
     }
-            
+
     /// Q&A interface to select and return file from stack
     /// 
     /// # Purpose
@@ -3455,6 +3396,233 @@ fn format_timestamp(timestamp: SystemTime) -> String {
     } else {
         // Older: show full date
         format!("{}-{:02}-{:02}", year, month, day)
+    }
+}
+
+/// Creates a timestamp string specifically for archive file naming
+/// 
+/// # Purpose
+/// Generates a consistent, sortable timestamp string for archive filenames
+/// that works identically across all platforms (Windows, Linux, macOS).
+/// 
+/// # Arguments
+/// * `time` - The SystemTime to format (typically SystemTime::now())
+/// 
+/// # Returns
+/// * `String` - Timestamp in format: "YY_MM_DD_HH_MM_SS"
+/// 
+/// # Format Specification
+/// - YY: Two-digit year (00-99)
+/// - MM: Two-digit month (01-12)
+/// - DD: Two-digit day (01-31)
+/// - HH: Two-digit hour in 24-hour format (00-23)
+/// - MM: Two-digit minute (00-59)
+/// - SS: Two-digit second (00-59)
+/// 
+/// # Examples
+/// - "24_01_15_14_30_45" for January 15, 2024 at 2:30:45 PM
+/// - "23_12_31_23_59_59" for December 31, 2023 at 11:59:59 PM
+/// 
+/// # Platform Consistency
+/// This function produces identical output on all platforms by using
+/// epoch-based calculations rather than platform-specific date commands.
+fn create_archive_timestamp(time: SystemTime) -> String {
+    // Get duration since Unix epoch
+    let duration_since_epoch = match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration,
+        Err(_) => {
+            // System time before Unix epoch - use fallback
+            eprintln!("Warning: System time is before Unix epoch, using fallback timestamp");
+            return String::from("70_01_01_00_00_00");
+        }
+    };
+    
+    let total_seconds = duration_since_epoch.as_secs();
+    
+    // Use the accurate date calculation
+    let (year, month, day, hour, minute, second) = epoch_seconds_to_datetime_components(total_seconds);
+    
+    // Format as YY_MM_DD_HH_MM_SS
+    format!(
+        "{:02}_{:02}_{:02}_{:02}_{:02}_{:02}",
+        year % 100,  // Two-digit year
+        month,
+        day,
+        hour,
+        minute,
+        second
+    )
+}
+
+/// Converts Unix epoch seconds to accurate date/time components
+/// 
+/// # Purpose
+/// Provides accurate date/time calculation that properly handles:
+/// - Leap years (including century rules)
+/// - Correct days per month
+/// - Time zones (UTC)
+/// 
+/// # Arguments
+/// * `epoch_seconds` - Seconds since Unix epoch (1970-01-01 00:00:00 UTC)
+/// 
+/// # Returns
+/// * `(year, month, day, hour, minute, second)` - All as u32 values
+/// 
+/// # Algorithm
+/// Uses proper calendar arithmetic to convert epoch seconds to date/time
+/// components, accounting for leap years and varying month lengths.
+fn epoch_seconds_to_datetime_components(epoch_seconds: u64) -> (u32, u32, u32, u32, u32, u32) {
+    // Time component calculations
+    const SECONDS_PER_MINUTE: u64 = 60;
+    const SECONDS_PER_HOUR: u64 = 3600;
+    const SECONDS_PER_DAY: u64 = 86400;
+    
+    // Calculate time of day components
+    let seconds_today = epoch_seconds % SECONDS_PER_DAY;
+    let hour = (seconds_today / SECONDS_PER_HOUR) as u32;
+    let minute = ((seconds_today % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE) as u32;
+    let second = (seconds_today % SECONDS_PER_MINUTE) as u32;
+    
+    // Calculate date components
+    let days_since_epoch = epoch_seconds / SECONDS_PER_DAY;
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+    
+    (year, month, day, hour, minute, second)
+}
+
+/// Converts days since Unix epoch to year, month, day
+/// 
+/// # Purpose
+/// Accurate calendar calculation that properly handles leap years
+/// and correct month lengths.
+/// 
+/// # Arguments
+/// * `days_since_epoch` - Days since 1970-01-01
+/// 
+/// # Returns
+/// * `(year, month, day)` - Calendar date components
+/// 
+/// # Leap Year Rules
+/// - Divisible by 4: leap year
+/// - Divisible by 100: not a leap year
+/// - Divisible by 400: leap year
+fn days_to_ymd(mut days_since_epoch: u64) -> (u32, u32, u32) {
+    // Start from 1970
+    let mut year = 1970u32;
+    
+    // Days in each month for normal and leap years
+    const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    const DAYS_IN_MONTH_LEAP: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    
+    // Helper function to check if a year is a leap year
+    let is_leap_year = |y: u32| -> bool {
+        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    };
+    
+    // Subtract days for complete years
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days_since_epoch >= days_in_year {
+            days_since_epoch -= days_in_year;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+    
+    // Now we have the year and remaining days in that year
+    let days_in_months = if is_leap_year(year) { 
+        &DAYS_IN_MONTH_LEAP 
+    } else { 
+        &DAYS_IN_MONTH 
+    };
+    
+    // Find the month and day
+    let mut month = 1u32;
+    let mut remaining_days = days_since_epoch as u32;
+    
+    for (month_index, &days_in_month) in days_in_months.iter().enumerate() {
+        if remaining_days >= days_in_month {
+            remaining_days -= days_in_month;
+            month += 1;
+        } else {
+            month = (month_index + 1) as u32;
+            break;
+        }
+    }
+    
+    // Day of month (1-based)
+    let day = remaining_days + 1;
+    
+    (year, month, day)
+}
+
+/// Creates a timestamp with optional microsecond precision for uniqueness
+/// 
+/// # Purpose
+/// When multiple archives might be created in the same second, this
+/// adds microsecond precision to ensure unique filenames.
+/// 
+/// # Arguments
+/// * `time` - The SystemTime to format
+/// * `include_microseconds` - Whether to append microseconds
+/// 
+/// # Returns
+/// * `String` - Timestamp, optionally with microseconds appended
+/// 
+/// # Format
+/// - Without microseconds: "YY_MM_DD_HH_MM_SS"
+/// - With microseconds: "YY_MM_DD_HH_MM_SS_UUUUUU"
+pub fn create_archive_timestamp_with_precision(
+    time: SystemTime, 
+    include_microseconds: bool
+) -> String {
+    let base_timestamp = create_archive_timestamp(time);
+    
+    if !include_microseconds {
+        return base_timestamp;
+    }
+    
+    // Get microseconds component
+    let duration_since_epoch = match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration,
+        Err(_) => return base_timestamp, // Fall back to base timestamp
+    };
+    
+    let microseconds = duration_since_epoch.as_micros() % 1_000_000;
+    
+    format!("{}_{:06}", base_timestamp, microseconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_archive_timestamp_format() {
+        // Test known epoch time
+        let epoch = UNIX_EPOCH;
+        let timestamp = create_archive_timestamp(epoch);
+        assert_eq!(timestamp, "70_01_01_00_00_00");
+    }
+    
+    #[test]
+    fn test_leap_year_calculation() {
+        // Test leap year handling
+        // February 29, 2024 (leap year)
+        // 2024-02-29 12:00:00 UTC = 1709208000 seconds since epoch
+        let leap_day = UNIX_EPOCH + Duration::from_secs(1709208000);
+        let timestamp = create_archive_timestamp(leap_day);
+        assert_eq!(timestamp, "24_02_29_12_00_00");
+    }
+    
+    #[test]
+    fn test_year_2000_problem() {
+        // Test year 2000 (was a leap year)
+        // 2000-02-29 00:00:00 UTC = 951782400 seconds since epoch
+        let y2k_leap = UNIX_EPOCH + Duration::from_secs(951782400);
+        let timestamp = create_archive_timestamp(y2k_leap);
+        assert_eq!(timestamp, "00_02_29_00_00_00");
     }
 }
 
@@ -6904,7 +7072,7 @@ pub fn file_fantastic() -> Result<()> {
                                         
                                         match state_manager.interactive_add_file_to_stack(
                                             &nav_state, 
-                                            &all_entries, // Pass ALL page entries for pagination
+                                            page_entries,// &all_entries, // Pass ALL page entries for pagination
                                             &current_directory_path, // Pass current directory path
                                         ) {
                                             Ok(_) => println!("File stack operation completed."),
