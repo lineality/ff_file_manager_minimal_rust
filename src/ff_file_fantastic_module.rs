@@ -1949,7 +1949,7 @@ impl NavigationStateManager {
             .to_string_lossy();
         
         // Generate full timestamp 
-        let timestamp = create_archive_timestamp_with_precision(
+        let timestamp = createarchive_timestamp_with_precision(
             SystemTime::now(),
             true,
             );
@@ -2005,7 +2005,7 @@ impl NavigationStateManager {
             .unwrap_or_else(|| String::new());
         
         // Generate full timestamp
-        let timestamp = create_archive_timestamp_with_precision(
+        let timestamp = createarchive_timestamp_with_precision(
             SystemTime::now(),
             true,
             );
@@ -3506,31 +3506,31 @@ fn epoch_seconds_to_datetime_components(epoch_seconds: u64) -> (u32, u32, u32, u
 /// - Divisible by 4: leap year
 /// - Divisible by 100: not a leap year
 /// - Divisible by 400: leap year
-fn days_to_ymd(mut days_since_epoch: u64) -> (u32, u32, u32) {
-    // Start from 1970
+fn days_to_ymd(days_since_epoch: u64) -> (u32, u32, u32) {
+    // Start from 1970-01-01
     let mut year = 1970u32;
-    
-    // Days in each month for normal and leap years
-    const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    const DAYS_IN_MONTH_LEAP: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut remaining_days = days_since_epoch;
     
     // Helper function to check if a year is a leap year
     let is_leap_year = |y: u32| -> bool {
         (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
     };
     
-    // Subtract days for complete years
-    loop {
+    // Subtract complete years
+    while remaining_days > 0 {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if days_since_epoch >= days_in_year {
-            days_since_epoch -= days_in_year;
+        if remaining_days >= days_in_year {
+            remaining_days -= days_in_year;
             year += 1;
         } else {
             break;
         }
     }
     
-    // Now we have the year and remaining days in that year
+    // Days in each month for normal and leap years
+    const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    const DAYS_IN_MONTH_LEAP: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    
     let days_in_months = if is_leap_year(year) { 
         &DAYS_IN_MONTH_LEAP 
     } else { 
@@ -3539,20 +3539,19 @@ fn days_to_ymd(mut days_since_epoch: u64) -> (u32, u32, u32) {
     
     // Find the month and day
     let mut month = 1u32;
-    let mut remaining_days = days_since_epoch as u32;
+    let mut days_left = remaining_days as u32;
     
-    for (month_index, &days_in_month) in days_in_months.iter().enumerate() {
-        if remaining_days >= days_in_month {
-            remaining_days -= days_in_month;
+    for &days_in_month in days_in_months.iter() {
+        if days_left >= days_in_month {
+            days_left -= days_in_month;
             month += 1;
         } else {
-            month = (month_index + 1) as u32;
             break;
         }
     }
     
-    // Day of month (1-based)
-    let day = remaining_days + 1;
+    // Day of month (1-based), add 1 because we want 1-31, not 0-30
+    let day = days_left + 1;
     
     (year, month, day)
 }
@@ -3573,7 +3572,7 @@ fn days_to_ymd(mut days_since_epoch: u64) -> (u32, u32, u32) {
 /// # Format
 /// - Without microseconds: "YY_MM_DD_HH_MM_SS"
 /// - With microseconds: "YY_MM_DD_HH_MM_SS_UUUUUU"
-pub fn create_archive_timestamp_with_precision(
+pub fn createarchive_timestamp_with_precision(
     time: SystemTime, 
     include_microseconds: bool
 ) -> String {
@@ -3592,38 +3591,6 @@ pub fn create_archive_timestamp_with_precision(
     let microseconds = duration_since_epoch.as_micros() % 1_000_000;
     
     format!("{}_{:06}", base_timestamp, microseconds)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_archive_timestamp_format() {
-        // Test known epoch time
-        let epoch = UNIX_EPOCH;
-        let timestamp = create_archive_timestamp(epoch);
-        assert_eq!(timestamp, "70_01_01_00_00_00");
-    }
-    
-    #[test]
-    fn test_leap_year_calculation() {
-        // Test leap year handling
-        // February 29, 2024 (leap year)
-        // 2024-02-29 12:00:00 UTC = 1709208000 seconds since epoch
-        let leap_day = UNIX_EPOCH + Duration::from_secs(1709208000);
-        let timestamp = create_archive_timestamp(leap_day);
-        assert_eq!(timestamp, "24_02_29_12_00_00");
-    }
-    
-    #[test]
-    fn test_year_2000_problem() {
-        // Test year 2000 (was a leap year)
-        // 2000-02-29 00:00:00 UTC = 951782400 seconds since epoch
-        let y2k_leap = UNIX_EPOCH + Duration::from_secs(951782400);
-        let timestamp = create_archive_timestamp(y2k_leap);
-        assert_eq!(timestamp, "00_02_29_00_00_00");
-    }
 }
 
 /// Convert seconds since epoch to year, month, day, hour, minute components
@@ -5390,6 +5357,33 @@ mod tests {
         let old_formatted = format_timestamp(old_date);
         assert_eq!(old_formatted, "1970-01-01");
     }
+    
+    #[test]
+    fn test_archive_timestamp_format() {
+        // Test known epoch time
+        let epoch = UNIX_EPOCH;
+        let timestamp = create_archive_timestamp(epoch);
+        assert_eq!(timestamp, "70_01_01_00_00_00");
+    }
+    
+    #[test]
+    fn test_leap_year_calculation() {
+        // Test leap year handling
+        // February 29, 2024 (leap year)
+        // 2024-02-29 12:00:00 UTC = 1709208000 seconds since epoch
+        let leap_day = UNIX_EPOCH + Duration::from_secs(1709208000);
+        let timestamp = create_archive_timestamp(leap_day);
+        assert_eq!(timestamp, "24_02_29_12_00_00");
+    }
+    
+    #[test]
+    fn test_year_2000_problem() {
+        // Test year 2000 (was a leap year)
+        // 2000-02-29 00:00:00 UTC = 951782400 seconds since epoch
+        let y2k_leap = UNIX_EPOCH + Duration::from_secs(951782400);
+        let timestamp = create_archive_timestamp(y2k_leap);
+        assert_eq!(timestamp, "00_02_29_00_00_00");
+    }
 }
 
 /// Truncates a file name for display in CLI based on current TUI width settings
@@ -6536,22 +6530,57 @@ fn is_pagination_down_command(input: &str) -> bool {
     matches!(input, "x" | "k" | ">" | "]" | "down" | "next" | "." | "-" |"\x1b[B")
 }
 
+
 #[cfg(test)]
-mod archive_tests {
+mod archive_tests_2 {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
     use std::env;
+    use std::io::{Read, Write};
+    use std::time::{SystemTime, UNIX_EPOCH, Duration};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Helper function to create a temporary test directory
+    // Static counter to ensure unique test directories
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Helper function to create a temporary test directory with guaranteed uniqueness
+    /// 
+    /// # Purpose
+    /// Creates a unique temporary directory for test isolation using a counter
+    /// to avoid conflicts between parallel tests
+    /// 
+    /// # Returns
+    /// * `PathBuf` - Path to the created temporary directory
     fn create_temp_test_dir() -> PathBuf {
-        let temp_dir = env::temp_dir().join(format!("test_archive_{}", 
-            std::process::id()));
-        fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+        // Use atomic counter for uniqueness across parallel tests
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        
+        // Create unique directory name with process ID, counter, and timestamp
+        let temp_dir = env::temp_dir().join(format!(
+            "test_archive_{}_{}_{}", 
+            std::process::id(),
+            counter,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_secs(0))
+                .as_nanos() // Use nanoseconds for even more uniqueness
+        ));
+        
+        // Create the directory
+        fs::create_dir_all(&temp_dir)
+            .unwrap_or_else(|e| panic!("Failed to create temp dir at {}: {}", temp_dir.display(), e));
+        
         temp_dir
     }
 
     /// Helper function to clean up test directory
+    /// 
+    /// # Purpose
+    /// Removes the test directory and all its contents after test completion
+    /// 
+    /// # Arguments
+    /// * `dir` - Path to the directory to remove
     fn cleanup_test_dir(dir: &Path) {
         if dir.exists() {
             let _ = fs::remove_dir_all(dir);
@@ -6562,23 +6591,56 @@ mod archive_tests {
     fn test_archive_file_creation() {
         // Setup: Create temporary test directory and file
         let test_dir = create_temp_test_dir();
+        
+        // Ensure test directory exists
+        assert!(test_dir.exists(), "Test directory should exist at: {}", test_dir.display());
+        
         let test_file = test_dir.join("test_document.txt");
-        fs::write(&test_file, b"Test content for archiving").expect("Failed to create test file");
+        fs::write(&test_file, b"Test content for archiving")
+            .unwrap_or_else(|e| panic!("Failed to create test file at {}: {}", test_file.display(), e));
+        
+        // Verify source file was created
+        assert!(test_file.exists(), "Test file should exist at: {}", test_file.display());
         
         // Create archive subdirectory
         let archive_dir = test_dir.join("archive");
-        fs::create_dir_all(&archive_dir).expect("Failed to create archive dir");
+        fs::create_dir_all(&archive_dir)
+            .unwrap_or_else(|e| panic!("Failed to create archive dir at {}: {}", archive_dir.display(), e));
         
-        // Test: Copy file with timestamp
-        let archived_file = archive_dir.join("test_document_timestamp.txt");
+        // Verify archive directory was created
+        assert!(archive_dir.exists(), "Archive directory should exist at: {}", archive_dir.display());
+        assert!(archive_dir.is_dir(), "Archive path should be a directory");
+        
+        // Test: Copy file with timestamp using the archive timestamp function
+        let timestamp = create_archive_timestamp(SystemTime::now());
+        
+        // Validate timestamp format before using it
+        println!("Generated timestamp: {}", timestamp);
+        assert!(!timestamp.is_empty(), "Timestamp should not be empty");
+        
+        let archived_file = archive_dir.join(format!("test_document_{}.txt", timestamp));
+        
+        // Debug: Print paths before copy
+        println!("Source file: {} (exists: {})", test_file.display(), test_file.exists());
+        println!("Archive dir: {} (exists: {})", archive_dir.display(), archive_dir.exists());
+        println!("Destination: {}", archived_file.display());
+        
+        // Ensure parent directory of destination exists
+        if let Some(parent) = archived_file.parent() {
+            assert!(parent.exists(), "Parent directory of destination should exist: {}", parent.display());
+        }
+        
         let result = fs::copy(&test_file, &archived_file);
         
-        assert!(result.is_ok(), "Failed to copy file");
-        assert!(archived_file.exists(), "Archived file should exist");
+        assert!(result.is_ok(), "Failed to copy file: {:?}\nFrom: {}\nTo: {}", 
+            result, test_file.display(), archived_file.display());
+        assert!(archived_file.exists(), "Archived file should exist at: {}", archived_file.display());
         
         // Verify content matches
-        let original_content = fs::read(&test_file).expect("Failed to read original");
-        let archived_content = fs::read(&archived_file).expect("Failed to read archive");
+        let original_content = fs::read(&test_file)
+            .expect("Failed to read original");
+        let archived_content = fs::read(&archived_file)
+            .expect("Failed to read archive");
         assert_eq!(original_content, archived_content, "Content should match");
         
         // Cleanup
@@ -6589,28 +6651,91 @@ mod archive_tests {
     fn test_archive_with_prefix() {
         // Setup: Create temporary test directory and file
         let test_dir = create_temp_test_dir();
+        
+        // Ensure test directory exists
+        assert!(test_dir.exists(), "Test directory should exist at: {}", test_dir.display());
+        
         let test_file = test_dir.join("report.pdf");
-        fs::write(&test_file, b"PDF content").expect("Failed to create test file");
+        fs::write(&test_file, b"PDF content")
+            .unwrap_or_else(|e| panic!("Failed to create test file at {}: {}", test_file.display(), e));
+        
+        // Double-check file was created
+        assert!(test_file.exists(), "Test file should exist at: {}", test_file.display());
+        assert!(test_file.is_file(), "Test file should be a file");
+        
+        // Read back to verify write succeeded
+        let content = fs::read(&test_file)
+            .unwrap_or_else(|e| panic!("Failed to read test file: {}", e));
+        assert_eq!(content, b"PDF content", "File content should match what was written");
         
         // Create archive subdirectory
         let archive_dir = test_dir.join("archive");
-        fs::create_dir_all(&archive_dir).expect("Failed to create archive dir");
+        fs::create_dir_all(&archive_dir)
+            .unwrap_or_else(|e| panic!("Failed to create archive dir at {}: {}", archive_dir.display(), e));
         
-        // Test: Manually create file with prefix
+        // Verify archive directory was created
+        assert!(archive_dir.exists(), "Archive directory should exist at: {}", archive_dir.display());
+        assert!(archive_dir.is_dir(), "Archive path should be a directory");
+        
+        // Test: Manually create file with prefix using the correct archive timestamp
         let prefix = "backup_";
-        let timestamp = format_timestamp(SystemTime::now());
-        let archived_name = format!("{}{}.pdf", prefix, timestamp);
-        let archived_file = archive_dir.join(archived_name);
+        let timestamp = create_archive_timestamp(SystemTime::now());
         
+        // Validate timestamp
+        println!("Generated timestamp: {}", timestamp);
+        assert!(!timestamp.is_empty(), "Timestamp should not be empty");
+        
+        let file_stem = "report";
+        let extension = ".pdf";
+        
+        // Build the archived filename: prefix + stem + _ + timestamp + extension
+        let archived_name = format!("{}{}_{}{}", prefix, file_stem, timestamp, extension);
+        let archived_file = archive_dir.join(&archived_name);
+        
+        // Debug: Print all paths and their status before copy
+        println!("Source file: {} (exists: {}, is_file: {})", 
+            test_file.display(), 
+            test_file.exists(), 
+            test_file.is_file());
+        println!("Archive dir: {} (exists: {}, is_dir: {})", 
+            archive_dir.display(), 
+            archive_dir.exists(), 
+            archive_dir.is_dir());
+        println!("Destination filename: {}", archived_name);
+        println!("Destination path: {}", archived_file.display());
+        
+        // List contents of test directory for debugging
+        println!("Test directory contents:");
+        if let Ok(entries) = fs::read_dir(&test_dir) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    println!("  - {}", entry.path().display());
+                }
+            }
+        }
+        
+        // Copy the file to the archive location
         let result = fs::copy(&test_file, &archived_file);
-        assert!(result.is_ok(), "Failed to copy file with prefix");
+        assert!(result.is_ok(), "Failed to copy file with prefix: {:?}\nSource: {}\nDest: {}", 
+            result, test_file.display(), archived_file.display());
         
         // Verify the file exists and has correct prefix
-        assert!(archived_file.exists(), "Archived file should exist");
+        assert!(archived_file.exists(), "Archived file should exist at: {}", archived_file.display());
+        
         let filename = archived_file.file_name()
             .expect("Should have filename")
             .to_string_lossy();
-        assert!(filename.starts_with(prefix), "Filename should start with prefix");
+        assert!(filename.starts_with(prefix), "Filename '{}' should start with prefix '{}'", filename, prefix);
+        
+        // Verify the timestamp format is correct (YY_MM_DD_HH_MM_SS)
+        assert!(filename.contains('_'), "Filename should contain underscores from timestamp");
+        
+        // Verify content integrity
+        let original_content = fs::read(&test_file)
+            .expect("Failed to read original");
+        let archived_content = fs::read(&archived_file)
+            .expect("Failed to read archive");
+        assert_eq!(original_content, archived_content, "Content should match");
         
         // Cleanup
         cleanup_test_dir(&test_dir);
@@ -6629,7 +6754,7 @@ mod archive_tests {
         assert!(archive_dir.exists(), "Archive directory should exist");
         assert!(archive_dir.is_dir(), "Should be a directory");
         
-        // Test: Creating again should not fail
+        // Test: Creating again should not fail (idempotent operation)
         let result_again = fs::create_dir_all(&archive_dir);
         assert!(result_again.is_ok(), "Should succeed when directory already exists");
         
@@ -6666,7 +6791,7 @@ mod archive_tests {
         
         let archive_file = test_dir.join("data.archive");
         
-        // Test: Create simple archive
+        // Test: Create simple archive using the documented format
         let mut source = File::open(&test_file).expect("Failed to open source");
         let mut contents = Vec::new();
         source.read_to_end(&mut contents).expect("Failed to read source");
@@ -6675,7 +6800,7 @@ mod archive_tests {
         let filename = "data.json";
         let filename_bytes = filename.as_bytes();
         
-        // Write archive format
+        // Write archive format: [filename_length:u32][filename][file_size:u64][file_contents]
         archive.write_all(&(filename_bytes.len() as u32).to_le_bytes())
             .expect("Failed to write name length");
         archive.write_all(filename_bytes)
@@ -6685,15 +6810,57 @@ mod archive_tests {
         archive.write_all(&contents)
             .expect("Failed to write contents");
         
-        // Verify archive was created
+        // Verify archive was created and has expected size
         assert!(archive_file.exists(), "Archive file should exist");
         let archive_size = fs::metadata(&archive_file)
             .expect("Failed to get metadata")
             .len();
-        assert!(archive_size > 0, "Archive should not be empty");
+        
+        // Expected size: 4 (name length) + 9 (filename) + 8 (content length) + content
+        let expected_size = 4 + filename_bytes.len() + 8 + contents.len();
+        assert_eq!(archive_size as usize, expected_size, "Archive size should match expected");
         
         // Cleanup
         cleanup_test_dir(&test_dir);
+    }
+    
+    #[test]
+    fn test_timestamp_format_consistency() {
+        // Test that timestamp format is consistent and valid for filenames
+        let test_time = SystemTime::now();
+        let timestamp = create_archive_timestamp(test_time);
+        
+        // Verify format: YY_MM_DD_HH_MM_SS
+        let parts: Vec<&str> = timestamp.split('_').collect();
+        assert_eq!(parts.len(), 6, "Timestamp should have 6 parts separated by underscores");
+        
+        // Verify each part is numeric and has correct length
+        assert_eq!(parts[0].len(), 2, "Year should be 2 digits");
+        assert_eq!(parts[1].len(), 2, "Month should be 2 digits");
+        assert_eq!(parts[2].len(), 2, "Day should be 2 digits");
+        assert_eq!(parts[3].len(), 2, "Hour should be 2 digits");
+        assert_eq!(parts[4].len(), 2, "Minute should be 2 digits");
+        assert_eq!(parts[5].len(), 2, "Second should be 2 digits");
+        
+        // Verify all parts are numeric
+        for part in parts {
+            assert!(part.chars().all(|c| c.is_ascii_digit()), 
+                "Timestamp part '{}' should only contain digits", part);
+        }
+    }
+    
+    #[test]
+    fn test_timestamp_no_invalid_characters() {
+        // Ensure timestamp doesn't contain characters invalid for filenames
+        let timestamp = create_archive_timestamp(SystemTime::now());
+        
+        // List of characters that are problematic in filenames across platforms
+        let invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '];
+        
+        for invalid_char in &invalid_chars {
+            assert!(!timestamp.contains(*invalid_char), 
+                "Timestamp should not contain invalid character '{}'", invalid_char);
+        }
     }
 }
 
