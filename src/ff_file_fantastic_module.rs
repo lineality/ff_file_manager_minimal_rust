@@ -2487,9 +2487,9 @@ impl NavigationStateManager {
         println!("4. Save current location as pocket dimension");
         println!("5. Go to pocket dimension");
         println!("6. View stacks and pocket dimensions");
-        println!("7. Archive Selection (file or dir zipped + timestamp)");
+        println!("7. Archive File/Directory 'a': zip, timestamp");
         println!("8. Clear all stacks");
-        println!("9. Return to file browser ( or empty Enter or (b)ack )");
+        println!("9. Return to file browser ( or empty-Enter or (b)ack )");
         println!();
         print!("Select action (1-8): ");
         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
