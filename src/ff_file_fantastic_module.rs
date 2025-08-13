@@ -5582,18 +5582,32 @@ fn display_directory_contents(
     Ok(())
 }
 
+/// Name of the data directory that contains File Fantastic configuration files
+const FF_DATA_DIRECTORY_NAME: &str = "ff_data";
+
+/// Name of the configuration file that contains partner program paths
+const PARTNER_PROGRAMS_CONFIG_FILENAME: &str = "absolute_paths_to_local_partner_fileopening_executibles.txt";
+
 /// Reads the partner programs configuration file and returns valid executable paths
 /// 
 /// # Purpose
-/// Manages the 'absolute_paths_to_local_partner_fileopening_executibles.txt' file
-/// that contains absolute paths to local executable programs. This file allows users
-/// to configure custom Rust executables or other local tools for opening files.
+/// Manages the partner programs configuration file located at:
+/// `{executable_directory}/ff_data/absolute_paths_to_local_partner_fileopening_executibles.txt`
+/// This file contains absolute paths to local executable programs that users want
+/// to use as file opening options alongside system-installed applications.
+/// 
+/// # Directory Structure
+/// ```
+/// /path/to/executable/
+/// ├── file_fantastic (or file_fantastic.exe)
+/// └── ff_data/                     <- Created if doesn't exist
+///     └── absolute_paths_to_local_partner_fileopening_executibles.txt
+/// ```
 /// 
 /// # Returns
 /// * `Vec<PathBuf>` - Vector of valid executable paths, empty if none found or errors occur
 /// 
-/// # File Location and Format
-/// The configuration file is located in the same directory as the File Fantastic executable.
+/// # File Format
 /// Each line should contain one absolute path to an executable:
 /// ```text
 /// /home/user/custom_tools/my_editor
@@ -5602,9 +5616,10 @@ fn display_directory_contents(
 /// ```
 /// 
 /// # Behavior
-/// 1. **File doesn't exist**: Creates empty file with helpful comments and returns empty vector
-/// 2. **File exists**: Reads all lines, validates each path, returns only valid executables
-/// 3. **Any errors**: Returns empty vector (graceful degradation to standard functionality)
+/// 1. **Directory doesn't exist**: Creates `ff_data` directory
+/// 2. **File doesn't exist**: Creates empty file with helpful comments and returns empty vector
+/// 3. **File exists**: Reads all lines, validates each path, returns only valid executables
+/// 4. **Any errors**: Returns empty vector (graceful degradation to standard functionality)
 /// 
 /// # Path Validation
 /// For each line in the file:
@@ -5648,102 +5663,159 @@ fn display_directory_contents(
 /// }
 /// ```
 fn read_partner_programs_file() -> Vec<PathBuf> {
-    // Try to get the executable directory
-    let exe_dir = match std::env::current_exe() {
-        Ok(exe_path) => match exe_path.parent() {
-            Some(parent) => parent.to_path_buf(),
-            None => {
-                eprintln!("Warning: Cannot determine executable directory for partner programs");
-                return Vec::new();
+    // Step 1: Get the executable directory
+    let executable_directory = match std::env::current_exe() {
+        Ok(exe_path) => {
+            match exe_path.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => {
+                    eprintln!("Warning: Cannot determine executable directory for partner programs");
+                    return Vec::new();
+                }
             }
         },
-        Err(e) => {
-            eprintln!("Warning: Cannot locate executable for partner programs: {}", e);
+        Err(error) => {
+            eprintln!("Warning: Cannot locate executable for partner programs: {}", error);
             return Vec::new();
         }
     };
     
-    let config_file_path = exe_dir.join("absolute_paths_to_local_partner_fileopening_executibles.txt");
+    // Step 2: Build path to ff_data directory
+    let ff_data_directory_path = executable_directory.join(FF_DATA_DIRECTORY_NAME);
     
-    // If file doesn't exist, create it with helpful comments
+    // Step 3: Create ff_data directory if it doesn't exist
+    if !ff_data_directory_path.exists() {
+        match fs::create_dir(&ff_data_directory_path) {
+            Ok(_) => {
+                println!("Created File Fantastic data directory: {}", 
+                        ff_data_directory_path.display());
+            },
+            Err(error) => {
+                eprintln!("Warning: Could not create ff_data directory at {}: {}", 
+                         ff_data_directory_path.display(), 
+                         error);
+                return Vec::new();
+            }
+        }
+    } else if !ff_data_directory_path.is_dir() {
+        // Path exists but is not a directory
+        eprintln!("Warning: ff_data path exists but is not a directory: {}", 
+                 ff_data_directory_path.display());
+        return Vec::new();
+    }
+    
+    // Step 4: Build path to configuration file within ff_data directory
+    let config_file_path = ff_data_directory_path.join(PARTNER_PROGRAMS_CONFIG_FILENAME);
+    
+    // Step 5: If configuration file doesn't exist, create it with helpful template
     if !config_file_path.exists() {
-        let initial_content = "# File Fantastic - Local Partner Programs Configuration\n\
-                              # Add absolute paths to local executables, one per line\n\
-                              # Example:\n\
+        // Template content with instructions for users
+        let initial_template_content = "# File Fantastic - Local Partner Programs Configuration\n\
+                              # This file allows you to register custom executables as file opening options\n\
+                              #\n\
+                              # Instructions:\n\
+                              # - Add absolute paths to local executables, one per line\n\
+                              # - Lines starting with # are comments and will be ignored\n\
+                              # - Empty lines are also ignored\n\
+                              # - Each path must point to an existing, executable file\n\
+                              #\n\
+                              # Examples:\n\
                               # /home/user/my_tools/custom_editor\n\
                               # /opt/local/bin/special_viewer\n\
                               # /usr/local/bin/custom_processor\n\
+                              # C:\\Users\\Username\\Tools\\my_program.exe (Windows)\n\
                               #\n\
-                              # Lines starting with # are comments and will be ignored\n\
-                              # Empty lines are also ignored\n\n";
+                              # These programs will appear as numbered options when opening files\n\
+                              # alongside your system's default applications.\n\n";
         
-        match fs::write(&config_file_path, initial_content) {
+        match fs::write(&config_file_path, initial_template_content) {
             Ok(_) => {
-                println!("Created partner programs config file: {}", config_file_path.display());
-                println!("Edit this file to add your custom executables");
+                println!("Created partner programs configuration file: {}", 
+                        config_file_path.display());
+                println!("Edit this file to add your custom executables for file opening");
             },
-            Err(e) => {
-                eprintln!("Warning: Could not create partner programs file: {}", e);
+            Err(error) => {
+                eprintln!("Warning: Could not create partner programs configuration file at {}: {}", 
+                         config_file_path.display(),
+                         error);
             }
         }
-        return Vec::new(); // New empty file, no programs configured yet
+        // Return empty vector since new file has no configured programs yet
+        return Vec::new();
     }
     
-    // Read the existing file
+    // Step 6: Read the existing configuration file
     let file_contents = match fs::read_to_string(&config_file_path) {
         Ok(contents) => contents,
-        Err(e) => {
-            eprintln!("Warning: Could not read partner programs file: {}", e);
+        Err(error) => {
+            eprintln!("Warning: Could not read partner programs file at {}: {}", 
+                     config_file_path.display(),
+                     error);
             return Vec::new(); // Graceful degradation
         }
     };
     
-    // Parse lines and validate paths
-    let mut valid_programs = Vec::new();
+    // Step 7: Parse lines and validate each path
+    let mut validated_partner_programs = Vec::new();
     
-    for (line_number, line) in file_contents.lines().enumerate() {
-        let line = line.trim();
+    for (line_index, line_content) in file_contents.lines().enumerate() {
+        // Remove leading and trailing whitespace
+        let trimmed_line = line_content.trim();
         
-        // Skip empty lines and comments
-        if line.is_empty() || line.starts_with('#') {
+        // Skip empty lines and comment lines
+        if trimmed_line.is_empty() || trimmed_line.starts_with('#') {
             continue;
         }
         
-        let program_path = PathBuf::from(line);
+        // Convert line to PathBuf for validation
+        let program_path = PathBuf::from(trimmed_line);
         
-        // Validate the path exists
+        // Validation 1: Check if path exists in filesystem
         if !program_path.exists() {
             eprintln!("Warning: Partner program path does not exist (line {}): {}", 
-                     line_number + 1, line);
+                     line_index + 1, 
+                     trimmed_line);
             continue;
         }
         
-        // Validate it's a file
+        // Validation 2: Check if path points to a file (not directory)
         if !program_path.is_file() {
             eprintln!("Warning: Partner program path is not a file (line {}): {}", 
-                     line_number + 1, line);
+                     line_index + 1, 
+                     trimmed_line);
             continue;
         }
         
-        // On Unix systems, check if file is executable
+        // Validation 3: On Unix systems, check executable permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = program_path.metadata() {
-                let permissions = metadata.permissions();
-                if permissions.mode() & 0o111 == 0 {
-                    eprintln!("Warning: Partner program is not executable (line {}): {}", 
-                             line_number + 1, line);
+            match program_path.metadata() {
+                Ok(metadata) => {
+                    let permissions = metadata.permissions();
+                    // Check if any execute bit is set (owner, group, or other)
+                    if permissions.mode() & 0o111 == 0 {
+                        eprintln!("Warning: Partner program lacks execute permissions (line {}): {}", 
+                                 line_index + 1, 
+                                 trimmed_line);
+                        continue;
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Warning: Could not check permissions for partner program (line {}): {}", 
+                             line_index + 1, 
+                             error);
                     continue;
                 }
             }
         }
         
-        // Path is valid, add to list
-        valid_programs.push(program_path);
+        // All validations passed - add to validated programs list
+        validated_partner_programs.push(program_path);
     }
     
-    valid_programs
+    // Return the list of validated partner programs
+    validated_partner_programs
 }
 
 /// Extracts the filename from a path for user-friendly display in program selection menus

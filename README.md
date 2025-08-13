@@ -13,8 +13,23 @@ cargo build --profile release-performance
 ```
 
 ## ~Install
-Put your executable-binary somewhere, and set the file-name of that file
-as a keyword for your command line interface (CLI) 
+
+### local/bin method
+Place the ff executible in the ~user's ~local 'bin' directory
+
+#### in linux:
+```path
+home/{YOUR_USER_NAME}/.local/bin
+```
+
+### in android:
+```path
+data/data/com.termux/files/user/bin
+```
+
+### Alias Method
+Put your executable-binary somewhere, and associate that path 
+with a callable keyword for your command line interface (CLI) 
 so that entering that keyword calls the executable (starts the program):
 
 1. Make or get the binary executable and put it somewhere: e.g.
@@ -40,7 +55,7 @@ alias ff='/home/COMPUTERNAME/ff_file_browser/ff'
 - If you used nano, you can do this by pressing: Ctrl x s (control key, x key, s key)
 - If you use Helix(hx), Vim(vi), or Teehee: 'i' to type, then esc for normal mode, then :wq to write and quit
 
-4. Reload the bash-shell configuration file, and maybe open a new terminal, to apply and use the changes.
+5. Reload the bash-shell configuration file, and maybe open a new terminal, to apply and use the changes.
 ```bash
 source ~/.bashrc
 ```
