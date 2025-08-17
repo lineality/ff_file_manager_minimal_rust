@@ -1521,61 +1521,62 @@ impl NavigationStateManager {
         }
     }
     
-    /// Adds a directory path to the directory stack after validation
-    /// 
-    /// # Purpose
-    /// Safely adds a directory path to the directory collection stack after
-    /// verifying that the path exists and actually points to a directory.
-    /// 
-    /// # Arguments
-    /// * `dir_path` - PathBuf pointing to the directory to add
-    /// 
-    /// # Returns
-    /// * `Result<()>` - Success or error with validation details
-    /// 
-    /// # Validation Process
-    /// 1. Checks that the path exists on the filesystem
-    /// 2. Verifies that the path points to a directory (not a file)
-    /// 3. Adds to stack only if both conditions are met
-    /// 
-    /// # Error Conditions
-    /// - Path does not exist (NotFound)
-    /// - Path exists but is not a directory (InvalidName)
-    /// 
-    /// # Stack Behavior
-    /// Directories are added to the end of the stack (LIFO - Last In, First Out).
-    /// This allows users to work with the most recently added directories first.
-    /// 
-    /// # Usage Context
-    /// Used for collecting destination directories for operations like:
-    /// - Copy/move operations
-    /// - Quick navigation bookmarks
-    /// - Batch processing targets
-    /// 
-    /// # Example
-    /// ```rust
-    /// let dir_path = PathBuf::from("/home/user/projects");
-    /// match state_manager.add_directory_to_stack(dir_path) {
-    ///     Ok(_) => println!("Directory added to stack"),
-    ///     Err(e) => println!("Failed to add directory: {}", e),
-    /// }
-    /// ```
-    pub fn add_directory_to_stack(&mut self, dir_path: PathBuf) -> Result<()> {
-        // Validate that the path exists
-        if !dir_path.exists() {
-            return Err(FileFantasticError::NotFound(dir_path));
-        }
+    /*pending use of saved directories*/
+    // /// Adds a directory path to the directory stack after validation
+    // /// 
+    // /// # Purpose
+    // /// Safely adds a directory path to the directory collection stack after
+    // /// verifying that the path exists and actually points to a directory.
+    // /// 
+    // /// # Arguments
+    // /// * `dir_path` - PathBuf pointing to the directory to add
+    // /// 
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with validation details
+    // /// 
+    // /// # Validation Process
+    // /// 1. Checks that the path exists on the filesystem
+    // /// 2. Verifies that the path points to a directory (not a file)
+    // /// 3. Adds to stack only if both conditions are met
+    // /// 
+    // /// # Error Conditions
+    // /// - Path does not exist (NotFound)
+    // /// - Path exists but is not a directory (InvalidName)
+    // /// 
+    // /// # Stack Behavior
+    // /// Directories are added to the end of the stack (LIFO - Last In, First Out).
+    // /// This allows users to work with the most recently added directories first.
+    // /// 
+    // /// # Usage Context
+    // /// Used for collecting destination directories for operations like:
+    // /// - Copy/move operations
+    // /// - Quick navigation bookmarks
+    // /// - Batch processing targets
+    // /// 
+    // /// # Example
+    // /// ```rust
+    // /// let dir_path = PathBuf::from("/home/user/projects");
+    // /// match state_manager.add_directory_to_stack(dir_path) {
+    // ///     Ok(_) => println!("Directory added to stack"),
+    // ///     Err(e) => println!("Failed to add directory: {}", e),
+    // /// }
+    // /// ```
+    // pub fn add_directory_to_stack(&mut self, dir_path: PathBuf) -> Result<()> {
+    //     // Validate that the path exists
+    //     if !dir_path.exists() {
+    //         return Err(FileFantasticError::NotFound(dir_path));
+    //     }
         
-        // Validate that the path is actually a directory
-        if dir_path.is_dir() {
-            self.directory_path_stack.push(dir_path);
-            Ok(())
-        } else {
-            Err(FileFantasticError::InvalidName(
-                "Path is not a directory".to_string()
-            ))
-        }
-    }
+    //     // Validate that the path is actually a directory
+    //     if dir_path.is_dir() {
+    //         self.directory_path_stack.push(dir_path);
+    //         Ok(())
+    //     } else {
+    //         Err(FileFantasticError::InvalidName(
+    //             "Path is not a directory".to_string()
+    //         ))
+    //     }
+    // }
     
     /// Gets and removes the most recent file from the file stack
     /// 
@@ -2301,55 +2302,58 @@ impl NavigationStateManager {
         Ok(None)
     }
     
-    /// Q&A interface to save current directory to directory stack
-    /// 
-    /// # Purpose
-    /// Provides an interactive interface for adding the current directory
-    /// to the directory stack, with user confirmation.
-    /// 
-    /// # Arguments
-    /// * `current_directory` - The current directory to potentially add
-    /// 
-    /// # Returns
-    /// * `Result<()>` - Success or error with context
-    /// 
-    /// # User Interface Flow
-    /// 1. Display the current directory path
-    /// 2. Ask for user confirmation to add it to the stack
-    /// 3. Add to stack if user confirms (default is yes)
-    /// 4. Display confirmation with current stack size
-    /// 
-    /// # Confirmation Logic
-    /// - Empty input or 'y'/'Y': Add to stack
-    /// - Any other input: Do not add to stack
-    /// 
-    /// # Example Interaction
-    /// ```text
-    /// === Add Directory to Stack ===
-    /// Current directory: /home/user/projects
-    /// Add current directory to stack? (Y/n): 
-    /// Added to directory stack. Total directories: 2
-    /// ```
-    pub fn interactive_save_directory_to_stack(&mut self, current_directory: &PathBuf) -> Result<()> {
-        println!("\n=== Add Directory to Stack ===");
-        println!("Current directory: {}", current_directory.display());
+    /*
+    pending use of saved directories
+    */
+    // /// Q&A interface to save current directory to directory stack
+    // /// 
+    // /// # Purpose
+    // /// Provides an interactive interface for adding the current directory
+    // /// to the directory stack, with user confirmation.
+    // /// 
+    // /// # Arguments
+    // /// * `current_directory` - The current directory to potentially add
+    // /// 
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // /// 
+    // /// # User Interface Flow
+    // /// 1. Display the current directory path
+    // /// 2. Ask for user confirmation to add it to the stack
+    // /// 3. Add to stack if user confirms (default is yes)
+    // /// 4. Display confirmation with current stack size
+    // /// 
+    // /// # Confirmation Logic
+    // /// - Empty input or 'y'/'Y': Add to stack
+    // /// - Any other input: Do not add to stack
+    // /// 
+    // /// # Example Interaction
+    // /// ```text
+    // /// === Add Directory to Stack ===
+    // /// Current directory: /home/user/projects
+    // /// Add current directory to stack? (Y/n): 
+    // /// Added to directory stack. Total directories: 2
+    // /// ```
+    // pub fn interactive_save_directory_to_stack(&mut self, current_directory: &PathBuf) -> Result<()> {
+    //     println!("\n=== Add Directory to Stack ===");
+    //     println!("Current directory: {}", current_directory.display());
         
-        print!("Add current directory to stack? (Y/n): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+    //     print!("Add current directory to stack? (Y/n): ");
+    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
         
-        let mut response = String::new();
-        io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+    //     let mut response = String::new();
+    //     io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
         
-        // Default to 'yes' if user just presses enter
-        if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
-            self.add_directory_to_stack(current_directory.clone())?;
-            println!("Added to directory stack. Total directories: {}", self.directory_path_stack.len());
-        } else {
-            println!("Cancelled.");
-        }
+    //     // Default to 'yes' if user just presses enter
+    //     if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //         self.add_directory_to_stack(current_directory.clone())?;
+    //         println!("Added to directory stack. Total directories: {}", self.directory_path_stack.len());
+    //     } else {
+    //         println!("Cancelled.");
+    //     }
         
-        Ok(())
-    }
+    //     Ok(())
+    // }
     
     /// Q&A interface to select pocket dimension to jump to
     /// 
@@ -2481,17 +2485,21 @@ impl NavigationStateManager {
         println!("\n=== Get-Send-Mode ===");
         println!("Current status: {}", self.get_stack_summary());
         println!();
-        println!("1. Add file to stack (select by number)");
-        println!("2. Get: Save file here, from file-stack");
-        println!("3. Add current directory to stack");
-        println!("4. Save current location as pocket dimension");
-        println!("5. Go to pocket dimension");
-        println!("6. View stacks and pocket dimensions");
-        println!("7. Archive File/Directory 'a': zip, timestamp");
-        println!("8. Clear all stacks");
-        println!("9. Return to file browser ( or empty-Enter or (b)ack )");
+        println!("1. Add file TO file-stack");
+        println!("2. Get: Save file here, FROM file-stack");
+        // println!("3. Add current directory to stack");
+        /*
+        Pending future functions
+        to use saved directory for something
+        */
+        println!("3. Save current location as pocket dimension");
+        println!("4. Go to pocket dimension");
+        println!("5. View stacks & pocket dimensions");
+        println!("6. Archive file/directory 'a': zip/timestamp");
+        println!("7. Clear all stacks");
+        // println!("--  --");
         println!();
-        print!("Select action (1-8): ");
+        print!("Select Action (1-7)  or (b)ack / empty-Enter ");
         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
         
         let mut input = String::new();
@@ -2501,13 +2509,13 @@ impl NavigationStateManager {
         match input.trim() {
             "1" => Ok(GetSendModeAction::AddFileToStack),
             "2" => Ok(GetSendModeAction::GetFileFromStack),
-            "3" => Ok(GetSendModeAction::AddDirectoryToStack),
-            "4" => Ok(GetSendModeAction::SavePocketDimension),
-            "5" => Ok(GetSendModeAction::GoToPocketDimension),
-            "6" => Ok(GetSendModeAction::ViewStacks),
-            "7" => Ok(GetSendModeAction::ArchiveSelection),
-            "8" => Ok(GetSendModeAction::ClearAll),
-            "9" | "" | "b" => Ok(GetSendModeAction::ReturnToBrowser), // Default to return
+            // "3" => Ok(GetSendModeAction::AddDirectoryToStack),
+            "3" => Ok(GetSendModeAction::SavePocketDimension),
+            "4" => Ok(GetSendModeAction::GoToPocketDimension),
+            "5" => Ok(GetSendModeAction::ViewStacks),
+            "6" => Ok(GetSendModeAction::ArchiveSelection),
+            "7" => Ok(GetSendModeAction::ClearAll),
+            "" | "b" => Ok(GetSendModeAction::ReturnToBrowser), // Default to return
             _ => {
                 println!("Invalid selection.");
                 Ok(GetSendModeAction::ReturnToBrowser) // Default for invalid input
@@ -2564,9 +2572,12 @@ pub enum GetSendModeAction {
     /// Triggers the interactive file selection and retrieval workflow
     GetFileFromStack,
     
-    /// Add current directory to the directory path stack
-    /// Triggers the directory addition workflow with confirmation
-    AddDirectoryToStack,
+    /*
+    pending future functions to use directory stack
+    */
+    // /// Add current directory to the directory path stack
+    // /// Triggers the directory addition workflow with confirmation
+    // AddDirectoryToStack,
     
     /// Save current navigation state as a pocket dimension
     /// Triggers the pocket dimension creation workflow with nickname selection
@@ -7359,12 +7370,15 @@ pub fn file_fantastic() -> Result<()> {
                                             Err(e) => println!("Error getting file from stack: {}", e),
                                         }
                                     },
-                                    GetSendModeAction::AddDirectoryToStack => {
-                                        match state_manager.interactive_save_directory_to_stack(&current_directory_path) {
-                                            Ok(_) => println!("Directory added to stack successfully."),
-                                            Err(e) => println!("Error adding directory to stack: {}", e),
-                                        }
-                                    },
+                                    /*
+                                    pending future functions to used saved dir-stack items
+                                    */
+                                    // GetSendModeAction::AddDirectoryToStack => {
+                                    //     match state_manager.interactive_save_directory_to_stack(&current_directory_path) {
+                                    //         Ok(_) => println!("Directory added to stack successfully."),
+                                    //         Err(e) => println!("Error adding directory to stack: {}", e),
+                                    //     }
+                                    // },
                                     GetSendModeAction::SavePocketDimension => {
                                         print!("Enter nickname for this location (or Enter for auto): ");
                                         io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
