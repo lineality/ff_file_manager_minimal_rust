@@ -4285,12 +4285,16 @@ fn process_user_input(
         }
     }
 
-    // fancy search options:
-    let search_results = nav_state.fuzzy_search_manager_wrapper(input, all_entries);
-    display_extended_search_results(&search_results, false).map_err(|e| {
-        eprintln!("Failed to display search results: {}", e);
-        FileFantasticError::Io(e)
-    })?;    
+
+        
+    // TODO cleanup zone    
+        
+    // // fancy search options:
+    // let search_results = nav_state.fuzzy_search_manager_wrapper(input, all_entries);
+    // display_extended_search_results(&search_results, false).map_err(|e| {
+    //     eprintln!("Failed to display search results: {}", e);
+    //     FileFantasticError::Io(e)
+    // })?;    
     
     // // original simple search
     // // // If not a command or number, treat as search
@@ -4299,6 +4303,18 @@ fn process_user_input(
     //     eprintln!("Failed to display search results: {}", e);
     //     FileFantasticError::Io(e)
     // })?;
+    
+    // Get both results and search type from wrapper
+    let (search_results, is_grep) = nav_state.fuzzy_search_manager_wrapper(input, all_entries);
+
+    // Pass the correct is_grep flag to display function
+    display_extended_search_results(&search_results, is_grep).map_err(|e| {
+        eprintln!("Failed to display search results: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+        
+    // test print TODO
+    println!("test print-> search_results -> {:?}", search_results);
     
     // Wait for user to select from results or press enter to continue
     print!("\nEnter number to select or press Enter to continue: ");
@@ -4313,16 +4329,53 @@ fn process_user_input(
         FileFantasticError::Io(e)
     })?;
     
+    // if let Ok(number) = selection.trim().parse::<usize>() {
+    //     // Find the search result with the matching display_index
+    //     if let Some(result) = search_results.iter().find(|r| r.display_index == number) {
+    //         // Get the original entry by its index to determine if it's a directory or file
+    //         if let Some(entry) = all_entries.get(number - 1) {
+    //             return Ok(if entry.is_directory {
+    //                 NavigationAction::ChangeDirectory(result.item_path.clone())
+    //             } else {
+    //                 NavigationAction::OpenFile(result.item_path.clone())
+    //             });
+    //         }
+    //     }
+    // }
+    
+    // TODO
+    // Handles user selection from search results
+    // 
+    // # Purpose
+    // After search results are displayed, this code processes the user's
+    // selection and determines the appropriate action. It must handle
+    // different search types (local fuzzy, recursive, grep) correctly.
+    // 
+    // # Critical Implementation Detail
+    // For grep and recursive searches, display_index values are renumbered
+    // (1, 2, 3...) and do NOT correspond to positions in all_entries.
+    // We must determine file/directory type from the SearchResult itself
+    // or the filesystem, not from all_entries.
+    // 
+    // # Search Type Behaviors
+    // - Local fuzzy search: display_index matches position in all_entries
+    // - Recursive search: display_index is renumbered, path may not be in all_entries
+    // - Grep search: display_index is renumbered, results are ALWAYS files
     if let Ok(number) = selection.trim().parse::<usize>() {
         // Find the search result with the matching display_index
         if let Some(result) = search_results.iter().find(|r| r.display_index == number) {
-            // Get the original entry by its index to determine if it's a directory or file
-            if let Some(entry) = all_entries.get(number - 1) {
-                return Ok(if entry.is_directory {
-                    NavigationAction::ChangeDirectory(result.item_path.clone())
-                } else {
-                    NavigationAction::OpenFile(result.item_path.clone())
-                });
+            // For grep results, we know they're always files (grep doesn't search directories)
+            if is_grep {
+                return Ok(NavigationAction::OpenFile(result.item_path.clone()));
+            }
+            
+            // For fuzzy searches (recursive or local), check if path is a directory
+            // We need to check the filesystem directly since recursive results
+            // aren't in all_entries
+            if result.item_path.is_dir() {
+                return Ok(NavigationAction::ChangeDirectory(result.item_path.clone()));
+            } else {
+                return Ok(NavigationAction::OpenFile(result.item_path.clone()));
             }
         }
     }
@@ -4788,88 +4841,174 @@ fn parse_input_flags(input: &str) -> (&str, bool, bool) {
     (search_term, recursive, grep)
 }
 
-/// Displays extended search results with support for grep context
+/// Displays search results with appropriate formatting based on search type
+/// 
+/// # Purpose
+/// Presents search results to the user in a readable tabular format,
+/// with different column layouts for fuzzy name searches versus grep content searches.
+/// This function adapts its display based on the search type to show the most
+/// relevant information for each mode.
 /// 
 /// # Arguments
-/// * `results` - Extended search results to display
-/// * `is_grep` - Whether these are grep results (shows different format)
+/// * `results` - Slice of SearchResult items to display
+/// * `is_grep` - Boolean flag indicating whether these are grep (content search) results
+///               or fuzzy name search results
 /// 
 /// # Returns
-/// * `io::Result<()>` - Success or IO error
+/// * `io::Result<()>` - Ok(()) on successful display, or an IO error if terminal
+///                       output operations fail
 /// 
 /// # Display Formats
 /// 
-/// ## Fuzzy Search Format:
+/// ## Fuzzy Name Search Format:
+/// Shows the Levenshtein distance to help users understand match quality
 /// ```text
 /// Search Results (Fuzzy Match)
-/// #     Name                          Distance
-/// ---------------------------------------------
-/// 1     example.txt                   2
-/// 2     sample.doc                    3
+/// #     Name                                     Distance  
+/// -------------------------------------------------------
+/// 1     example.txt                              1
+/// 2     example2.doc                             2
 /// ```
 /// 
-/// ## Grep Search Format:
+/// ## Grep Content Search Format:
+/// Shows the number of matching lines found in each file
 /// ```text
 /// Search Results (Content Match)
-/// #     File                          Line   Context
-/// --------------------------------------------------
-/// 1     src/main.rs                   42     println!("TODO: implement feature");
-/// 2     src/lib.rs                    15     // TODO: Add documentation
+/// #     File                                     Matches Found
+/// ------------------------------------------------------------
+/// 1     src/main.rs                              3
+/// 2     src/lib.rs                               1
 /// ```
 /// 
+/// # Implementation Details
+/// - Clears the terminal screen before displaying results for clean presentation
+/// - Truncates long filenames to maintain table alignment (max 38 characters)
+/// - Groups grep results by file to show total match count per file
+/// - Shows "No matches found" message for empty result sets
+/// 
+/// # User Interface Flow
+/// After displaying results, the user can:
+/// - Enter a number to select and navigate to that file
+/// - Press Enter to continue without selection
+/// 
 /// # Error Handling
-/// Returns IO errors from terminal output operations
+/// - Returns IO errors from terminal output operations
+/// - Handles empty result sets gracefully with informative message
+/// 
+/// # Example Usage
+/// ```rust
+/// // For fuzzy search results
+/// let results = nav_state.fuzzy_search_entries(&config, &entries);
+/// display_extended_search_results(&results, false)?;
+/// 
+/// // For grep search results  
+/// let results = nav_state.grep_search_files(&config, &entries)?;
+/// display_extended_search_results(&results, true)?;
+/// ```
 pub fn display_extended_search_results(
     results: &[SearchResult],
     is_grep: bool,
 ) -> io::Result<()> {
+    // Handle empty results with user-friendly message
     if results.is_empty() {
         println!("No matches found");
         return Ok(());
     }
     
-    // Clear screen
+    // Clear screen for clean display
     print!("\x1B[2J\x1B[1;1H");
     
     if is_grep {
-        // Display grep results
-        println!("\nSearch Results (Content Match)");
-        println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Context");
-        println!("{}", "-".repeat(80));
+        // For grep results, we need to count matches per file
+        // since grep_search_files creates one result per matching line
+        
+        // Group results by file path to count total matches per file
+        let mut matches_per_file: std::collections::HashMap<PathBuf, Vec<&SearchResult>> = 
+            std::collections::HashMap::new();
         
         for result in results {
-            let display_name = if result.item_name.len() > 28 {
-                format!("{}...", &result.item_name[..25])
+            matches_per_file
+                .entry(result.item_path.clone())
+                .or_insert_with(Vec::new)
+                .push(result);
+        }
+        
+        // Display header for grep results
+        println!("\nSearch Results (Content Match)");
+        println!("{:<5} {:<40} {:<15}", "#", "File", "Matches Found");
+        println!("{}", "-".repeat(60));
+        
+        // Convert HashMap to Vec for consistent ordering and display
+        let mut file_entries: Vec<_> = matches_per_file.into_iter().collect();
+        file_entries.sort_by_key(|(path, _)| path.clone());
+        
+        for (idx, (path, matches)) in file_entries.iter().enumerate() {
+            // Get the file name from the path
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            
+            // Truncate long filenames for display
+            let display_name = if file_name.len() > 38 {
+                format!("{}...", &file_name[..35])
             } else {
-                result.item_name.clone()
+                file_name.to_string()
             };
             
+            // Show file name and total number of matches found
             println!(
-                "{:<5} {:<30} {:<7} {}",
-                result.display_index,
+                "{:<5} {:<40} {:<15}",
+                idx + 1,
                 display_name,
-                result.line_number.unwrap_or(0),
-                result.match_context.as_ref().unwrap_or(&String::from(""))
+                matches.len()  // Number of matching lines in this file
             );
+            
+            // Optionally show first few match contexts as preview
+            // Limited to first 2 matches to avoid cluttering display
+            for (_match_idx, result) in matches.iter().take(2).enumerate() {
+                if let Some(ref context) = result.match_context {
+                    // Indent and show line number with context preview
+                    let preview = if context.len() > 50 {
+                        format!("{}...", &context[..47])
+                    } else {
+                        context.clone()
+                    };
+                    
+                    println!(
+                        "      Line {}: {}",
+                        result.line_number.unwrap_or(0),
+                        preview
+                    );
+                }
+            }
+            
+            // If there are more than 2 matches, indicate this
+            if matches.len() > 2 {
+                println!("      ... and {} more matches", matches.len() - 2);
+            }
         }
     } else {
-        // Display fuzzy search results
+        // Display header for fuzzy search results
         println!("\nSearch Results (Fuzzy Match)");
         println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
         println!("{}", "-".repeat(55));
         
+        // Display each fuzzy search result with its distance score
         for result in results {
+            // Truncate long filenames for display alignment
             let display_name = if result.item_name.len() > 38 {
                 format!("{}...", &result.item_name[..35])
             } else {
                 result.item_name.clone()
             };
             
+            // Show result number, name, and Levenshtein distance
             println!(
                 "{:<5} {:<40} {:<10}",
                 result.display_index,
                 display_name,
-                result.distance
+                result.distance  // Levenshtein distance for fuzzy matches
             );
         }
     }
@@ -5183,44 +5322,68 @@ impl NavigationState {
         // because users typically want to keep their preferred sort order
         // when refreshing/resetting the view
     }
-    
-    /// Master wrapper function that handles all search routing
+
+    /// Master wrapper function that handles all search routing and renumbers results
     /// 
     /// # Purpose
-    /// Takes raw user input, parses flags, and routes to appropriate search function
+    /// Takes raw user input, parses flags, routes to appropriate search function,
+    /// and renumbers results for proper user selection. This function serves as 
+    /// the central dispatcher for all search operations.
     /// 
     /// # Arguments
-    /// * `raw_input` - The raw string input from user (e.g., "document -r --grep")
-    /// * `current_dir_entries` - The entries in current directory (used if not recursive)
+    /// * `raw_input` - The raw string input from user including any flags
+    ///                 (e.g., "document", "document -r", "TODO --grep")
+    /// * `current_dir_entries` - The entries in current directory to search if not recursive
     /// 
     /// # Returns
-    /// * `Vec<SearchResult>` - Results from whichever search was performed
+    /// * `(Vec<SearchResult>, bool)` - Tuple containing:
+    ///   - Search results with display_index renumbered for selection
+    ///   - Boolean indicating if grep mode was used (true) or fuzzy search (false)
     /// 
-    /// # Flow
-    /// 1. Parse input for search term and flags
-    /// 2. Collect appropriate file list (current or recursive)
-    /// 3. Route to fuzzy name search or grep content search
-    /// 4. Return results in unified format
+    /// # Important: Display Index Renumbering
+    /// For recursive and grep searches, the original display_index values are 
+    /// meaningless since they refer to positions in different directories or
+    /// are duplicated for multiple matches. This function renumbers them
+    /// sequentially (1, 2, 3...) to match what the user sees in the display.
+    /// 
+    /// # Search Flow
+    /// 1. Parse input string for search term and flags (-r, --grep)
+    /// 2. Collect appropriate file list based on recursive flag
+    /// 3. Route to fuzzy name search or grep content search based on grep flag
+    /// 4. Renumber results for proper selection if recursive or grep
+    /// 5. Return results with search type indicator for proper display
+    /// 
+    /// # Examples
+    /// ```rust
+    /// // Fuzzy search in current dir - preserves original indices
+    /// let (results, is_grep) = nav_state.fuzzy_search_manager_wrapper("doc", &entries);
+    /// 
+    /// // Grep search - renumbers indices to 1, 2, 3...
+    /// let (results, is_grep) = nav_state.fuzzy_search_manager_wrapper("TODO --grep", &entries);
+    /// 
+    /// // Recursive search - renumbers indices to 1, 2, 3...
+    /// let (results, is_grep) = nav_state.fuzzy_search_manager_wrapper("doc -r", &entries);
+    /// ```
     pub fn fuzzy_search_manager_wrapper(
         &self, 
         raw_input: &str,
         current_dir_entries: &[FileSystemEntry]
-    ) -> Vec<SearchResult> {
+    ) -> (Vec<SearchResult>, bool) {
         
-        // Step 1: Parse the raw input
+        // Step 1: Parse the raw input for search term and flags
         let (search_term, recursive, grep) = parse_input_flags(raw_input);
         
-        // If empty search term, return empty results
+        // Early return for empty search term
         if search_term.is_empty() {
-            return Vec::new();
+            return (Vec::new(), false);
         }
         
-        // Step 2: Get the appropriate file list
+        // Step 2: Get the appropriate file list based on recursive flag
         let entries = if recursive {
             // Collect files recursively from current directory
             match self.collect_entries_recursive(&std::env::current_dir().unwrap_or_default()) {
                 Ok(entries) => entries,
-                Err(_) => return Vec::new(), // Return empty on error
+                Err(_) => return (Vec::new(), false),
             }
         } else {
             // Use the provided current directory entries
@@ -5228,7 +5391,7 @@ impl NavigationState {
         };
         
         // Step 3: Route to appropriate search function
-        if grep {
+        let mut results = if grep {
             // Route to grep content search
             let config = SearchConfig::new(search_term.to_string())
                 .with_recursive(recursive)
@@ -5245,7 +5408,78 @@ impl NavigationState {
                 .with_grep(false);
             
             self.fuzzy_search_entries(&config, &entries)
+        };
+        
+        // Step 4: Renumber display indices for recursive or grep searches
+        // This is critical for user selection to work correctly
+        if recursive || grep {
+            // For grep, we need to deduplicate by file first
+            if grep {
+                results = Self::deduplicate_grep_results(results);
+            }
+            
+            // Renumber all results sequentially
+            for (idx, result) in results.iter_mut().enumerate() {
+                result.display_index = idx + 1;
+            }
         }
+        // For non-recursive fuzzy search, keep original display_index values
+        // since they correspond to the actual position in current directory
+        
+        (results, grep)
+    }
+
+    /// Deduplicates grep results to show only one entry per file
+    /// 
+    /// # Purpose
+    /// Since grep_search_files creates one SearchResult per matching line,
+    /// we need to consolidate these into one result per file for selection.
+    /// This function keeps the first match for each file and aggregates
+    /// the match contexts.
+    /// 
+    /// # Arguments
+    /// * `results` - Vector of SearchResult items from grep search
+    /// 
+    /// # Returns
+    /// * `Vec<SearchResult>` - Deduplicated results with one entry per file
+    /// 
+    /// # Implementation Details
+    /// - Groups results by file path
+    /// - Keeps the first result for each file
+    /// - Combines match contexts from multiple matches
+    /// - Preserves line number information for display
+    /// 
+    /// # Example
+    /// If a file has 3 matching lines, grep_search_files creates 3 SearchResults.
+    /// This function consolidates them into 1 SearchResult with aggregated context.
+    fn deduplicate_grep_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
+        use std::collections::HashMap;
+        
+        // Group results by file path
+        let mut file_map: HashMap<PathBuf, Vec<SearchResult>> = HashMap::new();
+        
+        for result in results {
+            file_map
+                .entry(result.item_path.clone())
+                .or_insert_with(Vec::new)
+                .push(result);
+        }
+        
+        // Create one result per file
+        let mut deduplicated: Vec<SearchResult> = Vec::new();
+        
+        for (_path, matches) in file_map {
+            if let Some(first_match) = matches.into_iter().next() {
+                // Keep the first match as the representative
+                // The display function will show all matches when needed
+                deduplicated.push(first_match);
+            }
+        }
+        
+        // Sort by file name for consistent ordering
+        deduplicated.sort_by(|a, b| a.item_name.cmp(&b.item_name));
+        
+        deduplicated
     }
 
     /// Set or toggle filter mode
@@ -8313,7 +8547,7 @@ pub fn file_fantastic() -> Result<()> {
                             break;
                         },
                         NavigationAction::Invalid => {
-                            println!("Invalid input. Press Enter to continue...");
+                            println!("Not an item number. Please press Enter to continue...");  // TODO
                             let _ = io::stdin().read_line(&mut String::new());
                         }
                     }
