@@ -137,6 +137,7 @@ not work. In such cases it is nice to have a stable backup option.
 6. all errors to be handled
 7. terminal cli application
 8. Module to be used by other projects
+9. memory slim
 
 # Main functions/features:
 1. minimal text user interface (TUI)
@@ -152,6 +153,7 @@ not work. In such cases it is nice to have a stable backup option.
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
+13. Search: -g --grep, -r --recursive, -c --case-sensitive
 ```
 quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 ```
