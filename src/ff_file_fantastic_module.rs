@@ -3326,7 +3326,7 @@ impl<'a> DirectoryView<'a> {
 /// display_search_results(&results)?;
 /// ```
 #[derive(Debug)]
-struct SearchResult {
+pub struct SearchResult {
     /// Name of the matching item
     item_name: String,
     /// Full path to the item
@@ -3335,6 +3335,10 @@ struct SearchResult {
     distance: usize,
     /// Display index from the current view
     display_index: usize,
+    /// Optional context showing the matched line (for grep mode)
+    match_context: Option<String>,
+    /// Optional line number where match was found (for grep mode)
+    line_number: Option<usize>,
 }
 
 /// Formats a timestamp into a human-readable format
@@ -4281,12 +4285,20 @@ fn process_user_input(
         }
     }
 
-    // If not a command or number, treat as search
-    let search_results = nav_state.fuzzy_search(input, all_entries);
-    display_search_results(&search_results).map_err(|e| {
+    // fancy search options:
+    let search_results = nav_state.fuzzy_search_manager_wrapper(input, all_entries);
+    display_extended_search_results(&search_results, false).map_err(|e| {
         eprintln!("Failed to display search results: {}", e);
         FileFantasticError::Io(e)
-    })?;
+    })?;    
+    
+    // // original simple search
+    // // // If not a command or number, treat as search
+    // let search_results = nav_state.fuzzy_search(input, all_entries);
+    // display_search_results(&search_results).map_err(|e| {
+    //     eprintln!("Failed to display search results: {}", e);
+    //     FileFantasticError::Io(e)
+    // })?;
     
     // Wait for user to select from results or press enter to continue
     print!("\nEnter number to select or press Enter to continue: ");
@@ -4644,7 +4656,7 @@ struct DisplayedItemInfo {
 ///     is_directory: metadata.is_dir(),
 /// };
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileSystemEntry {
     /// The complete name of the file or directory
     file_system_item_name: String,
@@ -4662,84 +4674,333 @@ pub struct FileSystemEntry {
     is_directory: bool,
 }
 
-/// Displays search results in a formatted table with clear headers
-/// 
-/// # Purpose
-/// Presents fuzzy search results to the user in a readable format,
-/// allowing them to select a matching file or directory by number.
+// /// Displays search results in a formatted table with clear headers
+// /// 
+// /// # Purpose
+// /// Presents fuzzy search results to the user in a readable format,
+// /// allowing them to select a matching file or directory by number.
+// /// 
+// /// # Arguments
+// /// * `results` - Vector of SearchResult items to display
+// /// 
+// /// # Returns
+// /// * `io::Result<()>` - Success or IO error
+// /// 
+// /// # Display Format
+// /// ```text
+// /// Search Results   (Levenshtein < 3)
+// /// Num   Name                           Distance
+// /// ---------------------------------------------
+// ///  1    example.txt                       2
+// ///  2    sample.doc                        3
+// /// ```
+// /// 
+// /// # User Interface
+// /// - Clears the screen before displaying results
+// /// - Shows header with column names
+// /// - Displays each result with its original item number
+// /// - Shows the Levenshtein distance (lower is better)
+// /// - Handles empty results with a "No matches found" message
+// /// 
+// /// # Notes
+// /// - Truncates long filenames to fit display width (max 30 characters)
+// /// - Shows original item numbers from directory listing for selection
+// /// - Distance indicates how close the match is (lower is better)
+// /// 
+// /// # Error Handling
+// /// - Returns IO errors from terminal output operations
+// /// 
+// /// # Example
+// /// ```rust
+// /// // After performing a search
+// /// let results = nav_state.fuzzy_search("doc", &directory_entries);
+// /// if !results.is_empty() {
+// ///     display_search_results(&results)?;
+// ///     
+// ///     // Get user selection from search results
+// ///     print!("\nEnter number to select or press Enter to continue: ");
+// ///     io::stdout().flush()?;
+// ///     let mut selection = String::new();
+// ///     io::stdin().read_line(&mut selection)?;
+// ///     
+// ///     // Process selection...
+// /// } else {
+// ///     println!("No matches found");
+// /// }
+// /// ```
+// fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
+//     if results.is_empty() {
+//         println!("No matches found");
+//         return Ok(());
+//     }
+
+//     print!("\x1B[2J\x1B[1;1H");
+//     println!("\nSearch Results   (Levenshtein < 3)");
+//     println!("{:<5} {:<30} {:<10}", " # ", "Name", "Distance");
+//     println!("{}", "-".repeat(45));
+
+//     for result in results {
+//         println!("{:<5} {:<30} {:<10}", 
+//                 result.display_index,
+//                 if result.item_name.len() > 30 {
+//                     format!("{}...", &result.item_name[..27])
+//                 } else {
+//                     result.item_name.clone()
+//                 },
+//                 result.distance);
+//     }
+    
+//     Ok(())
+// }
+
+/// Parses user input to extract search term and flags
 /// 
 /// # Arguments
-/// * `results` - Vector of SearchResult items to display
+/// * `input` - Raw user input string
+/// 
+/// # Returns
+/// * `(search_term, recursive, grep)` - Parsed components
+/// 
+/// # Examples
+/// * "document" -> ("document", false, false)
+/// * "document -r" -> ("document", true, false)  
+/// * "TODO --grep" -> ("TODO", false, true)
+/// * "TODO -r --grep" -> ("TODO", true, true)
+fn parse_input_flags(input: &str) -> (&str, bool, bool) {
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    
+    if parts.is_empty() {
+        return ("", false, false);
+    }
+    
+    let search_term = parts[0];
+    let mut recursive = false;
+    let mut grep = false;
+    
+    for part in parts.iter().skip(1) {
+        match *part {
+            "-r" | "--recursive" => recursive = true,
+            "-g" | "--grep" => grep = true,
+            _ => {}
+        }
+    }
+    
+    (search_term, recursive, grep)
+}
+
+/// Displays extended search results with support for grep context
+/// 
+/// # Arguments
+/// * `results` - Extended search results to display
+/// * `is_grep` - Whether these are grep results (shows different format)
 /// 
 /// # Returns
 /// * `io::Result<()>` - Success or IO error
 /// 
-/// # Display Format
+/// # Display Formats
+/// 
+/// ## Fuzzy Search Format:
 /// ```text
-/// Search Results   (Levenshtein < 3)
-/// Num   Name                           Distance
+/// Search Results (Fuzzy Match)
+/// #     Name                          Distance
 /// ---------------------------------------------
-///  1    example.txt                       2
-///  2    sample.doc                        3
+/// 1     example.txt                   2
+/// 2     sample.doc                    3
 /// ```
 /// 
-/// # User Interface
-/// - Clears the screen before displaying results
-/// - Shows header with column names
-/// - Displays each result with its original item number
-/// - Shows the Levenshtein distance (lower is better)
-/// - Handles empty results with a "No matches found" message
-/// 
-/// # Notes
-/// - Truncates long filenames to fit display width (max 30 characters)
-/// - Shows original item numbers from directory listing for selection
-/// - Distance indicates how close the match is (lower is better)
+/// ## Grep Search Format:
+/// ```text
+/// Search Results (Content Match)
+/// #     File                          Line   Context
+/// --------------------------------------------------
+/// 1     src/main.rs                   42     println!("TODO: implement feature");
+/// 2     src/lib.rs                    15     // TODO: Add documentation
+/// ```
 /// 
 /// # Error Handling
-/// - Returns IO errors from terminal output operations
-/// 
-/// # Example
-/// ```rust
-/// // After performing a search
-/// let results = nav_state.fuzzy_search("doc", &directory_entries);
-/// if !results.is_empty() {
-///     display_search_results(&results)?;
-///     
-///     // Get user selection from search results
-///     print!("\nEnter number to select or press Enter to continue: ");
-///     io::stdout().flush()?;
-///     let mut selection = String::new();
-///     io::stdin().read_line(&mut selection)?;
-///     
-///     // Process selection...
-/// } else {
-///     println!("No matches found");
-/// }
-/// ```
-fn display_search_results(results: &[SearchResult]) -> io::Result<()> {
+/// Returns IO errors from terminal output operations
+pub fn display_extended_search_results(
+    results: &[SearchResult],
+    is_grep: bool,
+) -> io::Result<()> {
     if results.is_empty() {
         println!("No matches found");
         return Ok(());
     }
-
+    
+    // Clear screen
     print!("\x1B[2J\x1B[1;1H");
-    println!("\nSearch Results   (Levenshtein < 3)");
-    println!("{:<5} {:<30} {:<10}", " # ", "Name", "Distance");
-    println!("{}", "-".repeat(45));
-
-    for result in results {
-        println!("{:<5} {:<30} {:<10}", 
+    
+    if is_grep {
+        // Display grep results
+        println!("\nSearch Results (Content Match)");
+        println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Context");
+        println!("{}", "-".repeat(80));
+        
+        for result in results {
+            let display_name = if result.item_name.len() > 28 {
+                format!("{}...", &result.item_name[..25])
+            } else {
+                result.item_name.clone()
+            };
+            
+            println!(
+                "{:<5} {:<30} {:<7} {}",
                 result.display_index,
-                if result.item_name.len() > 30 {
-                    format!("{}...", &result.item_name[..27])
-                } else {
-                    result.item_name.clone()
-                },
-                result.distance);
+                display_name,
+                result.line_number.unwrap_or(0),
+                result.match_context.as_ref().unwrap_or(&String::from(""))
+            );
+        }
+    } else {
+        // Display fuzzy search results
+        println!("\nSearch Results (Fuzzy Match)");
+        println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
+        println!("{}", "-".repeat(55));
+        
+        for result in results {
+            let display_name = if result.item_name.len() > 38 {
+                format!("{}...", &result.item_name[..35])
+            } else {
+                result.item_name.clone()
+            };
+            
+            println!(
+                "{:<5} {:<40} {:<10}",
+                result.display_index,
+                display_name,
+                result.distance
+            );
+        }
     }
     
     Ok(())
 }
+
+// /// Example of how to parse command-line arguments for search
+// /// 
+// /// # Purpose
+// /// Demonstrates how to parse search arguments from command line
+// /// 
+// /// # Arguments
+// /// * `args` - Command line arguments
+// /// 
+// /// # Returns
+// /// * `Option<SearchConfig>` - Parsed configuration or None if invalid
+// /// 
+// /// # Usage Examples
+// /// ```bash
+// /// # Fuzzy search in current directory
+// /// program "searchterm"
+// /// 
+// /// # Recursive fuzzy search
+// /// program "searchterm" -r
+// /// program "searchterm" --recursive
+// /// 
+// /// # Grep search in current directory
+// /// program "searchterm" --grep
+// /// 
+// /// # Recursive grep search
+// /// program "searchterm" -r --grep
+// /// program "searchterm" --recursive --grep
+// /// ```
+// pub fn parse_search_arguments(args: Vec<String>) -> Option<SearchConfig> {
+//     if args.is_empty() {
+//         return None;
+//     }
+    
+//     let search_term = args[0].clone();
+//     let mut config = SearchConfig::new(search_term);
+    
+//     for arg in args.iter().skip(1) {
+//         match arg.as_str() {
+//             "-r" | "--recursive" => {
+//                 config.recursive = true;
+//             }
+//             "--grep" | "-g" => {
+//                 config.grep_mode = true;
+//             }
+//             "--case-sensitive" => {
+//                 config.case_sensitive = true;
+//             }
+//             _ => {
+//                 // Unknown argument, could print help
+//             }
+//         }
+//     }
+    
+//     Some(config)
+// }
+
+
+/// Search configuration options for controlling search behavior
+/// 
+/// # Purpose
+/// Encapsulates all search parameters to make the API cleaner and more extensible
+/// 
+/// # Fields
+/// * `search_term` - The text to search for
+/// * `recursive` - Whether to search subdirectories recursively
+/// * `grep_mode` - Whether to search file contents instead of names
+/// * `case_sensitive` - Whether the search should be case-sensitive (for grep mode)
+/// * `max_file_size` - Maximum file size to read for grep mode (default 10MB)
+#[derive(Debug, Clone)]
+pub struct SearchConfig {
+    /// The text pattern to search for
+    pub search_term: String,
+    /// Whether to recursively search subdirectories
+    pub recursive: bool,
+    /// Whether to search file contents instead of names
+    pub grep_mode: bool,
+    /// Whether grep search should be case-sensitive
+    pub case_sensitive: bool,
+    /// Maximum file size in bytes to read for grep search (prevents memory issues)
+    pub max_file_size: u64,
+}
+
+impl SearchConfig {
+    /// Creates a new SearchConfig with default settings
+    /// 
+    /// # Arguments
+    /// * `search_term` - The text to search for
+    /// 
+    /// # Returns
+    /// * `SearchConfig` - Configuration with defaults (non-recursive, fuzzy name search)
+    /// 
+    /// # Default Values
+    /// - `recursive`: false
+    /// - `grep_mode`: false
+    /// - `case_sensitive`: false
+    /// - `max_file_size`: 10485760 (10MB)
+    pub fn new(search_term: String) -> Self {
+        Self {
+            search_term,
+            recursive: false,
+            grep_mode: false,
+            case_sensitive: false,
+            max_file_size: 10_485_760, // 10MB default limit
+        }
+    }
+    
+    /// Builder method to enable recursive search
+    /// 
+    /// # Returns
+    /// * `Self` - Modified configuration with recursive enabled
+    pub fn with_recursive(mut self, recursive: bool) -> Self {
+        self.recursive = recursive;
+        self
+    }
+    
+    /// Builder method to enable grep mode (content search)
+    /// 
+    /// # Returns
+    /// * `Self` - Modified configuration with grep mode enabled
+    pub fn with_grep(mut self, grep_mode: bool) -> Self {
+        self.grep_mode = grep_mode;
+        self
+    }
+}
+
 
 /// Manages navigation state, lookup tables, sort/filter settings, and TUI display preferences
 /// 
@@ -4922,6 +5183,70 @@ impl NavigationState {
         // because users typically want to keep their preferred sort order
         // when refreshing/resetting the view
     }
+    
+    /// Master wrapper function that handles all search routing
+    /// 
+    /// # Purpose
+    /// Takes raw user input, parses flags, and routes to appropriate search function
+    /// 
+    /// # Arguments
+    /// * `raw_input` - The raw string input from user (e.g., "document -r --grep")
+    /// * `current_dir_entries` - The entries in current directory (used if not recursive)
+    /// 
+    /// # Returns
+    /// * `Vec<SearchResult>` - Results from whichever search was performed
+    /// 
+    /// # Flow
+    /// 1. Parse input for search term and flags
+    /// 2. Collect appropriate file list (current or recursive)
+    /// 3. Route to fuzzy name search or grep content search
+    /// 4. Return results in unified format
+    pub fn fuzzy_search_manager_wrapper(
+        &self, 
+        raw_input: &str,
+        current_dir_entries: &[FileSystemEntry]
+    ) -> Vec<SearchResult> {
+        
+        // Step 1: Parse the raw input
+        let (search_term, recursive, grep) = parse_input_flags(raw_input);
+        
+        // If empty search term, return empty results
+        if search_term.is_empty() {
+            return Vec::new();
+        }
+        
+        // Step 2: Get the appropriate file list
+        let entries = if recursive {
+            // Collect files recursively from current directory
+            match self.collect_entries_recursive(&std::env::current_dir().unwrap_or_default()) {
+                Ok(entries) => entries,
+                Err(_) => return Vec::new(), // Return empty on error
+            }
+        } else {
+            // Use the provided current directory entries
+            current_dir_entries.to_vec()
+        };
+        
+        // Step 3: Route to appropriate search function
+        if grep {
+            // Route to grep content search
+            let config = SearchConfig::new(search_term.to_string())
+                .with_recursive(recursive)
+                .with_grep(true);
+            
+            match self.grep_search_files(&config, &entries) {
+                Ok(results) => results,
+                Err(_) => Vec::new(),
+            }
+        } else {
+            // Route to fuzzy name search
+            let config = SearchConfig::new(search_term.to_string())
+                .with_recursive(recursive)
+                .with_grep(false);
+            
+            self.fuzzy_search_entries(&config, &entries)
+        }
+    }
 
     /// Set or toggle filter mode
     /// 
@@ -5015,51 +5340,251 @@ impl NavigationState {
             _ => entries.iter().collect(), // No filtering
         }
     }
-
-    /// Performs a fuzzy text search on current directory contents using Levenshtein distance
+    
+    // /*
+    // for search/grep
+    // */
+    // /// Performs an advanced search with support for recursive and grep modes
+    // /// 
+    // /// # Arguments
+    // /// * `config` - Search configuration specifying search parameters
+    // /// * `start_directory` - The directory to start searching from
+    // /// 
+    // /// # Returns
+    // /// * `Result<Vec<SearchResult>, FileFantasticError>` - Search results or error
+    // /// 
+    // /// # Search Modes
+    // /// 1. **Fuzzy Name Search (default)**: Searches file/directory names using Levenshtein distance
+    // /// 2. **Grep Content Search**: Searches file contents for exact substring matches
+    // /// 
+    // /// # Recursive Behavior
+    // /// When `recursive` is true, searches all subdirectories from the starting point
+    // /// 
+    // /// # Error Handling
+    // /// - Skips files that cannot be read (permissions, etc.)
+    // /// - Skips binary files in grep mode
+    // /// - Limits file size to prevent memory issues
+    // /// 
+    // /// # Examples
+    // /// ```rust
+    // /// // Fuzzy search in current directory
+    // /// let config = SearchConfig::new("doc".to_string());
+    // /// let results = nav_state.advanced_search(&config, &current_dir)?;
+    // /// 
+    // /// // Recursive fuzzy search
+    // /// let config = SearchConfig::new("doc".to_string())
+    // ///     .with_recursive(true);
+    // /// let results = nav_state.advanced_search(&config, &current_dir)?;
+    // /// 
+    // /// // Grep search in current directory
+    // /// let config = SearchConfig::new("TODO".to_string())
+    // ///     .with_grep(true);
+    // /// let results = nav_state.advanced_search(&config, &current_dir)?;
+    // /// 
+    // /// // Recursive grep search
+    // /// let config = SearchConfig::new("TODO".to_string())
+    // ///     .with_recursive(true)
+    // ///     .with_grep(true);
+    // /// let results = nav_state.advanced_search(&config, &current_dir)?;
+    // /// ```
+    // pub fn advanced_search(
+    //     &self,
+    //     config: &SearchConfig,
+    //     start_directory: &Path,
+    // ) -> Result<Vec<SearchResult>> {
+    //     // Validate start directory exists
+    //     if !start_directory.exists() {
+    //         return Err(FileFantasticError::NotFound(start_directory.to_path_buf()));
+    //     }
+        
+    //     // Collect all entries based on recursive flag
+    //     let entries = if config.recursive {
+    //         self.collect_entries_recursive(start_directory)?
+    //     } else {
+    //         self.collect_entries_single_directory(start_directory)?
+    //     };
+        
+    //     // Perform appropriate search based on mode
+    //     if config.grep_mode {
+    //         self.grep_search_files(config, &entries)
+    //     } else {
+    //         Ok(self.fuzzy_search_entries(config, &entries))
+    //     }
+    // }
+    
+    // /// Collects file system entries from a single directory
+    // /// 
+    // /// # Arguments
+    // /// * `directory` - The directory to read entries from
+    // /// 
+    // /// # Returns
+    // /// * `Result<Vec<FileSystemEntry>, FileFantasticError>` - Directory entries or error
+    // /// 
+    // /// # Error Handling
+    // /// - Returns error if directory cannot be read
+    // /// - Skips individual entries that cause errors
+    // /// 
+    // /// # Implementation Notes
+    // /// - Filters out entries that cannot be accessed
+    // /// - Preserves original directory structure information
+    // fn collect_entries_single_directory(
+    //     &self,
+    //     directory: &Path,
+    // ) -> Result<Vec<FileSystemEntry>> {
+    //     let mut entries = Vec::new();
+        
+    //     let dir_entries = fs::read_dir(directory)
+    //         .map_err(|e| {
+    //             if e.kind() == io::ErrorKind::PermissionDenied {
+    //                 FileFantasticError::PermissionDenied(directory.to_path_buf())
+    //             } else {
+    //                 FileFantasticError::Io(e)
+    //             }
+    //         })?;
+        
+    //     for entry_result in dir_entries {
+    //         // Skip entries we can't read
+    //         let entry = match entry_result {
+    //             Ok(e) => e,
+    //             Err(_) => continue,
+    //         };
+            
+    //         // Get metadata, skip if we can't read it
+    //         let metadata = match entry.metadata() {
+    //             Ok(m) => m,
+    //             Err(_) => continue,
+    //         };
+            
+    //         // Get the file name as a string, skip if invalid
+    //         let file_name = match entry.file_name().into_string() {
+    //             Ok(name) => name,
+    //             Err(_) => continue,
+    //         };
+            
+    //         entries.push(FileSystemEntry {
+    //             file_system_item_name: file_name,
+    //             file_system_item_path: entry.path(),
+    //             file_system_item_size_in_bytes: metadata.len(),
+    //             file_system_item_last_modified_time: metadata.modified()
+    //                 .unwrap_or(SystemTime::UNIX_EPOCH),
+    //             is_directory: metadata.is_dir(),
+    //         });
+    //     }
+        
+    //     Ok(entries)
+    // }
+    
+    /// Recursively collects file system entries from directory and all subdirectories
     /// 
     /// # Arguments
-    /// * `search_term` - The text to search for
-    /// * `directory_entries` - Vector of current directory entries to search through
+    /// * `start_directory` - The root directory to start recursive collection
     /// 
     /// # Returns
-    /// * `Vec<SearchResult>` - Vector of matching items sorted by Levenshtein distance
+    /// * `Result<Vec<FileSystemEntry>, FileFantasticError>` - All entries found or error
     /// 
-    /// # Search Behavior
-    /// - Only compares against the same number of characters as in the search term
-    /// - For example, searching for "car" only looks at the first 3 characters of each item
-    /// - Searches both filenames and directories
-    /// - Removes file extensions before comparing
-    /// - Converts both search term and filenames to lowercase
-    /// - Only includes results with distance <= MAX_SEARCH_DISTANCE
-    /// - Results are sorted by distance (closest matches first)
+    /// # Recursive Behavior
+    /// - Traverses all accessible subdirectories
+    /// - Skips directories that cannot be accessed (permissions)
+    /// - Continues on individual entry errors
     /// 
-    /// # Example
-    /// ```
-    /// // Searching for "car" will effectively compare against:
-    /// // "Cargo.toml" -> "car"
-    /// // "carpenter.txt" -> "car"
-    /// // "calendar.pdf" -> "cal"
-    /// ```
-    fn fuzzy_search(&self, search_term: &str, directory_entries: &[FileSystemEntry]) -> Vec<SearchResult> {
+    /// # Performance Considerations
+    /// - Can be slow for large directory trees
+    /// - Memory usage grows with number of files
+    /// - Consider adding depth limits for very deep hierarchies
+    /// 
+    /// # Error Handling
+    /// - Silently skips inaccessible directories
+    /// - Continues collecting from other branches on error
+    fn collect_entries_recursive(
+        &self,
+        start_directory: &Path,
+    ) -> Result<Vec<FileSystemEntry>> {
+        let mut all_entries = Vec::new();
+        let mut directories_to_process = vec![start_directory.to_path_buf()];
         
-        // Early return for empty search term to avoid unnecessary processing
-        if search_term.is_empty() {
+        while let Some(current_dir) = directories_to_process.pop() {
+            // Try to read the current directory, skip if we can't
+            let dir_entries = match fs::read_dir(&current_dir) {
+                Ok(entries) => entries,
+                Err(_) => continue, // Skip directories we can't read
+            };
+            
+            for entry_result in dir_entries {
+                // Skip entries we can't read
+                let entry = match entry_result {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                
+                // Get metadata, skip if we can't read it
+                let metadata = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                
+                // Get the file name as a string, skip if invalid
+                let file_name = match entry.file_name().into_string() {
+                    Ok(name) => name,
+                    Err(_) => continue,
+                };
+                
+                let path = entry.path();
+                
+                // Add to entries list
+                all_entries.push(FileSystemEntry {
+                    file_system_item_name: file_name,
+                    file_system_item_path: path.clone(),
+                    file_system_item_size_in_bytes: metadata.len(),
+                    file_system_item_last_modified_time: metadata.modified()
+                        .unwrap_or(SystemTime::UNIX_EPOCH),
+                    is_directory: metadata.is_dir(),
+                });
+                
+                // If it's a directory, add it to the processing queue
+                if metadata.is_dir() {
+                    directories_to_process.push(path);
+                }
+            }
+        }
+        
+        Ok(all_entries)
+    }
+    
+    /// Performs fuzzy search on collected entries
+    /// 
+    /// # Arguments
+    /// * `config` - Search configuration
+    /// * `entries` - File system entries to search through
+    /// 
+    /// # Returns
+    /// * `Vec<SearchResult>` - Matching entries sorted by distance
+    /// 
+    /// # Algorithm
+    /// - Uses Levenshtein distance for fuzzy matching
+    /// - Compares against truncated names (matching search term length)
+    /// - Tests both with and without file extensions
+    /// - Sorts by distance then by name length
+    fn fuzzy_search_entries(
+        &self,
+        config: &SearchConfig,
+        entries: &[FileSystemEntry],
+    ) -> Vec<SearchResult> {
+        if config.search_term.is_empty() {
             return Vec::new();
         }
         
         let mut results = Vec::new();
-        let search_term = search_term.to_lowercase();
+        let search_term = config.search_term.to_lowercase();
         let search_len = search_term.chars().count();
         
-        for (idx, entry) in directory_entries.iter().enumerate() {
+        for (idx, entry) in entries.iter().enumerate() {
             // Remove file extension for comparison
             let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
                 Some((name, _ext)) => name.to_string(),
                 None => entry.file_system_item_name.clone(),
             };
             
-            // Get truncated versions of the names (matching search term length)
+            // Get truncated versions of the names
             let full_name_truncated: String = entry.file_system_item_name
                 .to_lowercase()
                 .chars()
@@ -5072,31 +5597,26 @@ impl NavigationState {
                 .take(search_len)
                 .collect();
             
-            // Compare both truncated versions
-            let distance_with_ext = levenshtein_distance(
-                &full_name_truncated, 
-                &search_term
-            );
-            let distance_without_ext = levenshtein_distance(
-                &no_ext_truncated,
-                &search_term
-            );
+            // Calculate distances
+            let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
+            let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
             
-            // Use the better of the two distances
+            // Use the better distance
             let distance = distance_with_ext.min(distance_without_ext);
-            
+
             if distance <= MAX_SEARCH_DISTANCE {
                 results.push(SearchResult {
                     item_name: entry.file_system_item_name.clone(),
                     item_path: entry.file_system_item_path.clone(),
                     distance,
                     display_index: idx + 1,
+                    match_context: None,
+                    line_number: None,
                 });
             }
         }
         
-        // Sort first by distance, then by original name length
-        // This prioritizes exact prefix matches
+        // Sort by distance, then by name length
         results.sort_by(|a, b| {
             match a.distance.cmp(&b.distance) {
                 std::cmp::Ordering::Equal => a.item_name.len().cmp(&b.item_name.len()),
@@ -5106,6 +5626,276 @@ impl NavigationState {
         
         results
     }
+    
+    /// Searches file contents for a substring (grep-like functionality)
+    /// 
+    /// # Arguments
+    /// * `config` - Search configuration with grep settings
+    /// * `entries` - File system entries to search through
+    /// 
+    /// # Returns
+    /// * `Result<Vec<SearchResult>, FileFantasticError>` - Matches or error
+    /// 
+    /// # Search Behavior
+    /// - Only searches regular files (not directories)
+    /// - Skips binary files (detected by null bytes)
+    /// - Respects max_file_size limit
+    /// - Includes line number and context in results
+    /// 
+    /// # Performance
+    /// - Reads entire file into memory (limited by max_file_size)
+    /// - Could be optimized with streaming for large files
+    /// 
+    /// # Error Handling
+    /// - Skips files that cannot be read
+    /// - Continues searching other files on error
+    fn grep_search_files(
+        &self,
+        config: &SearchConfig,
+        entries: &[FileSystemEntry],
+    ) -> Result<Vec<SearchResult>> {
+        let mut results = Vec::new();
+        let search_pattern = if config.case_sensitive {
+            config.search_term.clone()
+        } else {
+            config.search_term.to_lowercase()
+        };
+        
+        for (idx, entry) in entries.iter().enumerate() {
+            // Skip directories
+            if entry.is_directory {
+                continue;
+            }
+            
+            // Skip files larger than max size
+            if entry.file_system_item_size_in_bytes > config.max_file_size {
+                continue;
+            }
+            
+            // Try to read the file
+            let content = match self.read_file_safely(&entry.file_system_item_path, config.max_file_size) {
+                Ok(content) => content,
+                Err(_) => continue, // Skip files we can't read
+            };
+            
+            // Search for matches in the file
+            let matches = self.find_matches_in_content(&content, &search_pattern, config.case_sensitive);
+            
+            // Add results for each match found
+            for (line_num, context) in matches {
+                results.push(SearchResult {
+                    item_name: entry.file_system_item_name.clone(),
+                    item_path: entry.file_system_item_path.clone(),
+                    distance: 0, // Exact match for grep
+                    display_index: idx + 1,
+                    match_context: Some(context),
+                    line_number: Some(line_num),
+                });
+            }
+        }
+        
+        Ok(results)
+    }
+    
+    /// Safely reads a file with size limits and binary detection
+    /// 
+    /// # Arguments
+    /// * `path` - Path to the file to read
+    /// * `max_size` - Maximum file size to read
+    /// 
+    /// # Returns
+    /// * `Result<String, FileFantasticError>` - File contents or error
+    /// 
+    /// # Safety Features
+    /// - Enforces maximum file size
+    /// - Detects binary files (null bytes)
+    /// - Returns error for non-UTF8 content
+    /// 
+    /// # Binary Detection
+    /// Files containing null bytes are considered binary and skipped
+    fn read_file_safely(
+        &self,
+        path: &Path,
+        max_size: u64,
+    ) -> Result<String> {
+        // Open the file
+        let mut file = fs::File::open(path)
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::PermissionDenied {
+                    FileFantasticError::PermissionDenied(path.to_path_buf())
+                } else {
+                    FileFantasticError::Io(e)
+                }
+            })?;
+        
+        // Check file size
+        let metadata = file.metadata()
+            .map_err(|_| FileFantasticError::MetadataError(path.to_path_buf()))?;
+        
+        if metadata.len() > max_size {
+            return Err(FileFantasticError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File too large for grep search"
+            )));
+        }
+        
+        // Read file contents
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        
+        // Check for binary content (null bytes)
+        if buffer.contains(&0) {
+            return Err(FileFantasticError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Binary file detected"
+            )));
+        }
+        
+        // Convert to string
+        String::from_utf8(buffer)
+            .map_err(|_| FileFantasticError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File is not valid UTF-8"
+            )))
+    }
+    
+    /// Finds all matches of a pattern in file content
+    /// 
+    /// # Arguments
+    /// * `content` - The file content to search
+    /// * `pattern` - The pattern to search for
+    /// * `case_sensitive` - Whether the search is case-sensitive
+    /// 
+    /// # Returns
+    /// * `Vec<(usize, String)>` - Vector of (line_number, line_content) pairs
+    /// 
+    /// # Match Context
+    /// Returns the entire line containing each match with line numbers
+    /// 
+    /// # Performance
+    /// - Iterates through lines once
+    /// - Could be optimized with regex for complex patterns
+    fn find_matches_in_content(
+        &self,
+        content: &str,
+        pattern: &str,
+        case_sensitive: bool,
+    ) -> Vec<(usize, String)> {
+        let mut matches = Vec::new();
+        
+        for (line_num, line) in content.lines().enumerate() {
+            let line_to_search = if case_sensitive {
+                line.to_string()
+            } else {
+                line.to_lowercase()
+            };
+            
+            if line_to_search.contains(pattern) {
+                // Provide context: trim long lines for display
+                let context = if line.len() > 100 {
+                    format!("{}...", &line[..97])
+                } else {
+                    line.to_string()
+                };
+                
+                matches.push((line_num + 1, context));
+            }
+        }
+        
+        matches
+    }
+
+    // /// Performs a fuzzy text search on current directory contents using Levenshtein distance
+    // /// 
+    // /// # Arguments
+    // /// * `search_term` - The text to search for
+    // /// * `directory_entries` - Vector of current directory entries to search through
+    // /// 
+    // /// # Returns
+    // /// * `Vec<SearchResult>` - Vector of matching items sorted by Levenshtein distance
+    // /// 
+    // /// # Search Behavior
+    // /// - Only compares against the same number of characters as in the search term
+    // /// - For example, searching for "car" only looks at the first 3 characters of each item
+    // /// - Searches both filenames and directories
+    // /// - Removes file extensions before comparing
+    // /// - Converts both search term and filenames to lowercase
+    // /// - Only includes results with distance <= MAX_SEARCH_DISTANCE
+    // /// - Results are sorted by distance (closest matches first)
+    // /// 
+    // /// # Example
+    // /// ```
+    // /// // Searching for "car" will effectively compare against:
+    // /// // "Cargo.toml" -> "car"
+    // /// // "carpenter.txt" -> "car"
+    // /// // "calendar.pdf" -> "cal"
+    // /// ```
+    // fn fuzzy_search(&self, search_term: &str, directory_entries: &[FileSystemEntry]) -> Vec<SearchResult> {
+        
+    //     // Early return for empty search term to avoid unnecessary processing
+    //     if search_term.is_empty() {
+    //         return Vec::new();
+    //     }
+        
+    //     let mut results = Vec::new();
+    //     let search_term = search_term.to_lowercase();
+    //     let search_len = search_term.chars().count();
+        
+    //     for (idx, entry) in directory_entries.iter().enumerate() {
+    //         // Remove file extension for comparison
+    //         let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
+    //             Some((name, _ext)) => name.to_string(),
+    //             None => entry.file_system_item_name.clone(),
+    //         };
+            
+    //         // Get truncated versions of the names (matching search term length)
+    //         let full_name_truncated: String = entry.file_system_item_name
+    //             .to_lowercase()
+    //             .chars()
+    //             .take(search_len)
+    //             .collect();
+                
+    //         let no_ext_truncated: String = name_without_ext
+    //             .to_lowercase()
+    //             .chars()
+    //             .take(search_len)
+    //             .collect();
+            
+    //         // Compare both truncated versions
+    //         let distance_with_ext = levenshtein_distance(
+    //             &full_name_truncated, 
+    //             &search_term
+    //         );
+    //         let distance_without_ext = levenshtein_distance(
+    //             &no_ext_truncated,
+    //             &search_term
+    //         );
+            
+    //         // Use the better of the two distances
+    //         let distance = distance_with_ext.min(distance_without_ext);
+            
+    //         if distance <= MAX_SEARCH_DISTANCE {
+    //             results.push(SearchResult {
+    //                 item_name: entry.file_system_item_name.clone(),
+    //                 item_path: entry.file_system_item_path.clone(),
+    //                 distance,
+    //                 display_index: idx + 1,
+    //             });
+    //         }
+    //     }
+        
+    //     // Sort first by distance, then by original name length
+    //     // This prioritizes exact prefix matches
+    //     results.sort_by(|a, b| {
+    //         match a.distance.cmp(&b.distance) {
+    //             std::cmp::Ordering::Equal => a.item_name.len().cmp(&b.item_name.len()),
+    //             other => other
+    //         }
+    //     });
+        
+    //     results
+    // }
 
     /// Toggle sort method based on input command
     fn toggle_sort(&mut self, command: char) {
