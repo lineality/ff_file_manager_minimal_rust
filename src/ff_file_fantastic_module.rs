@@ -4876,7 +4876,7 @@ pub fn display_extended_search_results(
     match &results[0] {
         UnifiedSearchResult::Grep(_) => {
             // Display header for grep results
-            println!("\nContent Search Results");
+            println!("\nContent Search Results (try: -g -r -c)"); // -fg --fuzzygrep
             println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Content");
             println!("{}", "-".repeat(80));
 
@@ -4910,7 +4910,7 @@ pub fn display_extended_search_results(
 
         UnifiedSearchResult::Fuzzy(_) => {
             // Display header for fuzzy search results
-            println!("\nFuzzy Name Search Results");
+            println!("\nFuzzy Name Search Results (try: --grep --recursive --case-sensitive)");
             println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
             println!("{}", "-".repeat(55));
 
