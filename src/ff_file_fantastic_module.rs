@@ -324,6 +324,7 @@ use std::path::{Path, PathBuf};
 use std::io::{self, Write, Read};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::env;
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
@@ -334,16 +335,11 @@ const MAX_SEARCH_DISTANCE: usize = 2;
 /// user adjustments are applied. Using u8 for memory efficiency since these
 /// values are all well within u8 range (0-255).
 const MAX_NAME_LENGTH_DEFAULT: usize = 55;
-// 16 allows an extra line for cases where there cwd/PWD path
-// is long enough to wrap around, a safer default
+
+/// 16 allows an extra line for cases where there cwd/PWD path
+/// is long enough to wrap around, a safer default
 const ITEMS_PER_PAGE_DEFAULT: u8 = 16;
 const FILENAME_SUFFIX_LENGTH: usize = 5;
-
-
-/*
-const MAX_NAME_LENGTH_DEFAULT: usize = 55;
-const ITEMS_PER_PAGE_DEFAULT: usize = 16;
-*/
 
 const RESET: &str = "\x1b[0m";
 const RED: &str = "\x1b[31m";
@@ -5209,15 +5205,11 @@ pub struct NavigationState {
     current_page_index: usize,
 }
 
-
-use std::env;
-
 fn detect_android() -> bool {
     env::var("ANDROID_ROOT").is_ok()
 }
 
 impl NavigationState {
-
     /// Creates a new NavigationState with default settings
     ///
     /// # Platform-Specific Defaults
