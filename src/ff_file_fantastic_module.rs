@@ -5209,9 +5209,24 @@ pub struct NavigationState {
     current_page_index: usize,
 }
 
+
+use std::env;
+
+fn detect_android() -> bool {
+    env::var("ANDROID_ROOT").is_ok()
+}
+
 impl NavigationState {
+
     /// Creates a new NavigationState with default settings
     ///
+    /// # Platform-Specific Defaults
+    /// - **Android devices**: Automatically applies a width reduction of 23 characters
+    ///   (tui_wide_adjustment = 23, tui_wide_direction_sign = false) to accommodate
+    ///   typical Android terminal constraints
+    /// - **Non-Android platforms**: No width adjustment (tui_wide_adjustment = 0)
+    ///
+    /// Android detection is performed by checking for the ANDROID_ROOT environment variable.
     /// # Returns
     /// * `NavigationState` - A new instance with:
     ///   - Empty lookup table
@@ -5240,6 +5255,20 @@ impl NavigationState {
     /// // Display will use default sizes until user adjusts
     /// ```
     fn new() -> Self {
+
+        // Detect if running on Android platform
+        let is_android = detect_android();
+
+        // Set width adjustment based on platform
+        // Android terminals typically need reduced width
+        let (width_adjustment, width_direction) = if is_android {
+            // Android: reduce width by 23 characters
+            (23, false)  // false represents negative direction
+        } else {
+            // Non-Android: no adjustment needed
+            (0, true)    // true represents positive direction (though 0 makes direction irrelevant)
+        };
+
         NavigationState {
             display_lookup_table: HashMap::new(),
             current_sort_method: DirectorySortingMethodEnum::Name(true),
@@ -5250,8 +5279,8 @@ impl NavigationState {
             // Initialize TUI size adjustments to defaults (no adjustment)
             tui_tall_adjustment: 0,      // No height adjustment
             tui_tall_direction_sign: true, // Positive direction by default
-            tui_wide_adjustment: 0,       // No width adjustment
-            tui_wide_direction_sign: true, // Positive direction by default
+            tui_wide_adjustment: width_adjustment,       // No width adjustment
+            tui_wide_direction_sign: width_direction, // Positive direction by default
             current_page_index: 0,        // Always start at page 0
         }
     }
