@@ -6858,6 +6858,168 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
     Ok(())
 }
 
+/// Checks if a command/program is available on the system
+///
+/// # Arguments
+/// * `cmd` - The command name to check
+///
+/// # Returns
+/// * `bool` - true if the command is available, false otherwise
+///
+/// # Implementation Notes
+/// Tests command availability by attempting to run with --version flag
+/// Most commands support this flag without side effects
+fn is_command_available(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_or(false, |status| status.success())
+}
+
+/// Opens a file in the current terminal using available terminal editors
+///
+/// # Arguments
+/// * `editor` - The editor command to use
+/// * `file_path` - Path to the file to open
+///
+/// # Returns
+/// * `Result<()>` - Success or error
+///
+/// # Behavior
+/// - Opens the file in the SAME terminal (blocking)
+/// - Waits for the editor to exit before returning
+/// - Used for headless/server environments
+fn open_in_current_terminal(editor: &str, file_path: &PathBuf) -> Result<()> {
+    // Check if the specified editor is available
+    if !is_command_available(editor) {
+        return Err(FileFantasticError::EditorLaunchFailed(
+            format!("Editor '{}' is not available on this system", editor)
+        ));
+    }
+
+    // Launch the editor in the current terminal (blocking call)
+    let status = std::process::Command::new(editor)
+        .arg(file_path)
+        .status()
+        .map_err(|e| {
+            eprintln!("Failed to launch {} in current terminal: {}", editor, e);
+            FileFantasticError::Io(e)
+        })?;
+
+    if status.success() {
+        println!("You have exited {}.", editor);
+        Ok(())
+    } else {
+        Err(FileFantasticError::EditorLaunchFailed(
+            format!("Editor '{}' exited with non-zero status", editor)
+        ))
+    }
+}
+
+/// Opens a file in a tmux split pane
+///
+/// # Arguments
+/// * `editor` - The editor command to use
+/// * `file_path` - Path to the file to open
+/// * `split_type` - Either "-v" for vertical or "-h" for horizontal split
+///
+/// # Returns
+/// * `Result<()>` - Success or error
+///
+/// # Prerequisites
+/// - tmux must be installed and available
+/// - Must be running inside a tmux session
+///
+/// # Behavior
+/// Creates a new tmux pane and opens the editor in it
+/// The pane closes automatically when the editor exits
+fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Result<()> {
+
+    // Check if the specified editor is available
+    if !is_command_available(editor) {
+        return Err(FileFantasticError::EditorLaunchFailed(
+            format!("Editor '{}' is not available on this system", editor)
+        ));
+    }
+
+    // Build the command to run in the new split
+    let editor_command = format!("{} {}", editor, file_path.to_string_lossy());
+
+    // Create the tmux split with the editor
+    let output = std::process::Command::new("tmux")
+        .args([
+            "split-window",
+            split_type,  // "-v" for vertical, "-h" for horizontal
+            &editor_command
+        ])
+        .output()
+        .map_err(|e| {
+            eprintln!("Failed to create tmux split: {}", e);
+            FileFantasticError::Io(e)
+        })?;
+
+    if output.status.success() {
+        println!("Opened {} in tmux {} split",
+                 editor,
+                 if split_type == "-v" { "vertical" } else { "horizontal" });
+        Ok(())
+    } else {
+        Err(FileFantasticError::EditorLaunchFailed(
+            format!("Failed to create tmux split: {}",
+                    String::from_utf8_lossy(&output.stderr))
+        ))
+    }
+}
+
+/// Parses user input for special flags and editor
+///
+/// # Arguments
+/// * `input` - The user input string
+///
+/// # Returns
+/// * `Option<(String, String)>` - Some((editor, flag)) if special flag found, None otherwise
+///
+/// # Supported Flags
+/// - `-h` or `--headless`: Open in current terminal
+/// - `-vsplit` or `--vertical-split-tmux`: Open in vertical tmux split
+/// - `-hsplit` or `--horizontal-split-tmux`: Open in horizontal tmux split
+///
+/// # Examples
+/// - "vim -h" -> Some(("vim", "-h"))
+/// - "nano --headless" -> Some(("nano", "--headless"))
+/// - "vim" -> None
+fn parse_special_flags(input: &str) -> Option<(String, String)> {
+    let special_flags = [
+        "-h", "--headless",
+        "-vsplit", "--vertical-split-tmux",
+        "-hsplit", "--horizontal-split-tmux"
+    ];
+
+    // Check if input contains any special flag
+    for flag in special_flags.iter() {
+        if input.contains(flag) {
+            // Split the input to extract editor and flag
+            let parts: Vec<&str> = input.split_whitespace().collect();
+
+            // Find the flag position
+            if let Some(flag_pos) = parts.iter().position(|&p| p == *flag) {
+                // Editor should be everything before the flag
+                if flag_pos > 0 {
+                    let editor = parts[0..flag_pos].join(" ");
+                    return Some((editor, flag.to_string()));
+                } else {
+                    // Flag without editor - return empty editor to trigger re-prompt
+                    return Some((String::new(), flag.to_string()));
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Opens a file with user-selected editor, partner program, or system default
 ///
 /// # Purpose
@@ -6944,7 +7106,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     let prompt = if partner_programs.is_empty() {
         // Standard prompt when no partner programs are configured
         format!(
-            "{}Open with... (hit enter for default, or enter software 'name' as called in terminal: gedit, firefox, hx, lapce, vi, vim, nano, code, etc.): {}",
+            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi, gedit, firefox, nano...e.g. vi --headless, tmux: vi -hsplit|vsplit) {}",
             YELLOW, RESET
         )
     } else {
@@ -6960,7 +7122,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
 
         format!(
-            "{}Open with... (hit enter for default, or enter software 'name' as called in terminal: gedit, firefox, vi, nano, hx, lapce, ... OR by number: {}): {}",
+            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi, gedit, firefox, nano, hx, ... OR by number: {}): {}",
             YELLOW, numbered_options, RESET
         )
     };
@@ -6979,97 +7141,124 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     })?;
     let user_input = user_input.trim();
 
-    // Handle empty input - use system default (existing functionality)
-    if user_input.is_empty() {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with default application: {}", e);
+    // Check for special flags (headless and tmux splits)
+        if let Some((editor, flag)) = parse_special_flags(user_input) {
+            // User must provide an editor with these flags
+            if editor.is_empty() {
+                println!("{}Error: You must specify an editor with the {} flag (e.g., 'vim {}'){}",
+                         RED, flag, flag, RESET);
+                println!("Press Enter to continue...");
+                let mut buf = String::new();
+                io::stdin().read_line(&mut buf).map_err(|e| {
+                    eprintln!("Failed to read input: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("xdg-open")
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with xdg-open: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", ""])
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with default application: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        return Ok(());
-    }
+                return open_file(file_path); // Re-prompt
+            }
 
-    // Try to parse input as a number for partner program selection
-    if let Ok(program_number) = user_input.parse::<usize>() {
-        if program_number > 0 && program_number <= partner_programs.len() {
-            let selected_program = &partner_programs[program_number - 1];
-            println!("Launching partner program: {}", extract_program_display_name(selected_program));
+            // Handle the different flag types
+            let result = match flag.as_str() {
+                "-h" | "--headless" => {
+                    // Open in current terminal (headless mode)
+                    println!("Opening file in current terminal with {}...", editor);
+                    open_in_current_terminal(&editor, file_path)
+                },
+                "-vsplit" | "--vertical-split-tmux" => {
+                    // Open in vertical tmux split
+                    open_in_tmux_split(&editor, file_path, "-v")
+                },
+                "-hsplit" | "--horizontal-split-tmux" => {
+                    // Open in horizontal tmux split
+                    open_in_tmux_split(&editor, file_path, "-h")
+                },
+                _ => {
+                    // This shouldn't happen due to parse_special_flags logic
+                    Err(FileFantasticError::EditorLaunchFailed(
+                        format!("Unknown flag: {}", flag)
+                    ))
+                }
+            };
 
-            // Launch partner program in terminal with proper error handling
-            match launch_partner_program_in_terminal(selected_program, file_path) {
+            // Handle any errors from the special mode operations
+            match result {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    // Follow File Fantastic's error handling pattern
-                    println!("Error launching partner program: {}. \nPress Enter to continue", e);
+                    // Display error and re-prompt
+                    println!("{}Error: {}{}",RED, e, RESET);
+                    println!("Press Enter to continue...");
                     let mut buf = String::new();
                     io::stdin().read_line(&mut buf).map_err(|e| {
                         eprintln!("Failed to read input: {}", e);
                         FileFantasticError::Io(e)
                     })?;
-
-                    // After user acknowledgment, fall back to asking again
-                    println!("Falling back to system default...");
-                    return open_file(file_path); // Recursive call for new selection
+                    return open_file(file_path); // Re-prompt for new selection
                 }
             }
-        } else if !partner_programs.is_empty() {
-            // Invalid partner program number
-            println!("Invalid partner program number. Valid range: 1-{}. \nPress Enter to continue",
-                     partner_programs.len());
-            let mut buf = String::new();
-            io::stdin().read_line(&mut buf).map_err(|e| {
-                eprintln!("Failed to read input: {}", e);
-                FileFantasticError::Io(e)
-            })?;
-            return open_file(file_path); // Ask again
         }
-        // If no partner programs configured, fall through to treat as program name
-    }
 
-    // Handle traditional program name input (existing functionality preserved)
-    let editor = user_input;
+        // Handle empty input - use system default (existing functionality)
+        if user_input.is_empty() {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open file with default application: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open file with xdg-open: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", ""])
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open file with default application: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+            }
+            return Ok(());
+        }
 
-    // List of known GUI editors that shouldn't need a terminal (existing logic)
-    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+        // Try to parse input as a number for partner program selection
+        if let Ok(program_number) = user_input.parse::<usize>() {
+            if program_number > 0 && program_number <= partner_programs.len() {
+                let selected_program = &partner_programs[program_number - 1];
+                println!("Launching partner program: {}", extract_program_display_name(selected_program));
 
-    if gui_editors.contains(&editor.to_lowercase().as_str()) {
-        // Launch GUI editors directly (existing functionality)
-        match std::process::Command::new(editor)
-            .arg(file_path)
-            .spawn()
-        {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                // Follow existing error handling pattern
-                eprintln!("Error launching {}: {}", editor, e);
-                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-                println!("Falling back to system default due to: {}. \nPress Enter to continue", error);
+                // Launch partner program in terminal with proper error handling
+                match launch_partner_program_in_terminal(selected_program, file_path) {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        // Follow File Fantastic's error handling pattern
+                        println!("Error launching partner program: {}. \nPress Enter to continue", e);
+                        let mut buf = String::new();
+                        io::stdin().read_line(&mut buf).map_err(|e| {
+                            eprintln!("Failed to read input: {}", e);
+                            FileFantasticError::Io(e)
+                        })?;
+
+                        // After user acknowledgment, fall back to asking again
+                        println!("Falling back to system default...");
+                        return open_file(file_path); // Recursive call for new selection
+                    }
+                }
+            } else if !partner_programs.is_empty() {
+                // Invalid partner program number
+                println!("Invalid partner program number. Valid range: 1-{}. \nPress Enter to continue",
+                        partner_programs.len());
                 let mut buf = String::new();
                 io::stdin().read_line(&mut buf).map_err(|e| {
                     eprintln!("Failed to read input: {}", e);
@@ -7077,71 +7266,99 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 })?;
                 return open_file(file_path); // Ask again
             }
+            // If no partner programs configured, fall through to treat as program name
         }
-    } else {
-        // Open terminal-based editors in new terminal window (existing logic preserved)
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .args(["-a", "Terminal"])
-                .arg(format!("{} {}; exit", editor, file_path.to_string_lossy()))
+
+        // Handle traditional program name input (existing functionality preserved)
+        let editor = user_input;
+
+        // List of known GUI editors that shouldn't need a terminal (existing logic)
+        let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+
+        if gui_editors.contains(&editor.to_lowercase().as_str()) {
+            // Launch GUI editors directly (existing functionality)
+            match std::process::Command::new(editor)
+                .arg(file_path)
                 .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open Terminal.app for editor: {}", e);
-                    FileFantasticError::EditorLaunchFailed(editor.to_string())
-                })?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // Try different terminal emulators (existing logic)
-            let terminal_commands = [
-                ("gnome-terminal", vec!["--", editor]),
-                ("ptyxis", vec!["--", editor]),
-                ("konsole", vec!["--e", editor]),
-                ("xfce4-terminal", vec!["--command", editor]),
-                ("terminator", vec!["-e", editor]),
-                ("tilix", vec!["-e", editor]),
-                ("kitty", vec!["-e", editor]),
-                ("alacritty", vec!["-e", editor]),
-                ("xterm", vec!["-e", editor]),
-            ];
-
-            let mut success = false;
-            for (terminal, args) in terminal_commands.iter() {
-                let mut cmd = std::process::Command::new(terminal);
-                cmd.args(args).arg(file_path);
-
-                if cmd.spawn().is_ok() {
-                    success = true;
-                    break;
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    // Follow existing error handling pattern
+                    eprintln!("Error launching {}: {}", editor, e);
+                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                    println!("Falling back to system default due to: {}. \nPress Enter to continue", error);
+                    let mut buf = String::new();
+                    io::stdin().read_line(&mut buf).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+                    return open_file(file_path); // Ask again
                 }
             }
+        } else {
+            // Open terminal-based editors in new terminal window (existing logic preserved)
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .args(["-a", "Terminal"])
+                    .arg(format!("{} {}; exit", editor, file_path.to_string_lossy()))
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open Terminal.app for editor: {}", e);
+                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    })?;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // Try different terminal emulators (existing logic)
+                let terminal_commands = [
+                    ("gnome-terminal", vec!["--", editor]),
+                    ("ptyxis", vec!["--", editor]),
+                    ("konsole", vec!["--e", editor]),
+                    ("xfce4-terminal", vec!["--command", editor]),
+                    ("terminator", vec!["-e", editor]),
+                    ("tilix", vec!["-e", editor]),
+                    ("kitty", vec!["-e", editor]),
+                    ("alacritty", vec!["-e", editor]),
+                    ("xterm", vec!["-e", editor]),
+                ];
 
-            if !success {
-                // Follow existing error handling pattern
-                println!("No terminal available. Falling back to system default... \nPress Enter to continue");
-                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-                eprintln!("Error: {}", error);
-                let mut buf = String::new();
-                io::stdin().read_line(&mut buf).map_err(|e| {
-                    eprintln!("Failed to read input: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-                return open_file(file_path); // Ask again
+                let mut success = false;
+                for (terminal, args) in terminal_commands.iter() {
+                    let mut cmd = std::process::Command::new(terminal);
+                    cmd.args(args).arg(file_path);
+
+                    if cmd.spawn().is_ok() {
+                        success = true;
+                        break;
+                    }
+                }
+
+                if !success {
+                    // Follow existing error handling pattern
+                    println!("No terminal available. Falling back to system default... \nPress Enter to continue");
+                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                    eprintln!("Error: {}", error);
+                    let mut buf = String::new();
+                    io::stdin().read_line(&mut buf).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+                    return open_file(file_path); // Ask again
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "cmd", "/C"])
+                    .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open cmd.exe for editor: {}", e);
+                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    })?;
             }
         }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "cmd", "/C"])
-                .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open cmd.exe for editor: {}", e);
-                    FileFantasticError::EditorLaunchFailed(editor.to_string())
-                })?;
-        }
-    }
 
     Ok(())
 }
