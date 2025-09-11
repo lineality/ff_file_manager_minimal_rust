@@ -2277,14 +2277,35 @@ impl NavigationStateManager {
             }
         }
 
+        // // // Version to pop-remove item
+        // // Try to parse as index and validate
+        // if let Ok(index) = input.parse::<usize>() {
+        //     if index > 0 && index <= self.file_path_stack.len() {
+        //         // Convert to actual vector index (1-based display to 0-based storage)
+        //         let actual_index = self.file_path_stack.len() - index;
+        //         let file = self.file_path_stack.remove(actual_index);
+        //         println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
+        //         return Ok(Some(file));
+        //     } else {
+        //         println!("Error: Invalid file number {}. Valid range: 1-{}", index, self.file_path_stack.len());
+        //     }
+        // } else {
+        //     println!("Error: Please enter a valid number, press Enter for most recent, or 'c' to cancel.");
+        // }
+
         // Try to parse as index and validate
         if let Ok(index) = input.parse::<usize>() {
             if index > 0 && index <= self.file_path_stack.len() {
                 // Convert to actual vector index (1-based display to 0-based storage)
                 let actual_index = self.file_path_stack.len() - index;
-                let file = self.file_path_stack.remove(actual_index);
-                println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
-                return Ok(Some(file));
+
+                // Use .get() for bounds-checked access
+                if let Some(file) = self.file_path_stack.get(actual_index) {
+                    println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
+                    return Ok(Some(file.clone())); // Clone to return ownership
+                } else {
+                    println!("Error: Index out of bounds");
+                }
             } else {
                 println!("Error: Invalid file number {}. Valid range: 1-{}", index, self.file_path_stack.len());
             }
