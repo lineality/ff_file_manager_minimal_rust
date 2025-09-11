@@ -8349,7 +8349,7 @@ pub fn file_fantastic() -> Result<()> {
                         },
 
                         NavigationAction::OpenNewTerminal => {
-                            println!("For tmux: Try vsplit | hsplit");
+                            println!("For tmux: Try vsplit | hsplit   Toggle: ctrl+b -> o");
                             match open_new_terminal(&current_directory_path) {
                                 Ok(_) => {
                                     println!("Opening new terminal... Press Enter to continue");
