@@ -7106,7 +7106,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     let prompt = if partner_programs.is_empty() {
         // Standard prompt when no partner programs are configured
         format!(
-            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi, gedit, firefox, nano...e.g. vi --headless, tmux: vi -hsplit|vsplit) {}",
+            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi --headless, gedit, firefox...tmux: nano -hsplit|vsplit) {}",
             YELLOW, RESET
         )
     } else {
@@ -7122,7 +7122,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
 
         format!(
-            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi, gedit, firefox, nano, hx, ... OR by number: {}): {}",
+            "{}Open with... (Enter for default, or software 'name' as w/ terminal: vi --headless, nano -hsplit, gedit, firefox OR by number: {}): {}",
             YELLOW, numbered_options, RESET
         )
     };
