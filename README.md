@@ -14,61 +14,8 @@ cargo build --profile release-performance
 
 # ~Install
 
-## 1. "cargo install" method:
-1. clone 
-```bash
-git clone https://github.com/lineality/ff_file_manager_minimal_rust.git
-```
-- or ssh
-```bash
-git clone git@github.com:lineality/ff_file_manager_minimal_rust.git
-```
-2. go to:
-- /...YOURSTUFF.../ff_file_manager_minimal_rust
-3. run in termial
-```bash
-cargo install ff
-```
 
-The default Cargo binary directory is:
-```
-$HOME/.cargo/bin
-```
-
-Updating: Bashrc/profile/bash_profil
-### For Linux:
-```
-~/.bashrc - Most common for interactive non-login shells
-~/.profile - For login shells (some distributions)
-~/.bash_profile - Alternative for login shells (if it exists, it overrides ~/.profile)
-```
-
-### For macOS:
-```
-~/.bash_profile (for Bash on older macOS)
-~/.zshrc (for Zsh on macOS Catalina and later)
-```
-
-### Add this to the Bashrc/profile/bash_profil file:
-```
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-### Alternately
-
-#### Install binary to /usr/local instead of ~/.cargo
-e.g. andoid
-```
-cargo install --path . --root /usr/local/bin
-```
-e.g. fedora
-cargo install --path . --root /.local/bin
-```
-
-Then running 'ff' in a terminal should work.
-
-
-## 2. local/bin method
+## 1. local/bin method
 - compile or otherwise get a binary/executible
 - place the ff binary/executible in the ~user's ~local 'bin' directory
 
@@ -85,7 +32,7 @@ data/data/com.termux/files/user/bin
 Then running 'ff' in a terminal should work.
 
 
-## 3. Alias Method
+## 2. Alias Method
 Put your executable-binary somewhere, and associate that path 
 with a callable keyword for your command line interface (CLI) 
 so that entering that keyword calls the executable (starts the program):
@@ -122,6 +69,74 @@ or bash_profile
 Now you should be able to call File Fantastic by typing 'ff' (or whatever you choose) into a terminal.
 
 Then running 'ff' in a terminal should work.
+
+
+## 3. "cargo install" method (may take experimentation with your OS and hardware)
+1. clone 
+```bash
+git clone https://github.com/lineality/ff_file_manager_minimal_rust.git
+```
+- or ssh
+```bash
+git clone git@github.com:lineality/ff_file_manager_minimal_rust.git
+```
+
+2. go to:
+- /...YOURSTUFF.../ff_file_manager_minimal_rust
+```bash
+cd ff_file_manager_minimal_rust
+```
+
+
+#### Install binary to /usr/local instead of ~/.cargo
+- 'root' here means picking a save-location, not "root" permission
+
+3. run in termial (type these literally as they are here)
+e.g. fedora
+```
+cargo install --path . --root ~/.local
+```
+e.g. andoid
+```
+cargo install --path . --root $PREFIX
+```
+
+
+Then running 'ff' in a terminal should work.
+
+
+
+### Alternately, save in the default .cargo/bin location
+- you can use ff to do this, much more easily than raw bash
+
+```bash
+cargo install ff
+```
+
+The default Cargo binary directory is:
+```
+$HOME/.cargo/bin
+```
+
+Updating: Bashrc/profile/bash_profil
+### For Linux:
+```
+~/.bashrc - Most common for interactive non-login shells
+~/.profile - For login shells (some distributions)
+~/.bash_profile - Alternative for login shells (if it exists, it overrides ~/.profile)
+```
+
+### For macOS:
+```
+~/.bash_profile (for Bash on older macOS)
+~/.zshrc (for Zsh on macOS Catalina and later)
+```
+
+### Add this to the Bashrc/profile/bash_profil file: (maybe not working)
+```
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
 
 
 ### Optional: config file
