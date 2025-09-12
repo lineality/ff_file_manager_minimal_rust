@@ -12,22 +12,45 @@ cargo build --profile release-small
 cargo build --profile release-performance
 ```
 
-## ~Install
+# ~Install
 
-### local/bin method
-Place the ff executible in the ~user's ~local 'bin' directory
+## 1. cargo install method:
+1. clone 
+```bash
+git clone https://github.com/lineality/ff_file_manager_minimal_rust.git
+```
+- or ssh
+```bash
+git clone git@github.com:lineality/ff_file_manager_minimal_rust.git
+```
+2. go to:
+- /...YOURSTUFF.../ff_file_manager_minimal_rust
+3. run in termial
+```bash
+cargo install ff
+```
+
+Then running 'ff' in a terminal should work.
+
+
+## 2. local/bin method
+- compile or otherwise get a binary/executible
+- place the ff binary/executible in the ~user's ~local 'bin' directory
 
 #### in linux:
 ```path
 home/{YOUR_USER_NAME}/.local/bin
 ```
 
-### in android:
+#### in android:
 ```path
 data/data/com.termux/files/user/bin
 ```
 
-### Alias Method
+Then running 'ff' in a terminal should work.
+
+
+## 3. Alias Method
 Put your executable-binary somewhere, and associate that path 
 with a callable keyword for your command line interface (CLI) 
 so that entering that keyword calls the executable (starts the program):
@@ -62,6 +85,9 @@ source ~/.bashrc
 or bash_profile
 
 Now you should be able to call File Fantastic by typing 'ff' (or whatever you choose) into a terminal.
+
+Then running 'ff' in a terminal should work.
+
 
 ### Optional: config file
 Add a file called 'absolute_paths_to_local_partner_fileopening_executibles.txt',

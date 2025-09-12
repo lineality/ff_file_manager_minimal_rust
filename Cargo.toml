@@ -60,3 +60,13 @@ opt-level = "z"
 codegen-units = 1
 strip = "symbols"
 debug = false
+
+[build]
+rustflags = [
+    "-C", "opt-level=3",
+    "-C", "lto=fat",              # More explicit than just "lto"
+    "-C", "codegen-units=1",
+    "-C", "panic=unwind",         # Good for diagnostics
+    "-C", "overflow-checks=on",   # Good for safety
+    "-C", "target-cpu=native"     # Optimize for your specific CPU
+]
