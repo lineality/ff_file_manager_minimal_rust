@@ -1,0 +1,75 @@
+
+/// Recursively collects file system entries from directory and all subdirectories
+///
+/// # Purpose
+/// Traverses a directory tree starting from the specified root directory,
+/// collecting all files and subdirectories for searching operations.
+///
+/// # Critical Implementation Note
+/// This function MUST receive the actual directory to search, not assume
+/// any particular directory. The caller is responsible for providing the
+/// correct starting directory based on the application's navigation state.
+///
+/// # Arguments
+/// * `start_directory` - The root directory from which to start collecting.
+///                       This should be the user's current navigation location,
+///                       NOT the process working directory.
+///
+/// # Common Mistake
+/// DO NOT use std::env::current_dir() here or in calling code.
+/// The process working directory is NOT the same as the file manager's
+/// current navigation directory.
+fn collect_entries_recursive(
+    &self,
+    start_directory: &Path,  // Must be the actual navigation directory
+) -> Result<Vec<FileSystemEntry>> {
+    let mut all_entries = Vec::new();
+    let mut directories_to_process = vec![start_directory.to_path_buf()];
+
+    while let Some(current_dir) = directories_to_process.pop() {
+        // Try to read the current directory, skip if we can't
+        let dir_entries = match fs::read_dir(&current_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue, // Skip directories we can't read
+        };
+
+        for entry_result in dir_entries {
+            // Skip entries we can't read
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            // Get metadata, skip if we can't read it
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            // Get the file name as a string, skip if invalid
+            let file_name = match entry.file_name().into_string() {
+                Ok(name) => name,
+                Err(_) => continue,
+            };
+
+            let path = entry.path();
+
+            // Add to entries list
+            all_entries.push(FileSystemEntry {
+                file_system_item_name: file_name,
+                file_system_item_path: path.clone(),
+                file_system_item_size_in_bytes: metadata.len(),
+                file_system_item_last_modified_time: metadata.modified()
+                    .unwrap_or(SystemTime::UNIX_EPOCH),
+                is_directory: metadata.is_dir(),
+            });
+
+            // If it's a directory, add it to the processing queue
+            if metadata.is_dir() {
+                directories_to_process.push(path);
+            }
+        }
+    }
+
+    Ok(all_entries)
+}

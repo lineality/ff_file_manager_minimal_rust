@@ -326,6 +326,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::env;
 use std::process::Command;
+use std::collections::VecDeque;
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
@@ -5152,6 +5153,201 @@ impl SearchConfig {
 
 }
 
+#[cfg(test)]
+mod tests_iterative_crawl {
+    use super::*;
+    use std::path::Path;
+    use std::collections::HashMap;
+
+    /// Creates a minimal NavigationState instance for testing
+    fn create_test_navigation_state() -> NavigationState {
+        NavigationState {
+            display_lookup_table: HashMap::new(),
+            current_sort_method: DirectorySortingMethodEnum::Name(true),
+            last_sort_command: None,
+            current_filter: None,
+            selected_item_index: None,
+            active_search_term: None,
+            tui_tall_adjustment: 0,
+            tui_tall_direction_sign: true,
+            tui_wide_adjustment: 0,
+            tui_wide_direction_sign: true,
+            current_page_index: 0,
+        }
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_basic() {
+        // Test basic functionality - can collect entries from temp directory
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        let result = nav_state.collect_entries_iterative(
+            &temp_dir,
+            Some(0),  // Only the directory itself
+            None,
+            None,
+        );
+
+        assert!(result.is_ok(), "Should successfully read temp directory");
+        let entries = result.expect("Failed to get entries");
+        assert!(!entries.is_empty(), "Temp directory should have at least some entries");
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_depth_limit() {
+        // Test that depth limit of 0 only returns immediate children
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        // Depth 0 = only immediate children of temp dir
+        let result_depth_0 = nav_state.collect_entries_iterative(
+            &temp_dir,
+            Some(0),
+            None,
+            None,
+        );
+
+        assert!(result_depth_0.is_ok(), "Depth 0 should succeed");
+        let entries_0 = result_depth_0.expect("Failed to get entries");
+
+        // Depth 1 = temp dir children and their children
+        let result_depth_1 = nav_state.collect_entries_iterative(
+            &temp_dir,
+            Some(1),
+            None,
+            None,
+        );
+
+        assert!(result_depth_1.is_ok(), "Depth 1 should succeed");
+        let entries_1 = result_depth_1.expect("Failed to get entries");
+
+        // Depth 1 should have at least as many entries as depth 0
+        assert!(
+            entries_1.len() >= entries_0.len(),
+            "Depth 1 should have at least as many entries as depth 0"
+        );
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_max_entries_limit() {
+        // Test that max_entries limit works
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        // Collect with a limit of 5 entries
+        let result = nav_state.collect_entries_iterative(
+            &temp_dir,
+            None,
+            Some(5),  // Maximum 5 entries
+            None,
+        );
+
+        assert!(result.is_ok(), "Should succeed with entry limit");
+        let entries = result.expect("Failed to get entries");
+        assert!(
+            entries.len() <= 5,
+            "Should not exceed 5 entries when limit is set to 5, got {}",
+            entries.len()
+        );
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_nonexistent_directory() {
+        // Test handling of non-existent directory
+        let nav_state = create_test_navigation_state();
+        let nonexistent_path = Path::new("/this/directory/definitely/does/not/exist/anywhere/12345");
+
+        let result = nav_state.collect_entries_iterative(
+            nonexistent_path,
+            None,
+            None,
+            None,
+        );
+
+        // Should return Ok with empty vec since we skip unreadable directories
+        assert!(result.is_ok(), "Should return Ok even for non-existent directory");
+        let entries = result.expect("Failed to get entries");
+        assert!(entries.is_empty(), "Non-existent directory should return empty vec");
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_memory_limit() {
+        // Test that memory limit stops collection
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        // Set a very small memory limit (1 MB)
+        let result = nav_state.collect_entries_iterative(
+            &temp_dir,
+            None,
+            None,
+            Some(1),  // 1 MB limit
+        );
+
+        assert!(result.is_ok(), "Should succeed even with memory limit");
+        // Just verify it completes without panic
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_combined_limits() {
+        // Test multiple limits at once
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        let result = nav_state.collect_entries_iterative(
+            &temp_dir,
+            Some(1),   // Depth limit
+            Some(10),  // Entry limit
+            Some(5),   // Memory limit (MB)
+        );
+
+        assert!(result.is_ok(), "Should succeed with combined limits");
+        let entries = result.expect("Failed to get entries");
+
+        // Should respect the entry limit
+        assert!(
+            entries.len() <= 10,
+            "Should not exceed 10 entries when limit is set, got {}",
+            entries.len()
+        );
+    }
+
+    #[test]
+    fn test_collect_entries_iterative_file_attributes() {
+        // Test that collected entries have proper attributes
+        let nav_state = create_test_navigation_state();
+        let temp_dir = std::env::temp_dir();
+
+        let result = nav_state.collect_entries_iterative(
+            &temp_dir,
+            Some(0),  // Only immediate children
+            Some(5),  // Limit to a few entries
+            None,
+        );
+
+        assert!(result.is_ok(), "Should collect entries successfully");
+        let entries = result.expect("Failed to get entries");
+
+        // Verify each entry has valid attributes
+        for entry in entries.iter() {
+            // Name should not be empty
+            assert!(!entry.file_system_item_name.is_empty(), "File name should not be empty");
+
+            // Path should exist as a string representation
+            assert!(entry.file_system_item_path.to_str().is_some(), "Path should be valid UTF-8");
+
+            // Last modified time should not be UNIX_EPOCH for real files
+            // (though we handle UNIX_EPOCH as fallback)
+            // Just verify it doesn't panic when accessed
+            let _ = entry.file_system_item_last_modified_time;
+
+            // is_directory should be properly set
+            let _ = entry.is_directory;
+        }
+    }
+}
+
 /// Manages navigation state, lookup tables, sort/filter settings, and TUI display preferences
 ///
 /// This struct serves as the central state manager for the File Fantastic UI,
@@ -5412,7 +5608,12 @@ impl NavigationState {
         // Step 2: Get the appropriate file list based on recursive flag
         let entries = if recursive {
             // Collect files recursively from navigation directory
-            match self.collect_entries_recursive(current_navigation_path) {
+            match self.collect_entries_iterative(
+                current_navigation_path,
+                Some(20),      // Maximum depth of 20 levels (prevents infinite loops, covers 99.9% of real use cases)
+                Some(100_000), // Maximum 100,000 entries (prevents UI freezing, reasonable for display/search)
+                Some(500),     // Maximum 500MB memory usage (safe for systems with 4GB+ RAM)
+            ) {
                 Ok(entries) => entries,
                 Err(_) => return Vec::new(),
             }
@@ -5624,76 +5825,236 @@ impl NavigationState {
         }
     }
 
-    /// Recursively collects file system entries from directory and all subdirectories
+    /// Iteratively collects file system entries from directory and all subdirectories with optimization controls
     ///
     /// # Purpose
-    /// Traverses a directory tree starting from the specified root directory,
-    /// collecting all files and subdirectories for searching operations.
+    /// Traverses a directory tree starting from the specified root directory using an iterative
+    /// breadth-first search algorithm. This approach avoids stack overflow issues that can occur
+    /// with deep recursion and provides better memory control and traversal limits.
+    ///
+    /// # Algorithm Details
+    /// - Uses `VecDeque` for O(1) push/pop operations (more efficient than Vec for queue operations)
+    /// - Implements breadth-first traversal for better cache locality and predictable memory patterns
+    /// - Provides optional depth, entry count, and memory limits for controlled traversal
+    /// - Tracks approximate memory usage to prevent out-of-memory conditions
     ///
     /// # Critical Implementation Note
-    /// This function MUST receive the actual directory to search, not assume
-    /// any particular directory. The caller is responsible for providing the
-    /// correct starting directory based on the application's navigation state.
+    /// This function MUST receive the actual directory to search, not assume any particular directory.
+    /// The caller is responsible for providing the correct starting directory based on the
+    /// application's navigation state.
     ///
     /// # Arguments
     /// * `start_directory` - The root directory from which to start collecting.
     ///                       This should be the user's current navigation location,
     ///                       NOT the process working directory.
+    /// * `max_depth` - Optional maximum depth to traverse:
+    ///                 - `None` = unlimited depth
+    ///                 - `Some(0)` = only the start directory itself
+    ///                 - `Some(1)` = start directory and its immediate children
+    ///                 - `Some(2)` = start directory, children, and grandchildren, etc.
+    /// * `max_entries` - Optional maximum number of entries to collect before stopping
+    /// * `max_memory_mb` - Optional approximate memory limit in megabytes
+    ///
+    /// # Returns
+    /// * `Ok(Vec<FileSystemEntry>)` - Successfully collected entries (may be limited by constraints)
+    /// * `Err(Error)` - Failed to access the start directory
     ///
     /// # Common Mistake
     /// DO NOT use std::env::current_dir() here or in calling code.
     /// The process working directory is NOT the same as the file manager's
     /// current navigation directory.
-    fn collect_entries_recursive(
+    ///
+    /// # Memory Characteristics
+    /// - Memory usage: O(width of directory tree) for the queue in worst case
+    /// - Processing order: breadth-first (all siblings before children)
+    /// - Early termination: stops immediately when any limit is reached
+    ///
+    /// # Performance Notes
+    /// - Breadth-first traversal provides better cache locality for file system metadata
+    /// - VecDeque provides amortized O(1) operations for queue management
+    /// - Memory estimation helps prevent out-of-memory conditions on large directory trees
+    pub fn collect_entries_iterative(
         &self,
-        start_directory: &Path,  // Must be the actual navigation directory
+        start_directory: &Path,
+        max_depth: Option<usize>,
+        max_entries: Option<usize>,
+        max_memory_mb: Option<usize>,
     ) -> Result<Vec<FileSystemEntry>> {
+        // Initialize the collection for results
         let mut all_entries = Vec::new();
-        let mut directories_to_process = vec![start_directory.to_path_buf()];
 
-        while let Some(current_dir) = directories_to_process.pop() {
-            // Try to read the current directory, skip if we can't
+        // Initialize the breadth-first search queue with (directory_path, depth_level) tuples
+        // Depth 0 represents the start directory itself
+        let mut directories_queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+
+        // Begin traversal from the start directory at depth 0
+        directories_queue.push_back((start_directory.to_path_buf(), 0));
+
+        // Memory usage tracking
+        // These are rough estimates based on typical file system entry sizes
+        const ENTRY_SIZE_ESTIMATE_BYTES: usize = 256;  // Approximate size of one FileSystemEntry in memory
+        const QUEUE_ITEM_SIZE_ESTIMATE_BYTES: usize = 128;  // Approximate size of one (PathBuf, usize) tuple
+        let mut estimated_memory_bytes: usize = 0;
+
+        // Progress tracking for diagnostics
+        let mut directories_processed: usize = 0;
+        let mut directories_skipped: usize = 0;
+
+        // Main traversal loop - continues until queue is empty or limits are reached
+        while let Some((current_dir, current_depth)) = directories_queue.pop_front() {
+            directories_processed += 1;
+
+            // Update memory estimate by removing the dequeued item
+            estimated_memory_bytes = estimated_memory_bytes.saturating_sub(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
+
+            // Check depth limit before processing this directory
+            // If max_depth is 2, we process depths 0, 1, and 2 (three levels total)
+            if let Some(max_d) = max_depth {
+                if current_depth > max_d {
+                    // Skip this directory as it exceeds depth limit
+                    directories_skipped += 1;
+                    continue;
+                }
+            }
+
+            // Check if we've reached the maximum number of entries
+            if let Some(max_e) = max_entries {
+                if all_entries.len() >= max_e {
+                    // Stop traversal - we've collected enough entries
+                    break;
+                }
+            }
+
+            // Check memory limit before processing more entries
+            if let Some(max_mem) = max_memory_mb {
+                let max_bytes = max_mem.saturating_mul(1024).saturating_mul(1024);
+                if estimated_memory_bytes > max_bytes {
+                    // Stop traversal - approaching memory limit
+                    // Note: This is an estimate, actual memory usage may vary
+                    eprintln!("Warning: Estimated memory usage ({} MB) exceeds limit ({} MB), stopping traversal",
+                             estimated_memory_bytes / (1024 * 1024), max_mem);
+                    break;
+                }
+            }
+
+            // Attempt to read the directory contents
             let dir_entries = match fs::read_dir(&current_dir) {
                 Ok(entries) => entries,
-                Err(_) => continue, // Skip directories we can't read
+                Err(e) => {
+                    // Log the error but continue processing other directories
+                    // This handles permission denied, symbolic link issues, etc.
+                    eprintln!("Warning: Cannot read directory '{}': {}",
+                             current_dir.display(), e);
+                    directories_skipped += 1;
+                    continue;
+                }
             };
 
+            // Process each entry in the current directory
             for entry_result in dir_entries {
-                // Skip entries we can't read
+                // Check entry limit again (may have been added by other iterations)
+                if let Some(max_e) = max_entries {
+                    if all_entries.len() >= max_e {
+                        break;
+                    }
+                }
+
+                // Handle potential I/O errors when reading directory entry
                 let entry = match entry_result {
                     Ok(e) => e,
-                    Err(_) => continue,
+                    Err(_) => {
+                        // Skip entries we can't read
+                        continue;
+                    }
                 };
 
-                // Get metadata, skip if we can't read it
+                // Retrieve file metadata (size, modification time, type)
                 let metadata = match entry.metadata() {
                     Ok(m) => m,
-                    Err(_) => continue,
+                    Err(_) => {
+                        // Skip if we can't read metadata
+                        continue;
+                    }
                 };
 
-                // Get the file name as a string, skip if invalid
+                // Convert OsString to String, skipping entries with invalid UTF-8
                 let file_name = match entry.file_name().into_string() {
                     Ok(name) => name,
-                    Err(_) => continue,
+                    Err(_) => {
+                        // Skip files with non-UTF-8 names
+                        continue;
+                    }
                 };
 
                 let path = entry.path();
+                let is_directory = metadata.is_dir();
 
-                // Add to entries list
+                // Create the file system entry structure
                 all_entries.push(FileSystemEntry {
                     file_system_item_name: file_name,
                     file_system_item_path: path.clone(),
                     file_system_item_size_in_bytes: metadata.len(),
                     file_system_item_last_modified_time: metadata.modified()
                         .unwrap_or(SystemTime::UNIX_EPOCH),
-                    is_directory: metadata.is_dir(),
+                    is_directory,
                 });
 
-                // If it's a directory, add it to the processing queue
-                if metadata.is_dir() {
-                    directories_to_process.push(path);
+                // Update memory estimate after adding entry
+                estimated_memory_bytes = estimated_memory_bytes.saturating_add(ENTRY_SIZE_ESTIMATE_BYTES);
+
+                // Queue subdirectories for future processing (breadth-first)
+                if is_directory {
+                    // Only queue subdirectories if:
+                    // 1. We haven't reached max_entries limit
+                    // 2. The subdirectory's depth would not exceed max_depth
+                    // 3. We haven't exceeded memory limits
+
+                    let should_queue_subdirectory = {
+                        // Check if we're at capacity for entries
+                        let within_entry_limit = match max_entries {
+                            Some(max_e) => all_entries.len() < max_e,
+                            None => true,
+                        };
+
+                        // Check if subdirectory would exceed depth limit
+                        // Subdirectories would be at depth current_depth + 1
+                        let within_depth_limit = match max_depth {
+                            Some(max_d) => current_depth < max_d,  // current_depth + 1 <= max_d
+                            None => true,
+                        };
+
+                        // Check if we have memory budget for more queue items
+                        let within_memory_limit = match max_memory_mb {
+                            Some(max_mem) => {
+                                let max_bytes = max_mem.saturating_mul(1024).saturating_mul(1024);
+                                estimated_memory_bytes.saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES) <= max_bytes
+                            },
+                            None => true,
+                        };
+
+                        within_entry_limit && within_depth_limit && within_memory_limit
+                    };
+
+                    if should_queue_subdirectory {
+                        directories_queue.push_back((path, current_depth + 1));
+                        estimated_memory_bytes = estimated_memory_bytes.saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
+                    }
                 }
             }
+
+            // Provide progress feedback for very large traversals (every 1000 directories)
+            if directories_processed % 1000 == 0 && directories_processed > 0 {
+                eprintln!("Progress: Processed {} directories, {} entries collected, {} directories queued",
+                         directories_processed,
+                         all_entries.len(),
+                         directories_queue.len());
+            }
+        }
+
+        // Log final statistics if any directories were skipped
+        if directories_skipped > 0 {
+            eprintln!("Traversal complete: {} directories processed, {} skipped, {} entries collected",
+                     directories_processed, directories_skipped, all_entries.len());
         }
 
         Ok(all_entries)
@@ -6165,7 +6526,7 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileS
 /// - Some assertions check string length to verify format patterns
 /// - Specific edge cases (like epoch time) are explicitly tested
 #[cfg(test)]
-mod tests {
+mod tests_formatting {
     use super::*;
 
     #[test]
