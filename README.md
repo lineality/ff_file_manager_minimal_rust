@@ -14,7 +14,7 @@ cargo build --profile release-performance
 
 # ~Install
 
-## 1. cargo install method:
+## 1. "cargo install" method:
 1. clone 
 ```bash
 git clone https://github.com/lineality/ff_file_manager_minimal_rust.git
@@ -28,6 +28,41 @@ git clone git@github.com:lineality/ff_file_manager_minimal_rust.git
 3. run in termial
 ```bash
 cargo install ff
+```
+
+The default Cargo binary directory is:
+```
+$HOME/.cargo/bin
+```
+
+Updating: Bashrc/profile/bash_profil
+### For Linux:
+```
+~/.bashrc - Most common for interactive non-login shells
+~/.profile - For login shells (some distributions)
+~/.bash_profile - Alternative for login shells (if it exists, it overrides ~/.profile)
+```
+
+### For macOS:
+```
+~/.bash_profile (for Bash on older macOS)
+~/.zshrc (for Zsh on macOS Catalina and later)
+```
+
+### Add this to the Bashrc/profile/bash_profil file:
+```
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+### Alternately
+
+#### Install binary to /usr/local instead of ~/.cargo
+e.g. andoid
+```
+cargo install --path . --root /usr/local/bin
+```
+e.g. fedora
+cargo install --path . --root /.local/bin
 ```
 
 Then running 'ff' in a terminal should work.

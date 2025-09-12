@@ -72,12 +72,6 @@ debug = false
 # Disable rpath to save some bytes
 rpath = false
 
-# Apply the same size optimizations to all dependencies
-[profile.release-small.package."*"]
-opt-level = "z"
-codegen-units = 1
-strip = "symbols"
-debug = false
 
 [[bin]]
 name = "ff"
