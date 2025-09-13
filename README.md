@@ -33,8 +33,8 @@ Then running 'ff' in a terminal should work.
 
 
 ## 2. Alias Method
-Put your executable-binary somewhere, and associate that path 
-with a callable keyword for your command line interface (CLI) 
+Put your executable-binary somewhere, and associate that path
+with a callable keyword for your command line interface (CLI)
 so that entering that keyword calls the executable (starts the program):
 
 1. Make or get the binary executable and put it somewhere: e.g.
@@ -56,7 +56,7 @@ e.g. add:
 alias ff='/home/COMPUTERNAME/ff_file_browser/ff'
 ```
 
-4. Save and close the text editor. 
+4. Save and close the text editor.
 - If you used nano, you can do this by pressing: Ctrl x s (control key, x key, s key)
 - If you use Helix(hx), Vim(vi), or Teehee: 'i' to type, then esc for normal mode, then :wq to write and quit
 
@@ -72,7 +72,7 @@ Then running 'ff' in a terminal should work.
 
 
 ## 3. "cargo install" method (may take experimentation with your OS and hardware)
-1. clone 
+1. clone
 ```bash
 git clone https://github.com/lineality/ff_file_manager_minimal_rust.git
 ```
@@ -92,11 +92,11 @@ cd ff_file_manager_minimal_rust
 - 'root' here means picking a save-location, not "root" permission
 
 3. run in termial (type these literally as they are here)
-e.g. fedora
+e.g. Fedora(rpm) / Ubuntu (Linux)
 ```
 cargo install --path . --root ~/.local
 ```
-e.g. andoid
+e.g. Andoid (also linux)
 ```
 cargo install --path . --root $PREFIX
 ```
@@ -151,7 +151,7 @@ You can put the paths to local executable files as lines in this file.
 
 # ff is a minimal rust file manager
 
-## A very minimal 'file browser/explorer' module, much more minimal than "midnight commander." 
+## A very minimal 'file browser/explorer' module, much more minimal than "midnight commander."
 
 ### Sample main file to use this module
 ```rust
@@ -162,13 +162,13 @@ mod ff_file_fantastic_module;
 use ff_file_fantastic_module::file_fantastic;
 
 fn main() {
-    
+
     // Let's call File Fantastic Go!!
     if let Err(e) = file_fantastic() {
-        
+
         // Handle errors
         eprintln!("Error: {}", e);
-        
+
         // exit code one means ok!
         std::process::exit(1);
     }
@@ -181,28 +181,28 @@ ff (File Fantastic) is meant to operate in a 'do one thing well' context.
 A plain posix (unix, bsd, linux, etc.) terminal is very useful
 and important to use, but common useful features that have become
 conventions of file-folder-explorers/managers/browsers are missing,
-such as seeing file sizes, sorting by last-modified date, etc. 
+such as seeing file sizes, sorting by last-modified date, etc.
 with ff (File Fantastic) it is (hopefully) simple to ~bridge or interface the
 common conventions of file-explorers with the open-ended utility of the terminal,
 without adding too many redundant features to File Fantastic.
 
-Terminals are great for lower level tasks such as 
+Terminals are great for lower level tasks such as
 making new directories, renaming, removing, etc.,
 but terminals are not very user-friendly for seeing and navigating 'where'
 you are in the data.
 
 ### Do One Thing Well
 If in a terminal you want the navigation-features of a file-explorer just type 'ff'
-and there you are: that terminal view is enhanced with file-folder visibility. 
-If in File Fantastic you want the lower-level utility of a terminal, 
+and there you are: that terminal view is enhanced with file-folder visibility.
+If in File Fantastic you want the lower-level utility of a terminal,
 type 't' and there you are: a terminal opens where you were. Use the right
 tool for the job, not a multi-function-monster that does many things badly.
 
-### A Stable Backup: 
+### A Stable Backup:
 File Fantastic is not expected to completely replace the GUI fancy file-manager
 that usually is a default in an OS. But it does happen, often more frequently
 than one might expect, that the default fancy GUI file explorer tool does
-not work. In such cases it is nice to have a stable backup option. 
+not work. In such cases it is nice to have a stable backup option.
 
 # Design Scope:
 1. no third party dependencies
@@ -240,7 +240,7 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 17. Minimal file-moving ("Get-Send Mode") in get-send file v,y,p
 18. Save and Change Navigation-State ("Pocket Dimensions") in get-send file v,y,p
 19. Archive Selection: basic archive feature for versioning and backup
-20. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu') 
+20. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu')
 21. User can resize TUI: tall+/-N or wide+/-N (e.g. tall+2 or wide-4)
 22. modular to easy integration into other projects
 
@@ -259,9 +259,9 @@ if the user enters any of these: v, c, y, p, g
 2. get file from file-stack (save here) (start Q&A)
 3. store directory-path to directory-stack
 4. Save: current navigation-state to -> pocket-dimensions
-5. Go To: Pocket-Dimension (select from saved navigation states) 
+5. Go To: Pocket-Dimension (select from saved navigation states)
 6. Go To: path -> from directory-stack [set this up later]
-7. clear 
+7. clear
 8. return/exit/back (same as "" or "b")
 
 # Example daily workflow:
