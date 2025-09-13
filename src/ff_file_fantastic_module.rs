@@ -4387,30 +4387,40 @@ fn process_user_input(
 
     // Get both results and search type from wrapper
     // In process_user_input, you need to pass the current navigation directory
-    // Assuming it's available as `current_directory` or similar:
-
     let search_results = nav_state.fuzzy_search_manager_wrapper(
         input,
         all_entries,
         &current_directory_path
     );
 
-    // Pass the correct is_grep flag to display function
-    display_extended_search_results(&search_results).map_err(|e| {
+    // // Pass the correct is_grep flag to display function
+    // display_extended_search_results(&search_results).map_err(|e| {
+    //     eprintln!("Failed to display search results: {}", e);
+    //     FileFantasticError::Io(e)
+    // })?;
+
+    // // Wait for user to select from results or press enter to continue
+    // print!("\nEnter number to select or press Enter to continue: ");
+    // io::stdout().flush().map_err(|e| {
+    //     eprintln!("Failed to flush stdout: {}", e);
+    //     FileFantasticError::Io(e)
+    // })?;
+
+    // let mut selection = String::new();
+    // io::stdin().read_line(&mut selection).map_err(|e| {
+    //     eprintln!("Failed to read input: {}", e);
+    //     FileFantasticError::Io(e)
+    // })?;
+
+    // Display paginated search results and get user selection
+    let selection = display_paginated_search_results(
+        &search_results,
+        nav_state.tui_tall_adjustment,
+        nav_state.tui_tall_direction_sign,
+        nav_state.tui_wide_adjustment,
+        nav_state.tui_wide_direction_sign,
+    ).map_err(|e| {
         eprintln!("Failed to display search results: {}", e);
-        FileFantasticError::Io(e)
-    })?;
-
-    // Wait for user to select from results or press enter to continue
-    print!("\nEnter number to select or press Enter to continue: ");
-    io::stdout().flush().map_err(|e| {
-        eprintln!("Failed to flush stdout: {}", e);
-        FileFantasticError::Io(e)
-    })?;
-
-    let mut selection = String::new();
-    io::stdin().read_line(&mut selection).map_err(|e| {
-        eprintln!("Failed to read input: {}", e);
         FileFantasticError::Io(e)
     })?;
 
@@ -4843,133 +4853,412 @@ fn parse_input_flags(input: &str) -> (&str, bool, bool, bool) {
     (search_term, recursive, grep, case_sensitive)
 }
 
-/// Displays search results with appropriate formatting based on search type
+// /// Displays search results with appropriate formatting based on search type
+// ///
+// /// # Purpose
+// /// Presents search results to the user in a readable tabular format,
+// /// automatically detecting the search type from the result enum and displaying
+// /// the appropriate format for each type.
+// ///
+// /// # Arguments
+// /// * `results` - Slice of UnifiedSearchResult items to display
+// ///               The enum variant determines the display format
+// ///
+// /// # Returns
+// /// * `io::Result<()>` - Ok(()) on successful display, or an IO error if terminal
+// ///                       output operations fail
+// ///
+// /// # Display Formats
+// ///
+// /// ## Fuzzy Name Search Format:
+// /// Shows the Levenshtein distance to help users understand match quality
+// /// ```text
+// /// Search Results (Fuzzy Match)
+// /// #     Name                                     Distance
+// /// -------------------------------------------------------
+// /// 1     example.txt                              1
+// /// 2     example2.doc                             2
+// /// ```
+// ///
+// /// ## Grep Content Search Format:
+// /// Shows the line number and content for each match
+// /// ```text
+// /// Search Results (Content Match)
+// /// #     File                                     Line    Content
+// /// --------------------------------------------------------------
+// /// 1     src/main.rs                              42      // TODO: implement
+// /// 2     src/lib.rs                               15      // TODO: document
+// /// ```
+// ///
+// /// # Implementation Details
+// /// - Clears the terminal screen before displaying results for clean presentation
+// /// - Truncates long filenames to maintain table alignment (max 38 characters)
+// /// - Automatically detects search type from enum variant
+// /// - Shows "No matches found" message for empty result sets
+// ///
+// /// # User Interface Flow
+// /// After displaying results, the user can:
+// /// - Enter a number to select and navigate to that file
+// /// - Press Enter to continue without selection
+// ///
+// /// # Error Handling
+// /// - Returns IO errors from terminal output operations
+// /// - Handles empty result sets gracefully with informative message
+// pub fn display_extended_search_results(
+//     results: &[UnifiedSearchResult],
+// ) -> io::Result<()> {  // Note: removed is_grep parameter - not needed with enum
+
+//     // Handle empty results with user-friendly message
+//     if results.is_empty() {
+//         println!("No matches found");
+//         return Ok(());
+//     }
+
+//     // Clear screen for clean display
+//     print!("\x1B[2J\x1B[1;1H");
+
+//     // Determine search type from first result and display accordingly
+//     match &results[0] {
+//         UnifiedSearchResult::Grep(_) => {
+//             // Display header for grep results
+//             println!("\nContent Search Results (try: -g -r -c)"); // -fg --fuzzygrep
+//             println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Content");
+//             println!("{}", "-".repeat(80));
+
+//             // Display each grep result
+//             for result in results {
+//                 if let UnifiedSearchResult::Grep(grep_result) = result {
+//                     // Truncate filename if too long
+//                     let display_name = if grep_result.file_name.len() > 28 {
+//                         format!("{}...", &grep_result.file_name[..25])
+//                     } else {
+//                         grep_result.file_name.clone()
+//                     };
+
+//                     // Truncate content if too long
+//                     let display_content = if grep_result.line_content.len() > 35 {
+//                         format!("{}...", &grep_result.line_content[..32])
+//                     } else {
+//                         grep_result.line_content.clone()
+//                     };
+
+//                     println!(
+//                         "{:<5} {:<30} {:<7} {}",
+//                         grep_result.display_index,
+//                         display_name,
+//                         grep_result.line_number,
+//                         display_content
+//                     );
+//                 }
+//             }
+//         }
+
+//         UnifiedSearchResult::Fuzzy(_) => {
+//             // Display header for fuzzy search results
+//             println!("\nFuzzy Name Search Results (try: --grep --recursive --case-sensitive)");
+//             println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
+//             println!("{}", "-".repeat(55));
+
+//             // Display each fuzzy result
+//             for result in results {
+//                 if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
+//                     // Truncate filename if too long
+//                     let display_name = if fuzzy_result.item_name.len() > 38 {
+//                         format!("{}...", &fuzzy_result.item_name[..35])
+//                     } else {
+//                         fuzzy_result.item_name.clone()
+//                     };
+
+//                     println!(
+//                         "{:<5} {:<40} {:<10}",
+//                         fuzzy_result.display_index,
+//                         display_name,
+//                         fuzzy_result.distance
+//                     );
+//                 }
+//             }
+//         }
+//     }
+
+//     Ok(())
+// }
+
+/// Displays search results with pagination and handles user selection
 ///
 /// # Purpose
-/// Presents search results to the user in a readable tabular format,
-/// automatically detecting the search type from the result enum and displaying
-/// the appropriate format for each type.
+/// Presents search results in paginated format, allowing navigation through
+/// pages and selection of items. Combines display and input handling in one
+/// cohesive pagination loop.
 ///
 /// # Arguments
 /// * `results` - Slice of UnifiedSearchResult items to display
-///               The enum variant determines the display format
+/// * `tui_tall_adjustment` - Height adjustment for terminal size (magnitude of adjustment)
+/// * `tui_tall_direction_sign` - Direction of height adjustment (true = add rows, false = subtract rows)
+/// * `tui_wide_adjustment` - Width adjustment for name column (magnitude of adjustment)
+/// * `tui_wide_direction_sign` - Direction of width adjustment (true = wider names, false = narrower names)
 ///
 /// # Returns
-/// * `io::Result<()>` - Ok(()) on successful display, or an IO error if terminal
-///                       output operations fail
+/// * `io::Result<String>` - User's selection as string (number for selection, empty for continue)
 ///
-/// # Display Formats
+/// # Pagination Controls
+/// - `w`, `j`, `<`, `[`, `up`, `prev`, `,`, `+`, `↑`: Previous page
+/// - `x`, `k`, `>`, `]`, `down`, `next`, `.`, `-`, `↓`: Next page
+/// - `1-N`: Select item number
+/// - `Enter`: Continue without selection
 ///
-/// ## Fuzzy Name Search Format:
-/// Shows the Levenshtein distance to help users understand match quality
-/// ```text
-/// Search Results (Fuzzy Match)
-/// #     Name                                     Distance
-/// -------------------------------------------------------
-/// 1     example.txt                              1
-/// 2     example2.doc                             2
-/// ```
-///
-/// ## Grep Content Search Format:
-/// Shows the line number and content for each match
-/// ```text
-/// Search Results (Content Match)
-/// #     File                                     Line    Content
-/// --------------------------------------------------------------
-/// 1     src/main.rs                              42      // TODO: implement
-/// 2     src/lib.rs                               15      // TODO: document
-/// ```
-///
-/// # Implementation Details
-/// - Clears the terminal screen before displaying results for clean presentation
-/// - Truncates long filenames to maintain table alignment (max 38 characters)
-/// - Automatically detects search type from enum variant
-/// - Shows "No matches found" message for empty result sets
-///
-/// # User Interface Flow
-/// After displaying results, the user can:
-/// - Enter a number to select and navigate to that file
-/// - Press Enter to continue without selection
-///
-/// # Error Handling
-/// - Returns IO errors from terminal output operations
-/// - Handles empty result sets gracefully with informative message
-pub fn display_extended_search_results(
+/// # Display Adjustment Logic
+/// The function respects user's TUI size preferences:
+/// - Height: Controls how many items appear per page
+/// - Width: Controls how much of the filename is visible before truncation
+pub fn display_paginated_search_results(
     results: &[UnifiedSearchResult],
-) -> io::Result<()> {  // Note: removed is_grep parameter - not needed with enum
+    tui_tall_adjustment: u16,
+    tui_tall_direction_sign: bool,
+    tui_wide_adjustment: u16,
+    tui_wide_direction_sign: bool,
+) -> io::Result<String> {
 
-    // Handle empty results with user-friendly message
+    // Handle empty results early to avoid unnecessary processing
     if results.is_empty() {
         println!("No matches found");
-        return Ok(());
+        return Ok(String::new());
     }
 
-    // Clear screen for clean display
-    print!("\x1B[2J\x1B[1;1H");
+    // Calculate items per page based on TUI height adjustments
+    // Start with the default number of items per page
+    let base_items_per_page = ITEMS_PER_PAGE_DEFAULT as i16;
 
-    // Determine search type from first result and display accordingly
-    match &results[0] {
-        UnifiedSearchResult::Grep(_) => {
-            // Display header for grep results
-            println!("\nContent Search Results (try: -g -r -c)"); // -fg --fuzzygrep
-            println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Content");
-            println!("{}", "-".repeat(80));
+    // Apply the height adjustment based on direction
+    // true = add rows (show more items), false = subtract rows (show fewer items)
+    let tall_adjustment = if tui_tall_direction_sign {
+        tui_tall_adjustment as i16  // Positive adjustment - more rows
+    } else {
+        -(tui_tall_adjustment as i16)  // Negative adjustment - fewer rows
+    };
 
-            // Display each grep result
-            for result in results {
-                if let UnifiedSearchResult::Grep(grep_result) = result {
-                    // Truncate filename if too long
-                    let display_name = if grep_result.file_name.len() > 28 {
-                        format!("{}...", &grep_result.file_name[..25])
-                    } else {
-                        grep_result.file_name.clone()
-                    };
+    // Calculate final items per page, ensuring minimum of 5 for usability
+    let items_per_page = std::cmp::max(5, base_items_per_page + tall_adjustment) as usize;
 
-                    // Truncate content if too long
-                    let display_content = if grep_result.line_content.len() > 35 {
-                        format!("{}...", &grep_result.line_content[..32])
-                    } else {
-                        grep_result.line_content.clone()
-                    };
+    // Calculate maximum name width based on TUI width adjustments
+    // This determines how much of the filename we show before truncating with "..."
+    let base_name_width = MAX_NAME_LENGTH_DEFAULT;
 
-                    println!(
-                        "{:<5} {:<30} {:<7} {}",
-                        grep_result.display_index,
-                        display_name,
-                        grep_result.line_number,
-                        display_content
-                    );
-                }
+    // Apply width adjustment based on direction
+    // true = wider (show more of filename), false = narrower (show less of filename)
+    let max_name_width = if tui_wide_direction_sign {
+        // Add to base width for wider display
+        base_name_width + (tui_wide_adjustment as usize)
+    } else {
+        // Subtract from base width for narrower display
+        // Use saturating_sub to prevent underflow (stops at 0)
+        base_name_width.saturating_sub(tui_wide_adjustment as usize)
+    };
+
+    // Ensure minimum width of 20 characters for readability
+    let max_name_width = std::cmp::max(20, max_name_width);
+
+    // Calculate total number of pages needed
+    // Uses ceiling division: (total + page_size - 1) / page_size
+    let total_pages = (results.len() + items_per_page - 1) / items_per_page;
+
+    // Track current page (0-indexed internally, displayed as 1-indexed to user)
+    let mut current_page = 0;
+
+    // Main pagination loop - continues until user makes a selection or exits
+    loop {
+        // Clear screen for clean display
+        // ANSI escape codes: [2J = clear screen, [1;1H = move cursor to top-left
+        print!("\x1B[2J\x1B[1;1H");
+
+        // Calculate which results to show on current page
+        let start_idx = current_page * items_per_page;
+        let end_idx = std::cmp::min(start_idx + items_per_page, results.len());
+        let page_results = &results[start_idx..end_idx];
+
+        // Display results based on their type (Grep or Fuzzy)
+        // We check the first result to determine the type since all results are the same type
+        match &results[0] {
+            UnifiedSearchResult::Grep(_) => {
+                display_grep_page(page_results, current_page + 1, total_pages, max_name_width)?;
+            }
+            UnifiedSearchResult::Fuzzy(_) => {
+                display_fuzzy_page(page_results, current_page + 1, total_pages, max_name_width)?;
             }
         }
 
-        UnifiedSearchResult::Fuzzy(_) => {
-            // Display header for fuzzy search results
-            println!("\nFuzzy Name Search Results (try: --grep --recursive --case-sensitive)");
-            println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
-            println!("{}", "-".repeat(55));
+        // Display pagination information and navigation instructions
+        println!("\nPage {}/{} | {} total results",
+                current_page + 1, total_pages, results.len());
+        println!("Navigation: [w/j/<] prev | [x/k/>] next | [1-{}] select | [Enter] continue",
+                end_idx - start_idx);
+        print!("Enter choice: ");
+        io::stdout().flush()?;  // Ensure prompt is displayed before waiting for input
 
-            // Display each fuzzy result
-            for result in results {
-                if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
-                    // Truncate filename if too long
-                    let display_name = if fuzzy_result.item_name.len() > 38 {
-                        format!("{}...", &fuzzy_result.item_name[..35])
-                    } else {
-                        fuzzy_result.item_name.clone()
-                    };
+        // Read user input
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
 
-                    println!(
-                        "{:<5} {:<40} {:<10}",
-                        fuzzy_result.display_index,
-                        display_name,
-                        fuzzy_result.distance
-                    );
-                }
+        // Process user input based on type
+        if input.is_empty() {
+            // User pressed Enter without typing - continue without selection
+            return Ok(String::new());
+
+        } else if is_pagination_up_command(input) {
+            // User wants to go to previous page
+            if current_page > 0 {
+                current_page -= 1;
+            }
+            // If already at first page, just redisplay (no error message to avoid clutter)
+
+        } else if is_pagination_down_command(input) {
+            // User wants to go to next page
+            if current_page < total_pages - 1 {
+                current_page += 1;
+            }
+            // If already at last page, just redisplay (no error message to avoid clutter)
+
+        } else if let Ok(selection_num) = input.parse::<usize>() {
+            // User entered a number - try to select that item
+            let page_relative_selection = selection_num;
+
+            // Validate selection is within current page bounds
+            if page_relative_selection >= 1 && page_relative_selection <= (end_idx - start_idx) {
+                // Convert page-relative index to global index
+                // Page shows 1-N, but we need the actual index in the full results vector
+                let global_index = start_idx + page_relative_selection;
+                return Ok(global_index.to_string());
+            } else {
+                // Invalid selection number - show error and wait for acknowledgment
+                println!("\nInvalid selection. Please choose 1-{}", end_idx - start_idx);
+                println!("Press Enter to continue...");
+                let mut _dummy = String::new();
+                io::stdin().read_line(&mut _dummy)?;
             }
         }
+        // Any other input is ignored and loop continues
     }
+}
 
+/// Helper function to display a page of grep search results
+///
+/// # Purpose
+/// Formats and displays grep (content search) results for the current page.
+/// Handles column width adjustments and text truncation.
+///
+/// # Arguments
+/// * `page_results` - Slice of results for current page only
+/// * `current_page` - Current page number (1-indexed for display)
+/// * `total_pages` - Total number of pages
+/// * `max_name_width` - Maximum width for filename column
+fn display_grep_page(
+    page_results: &[UnifiedSearchResult],
+    current_page: usize,
+    total_pages: usize,
+    max_name_width: usize
+) -> io::Result<()> {
+    println!("\nContent Search Results (Page {}/{}) (try: -g -r -c)", current_page, total_pages);
+
+    // Calculate column width for filenames
+    // Cap at 40 for grep to leave room for line content
+    let file_col_width = std::cmp::min(max_name_width, 40);
+
+    // Display header with dynamic column width
+    println!("{:<5} {:<width$} {:<7} {}", "#", "File", "Line", "Content", width = file_col_width);
+
+    // Display separator line, adjusting for column width changes
+    let separator_width = 80 + file_col_width.saturating_sub(30);
+    println!("{}", "-".repeat(separator_width));
+
+    // Display each result on current page
+    for (index, result) in page_results.iter().enumerate() {
+        if let UnifiedSearchResult::Grep(grep_result) = result {
+            // Truncate filename if it exceeds column width
+            // Leave room for "..." suffix if truncating
+            let display_name = if grep_result.file_name.len() > file_col_width - 2 {
+                let truncate_at = file_col_width.saturating_sub(5);
+                format!("{}...", &grep_result.file_name[..truncate_at])
+            } else {
+                grep_result.file_name.clone()
+            };
+
+            // Calculate content column width (inversely related to name width)
+            // As filename column gets wider, content column gets narrower
+            let content_width = 35 + (30_usize.saturating_sub(file_col_width));
+
+            // Truncate content if it exceeds available width
+            let display_content = if grep_result.line_content.len() > content_width {
+                let truncate_at = content_width.saturating_sub(3);
+                format!("{}...", &grep_result.line_content[..truncate_at])
+            } else {
+                grep_result.line_content.clone()
+            };
+
+            // Display the result row with proper column alignment
+            println!(
+                "{:<5} {:<width$} {:<7} {}",
+                index + 1,  // Page-relative numbering (1-indexed for user)
+                display_name,
+                grep_result.line_number,
+                display_content,
+                width = file_col_width
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Helper function to display a page of fuzzy search results
+///
+/// # Purpose
+/// Formats and displays fuzzy (name matching) results for the current page.
+/// Shows Levenshtein distance to help users understand match quality.
+///
+/// # Arguments
+/// * `page_results` - Slice of results for current page only
+/// * `current_page` - Current page number (1-indexed for display)
+/// * `total_pages` - Total number of pages
+/// * `max_name_width` - Maximum width for name column
+fn display_fuzzy_page(
+    page_results: &[UnifiedSearchResult],
+    current_page: usize,
+    total_pages: usize,
+    max_name_width: usize
+) -> io::Result<()> {
+    println!("\nFuzzy Name Search Results (Page {}/{}) (try: --grep --recursive --case-sensitive)",
+             current_page, total_pages);
+
+    // Use the full adjusted width for fuzzy results (no need to save space for content)
+    let name_col_width = max_name_width;
+
+    // Display header with dynamic column width
+    println!("{:<5} {:<width$} {:<10}", "#", "Name", "Distance", width = name_col_width);
+
+    // Display separator line
+    println!("{}", "-".repeat(15 + name_col_width));
+
+    // Display each result on current page
+    for (index, result) in page_results.iter().enumerate() {
+        if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
+            // Truncate name if it exceeds column width
+            // Leave room for "..." suffix if truncating
+            let display_name = if fuzzy_result.item_name.len() > name_col_width - 2 {
+                let truncate_at = name_col_width.saturating_sub(5);
+                format!("{}...", &fuzzy_result.item_name[..truncate_at])
+            } else {
+                fuzzy_result.item_name.clone()
+            };
+
+            // Display the result row with proper column alignment
+            println!(
+                "{:<5} {:<width$} {:<10}",
+                index + 1,  // Page-relative numbering (1-indexed for user)
+                display_name,
+                fuzzy_result.distance,
+                width = name_col_width
+            );
+        }
+    }
     Ok(())
 }
 
