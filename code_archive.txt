@@ -73,3 +73,154 @@ fn collect_entries_recursive(
 
     Ok(all_entries)
 }
+
+
+    // Pass the correct is_grep flag to display function
+    display_extended_search_results(&search_results).map_err(|e| {
+        eprintln!("Failed to display search results: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+
+    // Wait for user to select from results or press enter to continue
+    print!("\nEnter number to select or press Enter to continue: ");
+    io::stdout().flush().map_err(|e| {
+        eprintln!("Failed to flush stdout: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+
+    let mut selection = String::new();
+    io::stdin().read_line(&mut selection).map_err(|e| {
+        eprintln!("Failed to read input: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+
+/// simple, works, no pagination
+/// Displays search results with appropriate formatting based on search type
+///
+/// # Purpose
+/// Presents search results to the user in a readable tabular format,
+/// automatically detecting the search type from the result enum and displaying
+/// the appropriate format for each type.
+///
+/// # Arguments
+/// * `results` - Slice of UnifiedSearchResult items to display
+///               The enum variant determines the display format
+///
+/// # Returns
+/// * `io::Result<()>` - Ok(()) on successful display, or an IO error if terminal
+///                       output operations fail
+///
+/// # Display Formats
+///
+/// ## Fuzzy Name Search Format:
+/// Shows the Levenshtein distance to help users understand match quality
+/// ```text
+/// Search Results (Fuzzy Match)
+/// #     Name                                     Distance
+/// -------------------------------------------------------
+/// 1     example.txt                              1
+/// 2     example2.doc                             2
+/// ```
+///
+/// ## Grep Content Search Format:
+/// Shows the line number and content for each match
+/// ```text
+/// Search Results (Content Match)
+/// #     File                                     Line    Content
+/// --------------------------------------------------------------
+/// 1     src/main.rs                              42      // TODO: implement
+/// 2     src/lib.rs                               15      // TODO: document
+/// ```
+///
+/// # Implementation Details
+/// - Clears the terminal screen before displaying results for clean presentation
+/// - Truncates long filenames to maintain table alignment (max 38 characters)
+/// - Automatically detects search type from enum variant
+/// - Shows "No matches found" message for empty result sets
+///
+/// # User Interface Flow
+/// After displaying results, the user can:
+/// - Enter a number to select and navigate to that file
+/// - Press Enter to continue without selection
+///
+/// # Error Handling
+/// - Returns IO errors from terminal output operations
+/// - Handles empty result sets gracefully with informative message
+pub fn display_extended_search_results(
+    results: &[UnifiedSearchResult],
+) -> io::Result<()> {  // Note: removed is_grep parameter - not needed with enum
+
+    // Handle empty results with user-friendly message
+    if results.is_empty() {
+        println!("No matches found");
+        return Ok(());
+    }
+
+    // Clear screen for clean display
+    print!("\x1B[2J\x1B[1;1H");
+
+    // Determine search type from first result and display accordingly
+    match &results[0] {
+        UnifiedSearchResult::Grep(_) => {
+            // Display header for grep results
+            println!("\nContent Search Results (try: -g -r -c)"); // -fg --fuzzygrep
+            println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Content");
+            println!("{}", "-".repeat(80));
+
+            // Display each grep result
+            for result in results {
+                if let UnifiedSearchResult::Grep(grep_result) = result {
+                    // Truncate filename if too long
+                    let display_name = if grep_result.file_name.len() > 28 {
+                        format!("{}...", &grep_result.file_name[..25])
+                    } else {
+                        grep_result.file_name.clone()
+                    };
+
+                    // Truncate content if too long
+                    let display_content = if grep_result.line_content.len() > 35 {
+                        format!("{}...", &grep_result.line_content[..32])
+                    } else {
+                        grep_result.line_content.clone()
+                    };
+
+                    println!(
+                        "{:<5} {:<30} {:<7} {}",
+                        grep_result.display_index,
+                        display_name,
+                        grep_result.line_number,
+                        display_content
+                    );
+                }
+            }
+        }
+
+        UnifiedSearchResult::Fuzzy(_) => {
+            // Display header for fuzzy search results
+            println!("\nFuzzy Name Search Results (try: --grep --recursive --case-sensitive)");
+            println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
+            println!("{}", "-".repeat(55));
+
+            // Display each fuzzy result
+            for result in results {
+                if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
+                    // Truncate filename if too long
+                    let display_name = if fuzzy_result.item_name.len() > 38 {
+                        format!("{}...", &fuzzy_result.item_name[..35])
+                    } else {
+                        fuzzy_result.item_name.clone()
+                    };
+
+                    println!(
+                        "{:<5} {:<40} {:<10}",
+                        fuzzy_result.display_index,
+                        display_name,
+                        fuzzy_result.distance
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

@@ -327,6 +327,8 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::env;
 use std::process::Command;
 use std::collections::VecDeque;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
@@ -337,6 +339,8 @@ const MAX_SEARCH_DISTANCE: usize = 2;
 /// user adjustments are applied. Using u8 for memory efficiency since these
 /// values are all well within u8 range (0-255).
 const MAX_NAME_LENGTH_DEFAULT: usize = 55;
+
+const MAX_TUI_CHAR_LENGTH_DEFAULT: usize = 80;
 
 /// 16 allows an extra line for cases where there cwd/PWD path
 /// is long enough to wrap around, a safer default
@@ -4393,25 +4397,6 @@ fn process_user_input(
         &current_directory_path
     );
 
-    // // Pass the correct is_grep flag to display function
-    // display_extended_search_results(&search_results).map_err(|e| {
-    //     eprintln!("Failed to display search results: {}", e);
-    //     FileFantasticError::Io(e)
-    // })?;
-
-    // // Wait for user to select from results or press enter to continue
-    // print!("\nEnter number to select or press Enter to continue: ");
-    // io::stdout().flush().map_err(|e| {
-    //     eprintln!("Failed to flush stdout: {}", e);
-    //     FileFantasticError::Io(e)
-    // })?;
-
-    // let mut selection = String::new();
-    // io::stdin().read_line(&mut selection).map_err(|e| {
-    //     eprintln!("Failed to read input: {}", e);
-    //     FileFantasticError::Io(e)
-    // })?;
-
     // Display paginated search results and get user selection
     let selection = display_paginated_search_results(
         &search_results,
@@ -4464,6 +4449,402 @@ fn process_user_input(
     }
 
     Ok(NavigationAction::Invalid)
+}
+
+/// Static set of known plaintext file extensions for efficient lookup
+///
+/// # Purpose
+/// Provides a pre-compiled set of file extensions that are known to contain
+/// plaintext data. This allows the grep search to skip binary files before
+/// attempting to open them, saving I/O operations and preventing errors.
+///
+/// # Categories Included
+/// - Data formats: csv, tsv, txt, json, xml, yaml, yml
+/// - Configuration: toml, ini, conf, cfg, env, properties, gitignore, dockerignore
+/// - Programming languages: rs, py, js, ts, go, c, cpp, h, hpp, java, rb, php, etc.
+/// - Web technologies: html, css, scss, sass, less, vue, jsx, tsx
+/// - Documentation: md, rst, tex, adoc, org, pod
+/// - Scripts: sh, bash, zsh, fish, ps1, bat, cmd
+/// - Build files: makefile, cmake, gradle, sbt, cargo.toml, package.json
+/// - Other text: log, sql, graphql, proto, diff, patch
+///
+/// # Implementation Notes
+/// - Uses OnceLock for thread-safe lazy initialization
+/// - HashSet provides O(1) average-case lookup performance
+/// - Extensions are stored without the leading dot for consistency
+static PLAINTEXT_EXTENSIONS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+/// Initializes and returns the set of plaintext file extensions
+///
+/// # Purpose
+/// Lazily initializes the static set of known plaintext extensions on first use.
+/// Subsequent calls return the already-initialized set without re-creating it.
+///
+/// # Returns
+/// Reference to the HashSet containing plaintext extensions (without dots)
+///
+/// # Performance
+/// - First call: O(n) where n is number of extensions
+/// - Subsequent calls: O(1) - just returns reference
+///
+/// # Thread Safety
+/// Uses OnceLock to ensure thread-safe initialization even if called
+/// from multiple threads simultaneously.
+fn get_plaintext_extensions() -> &'static HashSet<&'static str> {
+    PLAINTEXT_EXTENSIONS.get_or_init(|| {
+        let mut extensions = HashSet::new();
+
+        // Data and serialization formats
+        extensions.insert("csv");
+        extensions.insert("tsv");
+        extensions.insert("txt");
+        extensions.insert("text");
+        extensions.insert("json");
+        extensions.insert("jsonl");
+        extensions.insert("ndjson");
+        extensions.insert("xml");
+        extensions.insert("yaml");
+        extensions.insert("yml");
+
+        // Configuration files
+        extensions.insert("toml");
+        extensions.insert("ini");
+        extensions.insert("conf");
+        extensions.insert("config");
+        extensions.insert("cfg");
+        extensions.insert("env");
+        extensions.insert("properties");
+        extensions.insert("gitignore");
+        extensions.insert("dockerignore");
+        extensions.insert("editorconfig");
+        extensions.insert("gitconfig");
+        extensions.insert("gitattributes");
+
+        // Programming languages - Systems
+        extensions.insert("rs");     // Rust
+        extensions.insert("c");      // C
+        extensions.insert("cpp");    // C++
+        extensions.insert("cxx");    // C++
+        extensions.insert("cc");     // C++
+        extensions.insert("h");      // C/C++ header
+        extensions.insert("hpp");    // C++ header
+        extensions.insert("hxx");    // C++ header
+        extensions.insert("go");     // Go
+        extensions.insert("zig");    // Zig
+        extensions.insert("nim");    // Nim
+        extensions.insert("v");      // V
+
+        // Programming languages - JVM
+        extensions.insert("java");   // Java
+        extensions.insert("kt");     // Kotlin
+        extensions.insert("kts");    // Kotlin Script
+        extensions.insert("scala");  // Scala
+        extensions.insert("clj");    // Clojure
+        extensions.insert("cljs");   // ClojureScript
+        extensions.insert("groovy"); // Groovy
+
+        // Programming languages - Scripting
+        extensions.insert("py");     // Python
+        extensions.insert("pyw");    // Python Windows
+        extensions.insert("pyi");    // Python Interface
+        extensions.insert("rb");     // Ruby
+        extensions.insert("php");    // PHP
+        extensions.insert("lua");    // Lua
+        extensions.insert("perl");   // Perl
+        extensions.insert("pl");     // Perl
+
+        // Programming languages - Web/JavaScript ecosystem
+        extensions.insert("js");     // JavaScript
+        extensions.insert("mjs");    // JavaScript Module
+        extensions.insert("cjs");    // CommonJS
+        extensions.insert("ts");     // TypeScript
+        extensions.insert("tsx");    // TypeScript JSX
+        extensions.insert("jsx");    // React JSX
+        extensions.insert("vue");    // Vue.js
+        extensions.insert("svelte"); // Svelte
+
+        // Programming languages - Functional
+        extensions.insert("hs");     // Haskell
+        extensions.insert("lhs");    // Literate Haskell
+        extensions.insert("ml");     // OCaml/Standard ML
+        extensions.insert("mli");    // OCaml Interface
+        extensions.insert("fs");     // F#
+        extensions.insert("fsx");    // F# Script
+        extensions.insert("elm");    // Elm
+        extensions.insert("ex");     // Elixir
+        extensions.insert("exs");    // Elixir Script
+        extensions.insert("erl");    // Erlang
+        extensions.insert("hrl");    // Erlang Header
+
+        // Programming languages - Other
+        extensions.insert("r");      // R
+        extensions.insert("jl");     // Julia
+        extensions.insert("m");      // MATLAB/Objective-C
+        extensions.insert("swift");  // Swift
+        extensions.insert("dart");   // Dart
+        extensions.insert("pas");    // Pascal
+        extensions.insert("pp");     // Pascal
+        extensions.insert("asm");    // Assembly
+        extensions.insert("s");      // Assembly
+
+        // Web technologies
+        extensions.insert("html");   // HTML
+        extensions.insert("htm");    // HTML
+        extensions.insert("xhtml");  // XHTML
+        extensions.insert("css");    // CSS
+        extensions.insert("scss");   // Sass
+        extensions.insert("sass");   // Sass
+        extensions.insert("less");   // Less
+        extensions.insert("styl");   // Stylus
+
+        // Documentation and markup
+        extensions.insert("md");     // Markdown
+        extensions.insert("markdown"); // Markdown
+        extensions.insert("rst");    // reStructuredText
+        extensions.insert("tex");    // LaTeX
+        extensions.insert("latex");  // LaTeX
+        extensions.insert("adoc");   // AsciiDoc
+        extensions.insert("asciidoc"); // AsciiDoc
+        extensions.insert("org");    // Org mode
+        extensions.insert("pod");    // Perl POD
+        extensions.insert("rdoc");   // Ruby Doc
+
+        // Shell scripts
+        extensions.insert("sh");     // Shell
+        extensions.insert("bash");   // Bash
+        extensions.insert("zsh");    // Zsh
+        extensions.insert("fish");   // Fish
+        extensions.insert("ksh");    // Korn Shell
+        extensions.insert("csh");    // C Shell
+        extensions.insert("tcsh");   // TC Shell
+        extensions.insert("ps1");    // PowerShell
+        extensions.insert("psm1");   // PowerShell Module
+        extensions.insert("bat");    // Batch
+        extensions.insert("cmd");    // Command
+
+        // Build and project files
+        extensions.insert("makefile");
+        extensions.insert("mk");
+        extensions.insert("cmake");
+        extensions.insert("gradle");
+        extensions.insert("sbt");
+        extensions.insert("build");
+        extensions.insert("rake");
+        extensions.insert("gemfile");
+        extensions.insert("podfile");
+        extensions.insert("dockerfile");
+        extensions.insert("containerfile");
+        extensions.insert("vagrantfile");
+        extensions.insert("jenkinsfile");
+        extensions.insert("procfile");
+
+        // Database and query languages
+        extensions.insert("sql");    // SQL
+        extensions.insert("psql");   // PostgreSQL
+        extensions.insert("mysql");  // MySQL
+        extensions.insert("graphql"); // GraphQL
+        extensions.insert("gql");    // GraphQL
+        extensions.insert("prisma"); // Prisma Schema
+
+        // Data formats and protocols
+        extensions.insert("proto");  // Protocol Buffers
+        extensions.insert("thrift"); // Apache Thrift
+        extensions.insert("avdl");   // Avro IDL
+        extensions.insert("avsc");   // Avro Schema
+
+        // Log and output files
+        extensions.insert("log");    // Log files
+        extensions.insert("out");    // Output files
+        extensions.insert("err");    // Error files
+
+        // Diff and patch files
+        extensions.insert("diff");   // Diff
+        extensions.insert("patch");  // Patch
+
+        // License and readme files (often no extension)
+        extensions.insert("license");
+        extensions.insert("readme");
+        extensions.insert("changelog");
+        extensions.insert("authors");
+        extensions.insert("contributors");
+        extensions.insert("copyright");
+        extensions.insert("notice");
+        extensions.insert("todo");
+
+        extensions
+    })
+}
+
+/// Determines if a file path represents a plaintext file based on its extension
+///
+/// # Purpose
+/// Checks whether a file should be treated as plaintext by examining its
+/// file extension against a known set of plaintext formats. This allows
+/// grep operations to skip binary files without attempting to open them.
+///
+/// # Arguments
+/// * `path` - The file path to check (as string slice or Path-convertible type)
+///
+/// # Returns
+/// * `true` if the file extension indicates a plaintext file
+/// * `false` if the extension is unknown or indicates a binary file
+///
+/// # Algorithm
+/// 1. Extracts the file extension from the path
+/// 2. Converts to lowercase for case-insensitive comparison
+/// 3. Checks against the static set of known plaintext extensions
+/// 4. Also checks for common extensionless text files (README, LICENSE, etc.)
+///
+/// # Special Cases
+/// - Files without extensions are checked against common names (README, LICENSE)
+/// - Extensions are compared case-insensitively (.TXT matches .txt)
+/// - Multiple extensions are handled (.tar.gz returns "gz")
+///
+/// # Examples
+/// ```rust
+/// assert!(is_plaintext_file("document.txt"));
+/// assert!(is_plaintext_file("script.py"));
+/// assert!(is_plaintext_file("README"));
+/// assert!(!is_plaintext_file("image.png"));
+/// assert!(!is_plaintext_file("binary.exe"));
+/// ```
+///
+/// # Performance
+/// O(1) average case due to HashSet lookup after initial string processing
+fn is_plaintext_file(path: &str) -> bool {
+    use std::path::Path;
+
+    let path = Path::new(path);
+
+    // Get the file name for checking extensionless files
+    let file_name = path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+
+    // Check for common extensionless text files
+    // These are often found in project roots
+    let extensionless_text_files = [
+        "README", "LICENSE", "CHANGELOG", "AUTHORS",
+        "CONTRIBUTORS", "COPYRIGHT", "NOTICE", "TODO",
+        "Makefile", "Dockerfile", "Containerfile",
+        "Vagrantfile", "Jenkinsfile", "Procfile",
+        "Gemfile", "Podfile", "Rakefile"
+    ];
+
+    // Check if it's a known extensionless text file (case-insensitive)
+    let file_name_upper = file_name.to_uppercase();
+    if extensionless_text_files.iter()
+        .any(|&known| known.to_uppercase() == file_name_upper) {
+        return true;
+    }
+
+    // Extract extension and check against known plaintext extensions
+    if let Some(extension) = path.extension() {
+        if let Some(ext_str) = extension.to_str() {
+            // Convert to lowercase for case-insensitive comparison
+            let ext_lower = ext_str.to_lowercase();
+            return get_plaintext_extensions().contains(ext_lower.as_str());
+        }
+    }
+
+    // No extension and not a known extensionless text file
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plaintext_detection_common_extensions() {
+        // Test common text file extensions
+        assert!(is_plaintext_file("document.txt"));
+        assert!(is_plaintext_file("data.csv"));
+        assert!(is_plaintext_file("config.toml"));
+        assert!(is_plaintext_file("script.py"));
+        assert!(is_plaintext_file("code.rs"));
+        assert!(is_plaintext_file("page.html"));
+        assert!(is_plaintext_file("style.css"));
+        assert!(is_plaintext_file("notes.md"));
+    }
+
+    #[test]
+    fn test_plaintext_detection_case_insensitive() {
+        // Extensions should be detected regardless of case
+        assert!(is_plaintext_file("DOCUMENT.TXT"));
+        assert!(is_plaintext_file("Script.PY"));
+        assert!(is_plaintext_file("Config.TOML"));
+        assert!(is_plaintext_file("MixedCase.Md"));
+    }
+
+    #[test]
+    fn test_plaintext_detection_extensionless() {
+        // Test known extensionless text files
+        assert!(is_plaintext_file("README"));
+        assert!(is_plaintext_file("LICENSE"));
+        assert!(is_plaintext_file("Makefile"));
+        assert!(is_plaintext_file("Dockerfile"));
+        assert!(is_plaintext_file("dockerfile")); // case insensitive
+    }
+
+    #[test]
+    fn test_plaintext_detection_binary_files() {
+        // Test that binary files are not detected as plaintext
+        assert!(!is_plaintext_file("image.png"));
+        assert!(!is_plaintext_file("video.mp4"));
+        assert!(!is_plaintext_file("archive.zip"));
+        assert!(!is_plaintext_file("binary.exe"));
+        assert!(!is_plaintext_file("library.dll"));
+        assert!(!is_plaintext_file("object.o"));
+        assert!(!is_plaintext_file("java.class"));
+    }
+
+    #[test]
+    fn test_plaintext_detection_with_paths() {
+        // Test with full paths
+        assert!(is_plaintext_file("/home/user/document.txt"));
+        assert!(is_plaintext_file("./src/main.rs"));
+        assert!(is_plaintext_file("../config/settings.toml"));
+        assert!(is_plaintext_file("C:\\Users\\Documents\\notes.md"));
+    }
+
+    #[test]
+    fn test_plaintext_detection_edge_cases() {
+        // Test edge cases
+        assert!(!is_plaintext_file("")); // empty path
+        assert!(!is_plaintext_file("no_extension")); // unknown file without extension
+        assert!(is_plaintext_file(".gitignore")); // hidden file with known extension
+        assert!(!is_plaintext_file(".")); // just a dot
+        assert!(!is_plaintext_file("..")); // parent directory
+    }
+
+    #[test]
+    fn test_get_plaintext_extensions_initialized() {
+        // Test that the extension set is properly initialized
+        let extensions = get_plaintext_extensions();
+
+        // Check for some expected extensions
+        assert!(extensions.contains("txt"));
+        assert!(extensions.contains("py"));
+        assert!(extensions.contains("rs"));
+        assert!(extensions.contains("md"));
+
+        // Verify it doesn't contain dots
+        assert!(!extensions.contains(".txt"));
+
+        // Check that it has a reasonable number of extensions
+        assert!(extensions.len() > 50); // We should have many extensions
+    }
+
+    #[test]
+    fn test_plaintext_extensions_multiple_calls() {
+        // Ensure multiple calls return the same instance
+        let ext1 = get_plaintext_extensions();
+        let ext2 = get_plaintext_extensions();
+
+        // Both should point to the same static instance
+        assert_eq!(ext1 as *const _, ext2 as *const _);
+    }
 }
 
 /// Represents possible navigation actions based on user input in the file manager
@@ -4853,136 +5234,6 @@ fn parse_input_flags(input: &str) -> (&str, bool, bool, bool) {
     (search_term, recursive, grep, case_sensitive)
 }
 
-// /// Displays search results with appropriate formatting based on search type
-// ///
-// /// # Purpose
-// /// Presents search results to the user in a readable tabular format,
-// /// automatically detecting the search type from the result enum and displaying
-// /// the appropriate format for each type.
-// ///
-// /// # Arguments
-// /// * `results` - Slice of UnifiedSearchResult items to display
-// ///               The enum variant determines the display format
-// ///
-// /// # Returns
-// /// * `io::Result<()>` - Ok(()) on successful display, or an IO error if terminal
-// ///                       output operations fail
-// ///
-// /// # Display Formats
-// ///
-// /// ## Fuzzy Name Search Format:
-// /// Shows the Levenshtein distance to help users understand match quality
-// /// ```text
-// /// Search Results (Fuzzy Match)
-// /// #     Name                                     Distance
-// /// -------------------------------------------------------
-// /// 1     example.txt                              1
-// /// 2     example2.doc                             2
-// /// ```
-// ///
-// /// ## Grep Content Search Format:
-// /// Shows the line number and content for each match
-// /// ```text
-// /// Search Results (Content Match)
-// /// #     File                                     Line    Content
-// /// --------------------------------------------------------------
-// /// 1     src/main.rs                              42      // TODO: implement
-// /// 2     src/lib.rs                               15      // TODO: document
-// /// ```
-// ///
-// /// # Implementation Details
-// /// - Clears the terminal screen before displaying results for clean presentation
-// /// - Truncates long filenames to maintain table alignment (max 38 characters)
-// /// - Automatically detects search type from enum variant
-// /// - Shows "No matches found" message for empty result sets
-// ///
-// /// # User Interface Flow
-// /// After displaying results, the user can:
-// /// - Enter a number to select and navigate to that file
-// /// - Press Enter to continue without selection
-// ///
-// /// # Error Handling
-// /// - Returns IO errors from terminal output operations
-// /// - Handles empty result sets gracefully with informative message
-// pub fn display_extended_search_results(
-//     results: &[UnifiedSearchResult],
-// ) -> io::Result<()> {  // Note: removed is_grep parameter - not needed with enum
-
-//     // Handle empty results with user-friendly message
-//     if results.is_empty() {
-//         println!("No matches found");
-//         return Ok(());
-//     }
-
-//     // Clear screen for clean display
-//     print!("\x1B[2J\x1B[1;1H");
-
-//     // Determine search type from first result and display accordingly
-//     match &results[0] {
-//         UnifiedSearchResult::Grep(_) => {
-//             // Display header for grep results
-//             println!("\nContent Search Results (try: -g -r -c)"); // -fg --fuzzygrep
-//             println!("{:<5} {:<30} {:<7} {}", "#", "File", "Line", "Content");
-//             println!("{}", "-".repeat(80));
-
-//             // Display each grep result
-//             for result in results {
-//                 if let UnifiedSearchResult::Grep(grep_result) = result {
-//                     // Truncate filename if too long
-//                     let display_name = if grep_result.file_name.len() > 28 {
-//                         format!("{}...", &grep_result.file_name[..25])
-//                     } else {
-//                         grep_result.file_name.clone()
-//                     };
-
-//                     // Truncate content if too long
-//                     let display_content = if grep_result.line_content.len() > 35 {
-//                         format!("{}...", &grep_result.line_content[..32])
-//                     } else {
-//                         grep_result.line_content.clone()
-//                     };
-
-//                     println!(
-//                         "{:<5} {:<30} {:<7} {}",
-//                         grep_result.display_index,
-//                         display_name,
-//                         grep_result.line_number,
-//                         display_content
-//                     );
-//                 }
-//             }
-//         }
-
-//         UnifiedSearchResult::Fuzzy(_) => {
-//             // Display header for fuzzy search results
-//             println!("\nFuzzy Name Search Results (try: --grep --recursive --case-sensitive)");
-//             println!("{:<5} {:<40} {:<10}", "#", "Name", "Distance");
-//             println!("{}", "-".repeat(55));
-
-//             // Display each fuzzy result
-//             for result in results {
-//                 if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
-//                     // Truncate filename if too long
-//                     let display_name = if fuzzy_result.item_name.len() > 38 {
-//                         format!("{}...", &fuzzy_result.item_name[..35])
-//                     } else {
-//                         fuzzy_result.item_name.clone()
-//                     };
-
-//                     println!(
-//                         "{:<5} {:<40} {:<10}",
-//                         fuzzy_result.display_index,
-//                         display_name,
-//                         fuzzy_result.distance
-//                     );
-//                 }
-//             }
-//         }
-//     }
-
-//     Ok(())
-// }
-
 /// Displays search results with pagination and handles user selection
 ///
 /// # Purpose
@@ -5054,6 +5305,24 @@ pub fn display_paginated_search_results(
         base_name_width.saturating_sub(tui_wide_adjustment as usize)
     };
 
+    // Apply width adjustment based on direction
+    // true = wider (show more of filename), false = narrower (show less of filename)
+    // Start with the default width constant, convert to signed for arithmetic
+    let base_width = MAX_TUI_CHAR_LENGTH_DEFAULT as i16;
+
+    // Calculate the adjustment as signed (can be negative)
+    let width_adjustment = if tui_wide_direction_sign {
+        tui_wide_adjustment as i16  // Positive adjustment - wider
+    } else {
+        -(tui_wide_adjustment as i16)  // Negative adjustment - narrower
+    };
+
+    // Apply adjustment to base
+    let adjusted_width = base_width + width_adjustment;
+
+    // Ensure minimum width of 40 for usability, then convert back to usize
+    let max_total_width = std::cmp::max(40, adjusted_width) as usize;
+
     // Ensure minimum width of 20 characters for readability
     let max_name_width = std::cmp::max(20, max_name_width);
 
@@ -5079,7 +5348,12 @@ pub fn display_paginated_search_results(
         // We check the first result to determine the type since all results are the same type
         match &results[0] {
             UnifiedSearchResult::Grep(_) => {
-                display_grep_page(page_results, current_page + 1, total_pages, max_name_width)?;
+                display_grep_page(
+                    page_results,
+                    current_page + 1,
+                    total_pages,
+                    max_total_width,
+                )?;
             }
             UnifiedSearchResult::Fuzzy(_) => {
                 display_fuzzy_page(page_results, current_page + 1, total_pages, max_name_width)?;
@@ -5089,7 +5363,7 @@ pub fn display_paginated_search_results(
         // Display pagination information and navigation instructions
         println!("\nPage {}/{} | {} total results",
                 current_page + 1, total_pages, results.len());
-        println!("Navigation: [w/j/<] prev | [x/k/>] next | [1-{}] select | [Enter] continue",
+        println!("up w/j/<,  down x/k/>,  select # 1-{}",
                 end_idx - start_idx);
         print!("Enter choice: ");
         io::stdout().flush()?;  // Ensure prompt is displayed before waiting for input
@@ -5140,73 +5414,420 @@ pub fn display_paginated_search_results(
     }
 }
 
+// /// Helper function to display a page of grep search results
+// ///
+// /// # Purpose
+// /// Formats and displays grep (content search) results for the current page.
+// /// Handles column width adjustments and text truncation to fit within terminal width.
+// ///
+// /// # Arguments
+// /// * `page_results` - Slice of results for current page only
+// /// * `current_page` - Current page number (1-indexed for display)
+// /// * `total_pages` - Total number of pages
+// /// * `max_name_width` - Maximum width for filename column (derived from user's TUI width settings)
+// ///
+// /// # Width Calculation
+// /// The function respects terminal width constraints:
+// /// - Fixed: 3 chars for number, 7 chars for line number, 3 chars for separators
+// /// - Dynamic: Remaining width split between file (40%) and content (60%)
+// fn display_grep_page(
+//     page_results: &[UnifiedSearchResult],
+//     current_page: usize,
+//     total_pages: usize,
+//     max_total_width: i16
+// ) -> io::Result<()> {
+//     println!("\nContent Search Results (Page {}/{}) (try: -g -r -c)", current_page, total_pages);
+
+//     // Terminal width constants and calculations
+//     const MAX_TUI_CHAR_LENGTH_DEFAULT: usize = 80;
+
+//     // Fixed column widths
+//     const NUM_COL_WIDTH: usize = 2;      // Number column: up to 99
+//     const LINE_COL_WIDTH: usize = 6;     // Line column: up to 999999
+//     const COL_SEPARATOR: &str = " ";     // Single space between columns
+//     const NUM_SEPARATORS: usize = 3;     // Three separators total
+
+//     // Calculate total terminal width based on user settings
+//     // max_name_width is already adjusted based on user's tui_wide_adjustment
+//     // We use it as a proxy for the terminal width preference
+//     // If user wants wider names, they likely have a wider terminal
+//     let terminal_width = if max_name_width > 40 {
+//         // User has increased width
+//         std::cmp::min(120, MAX_TUI_CHAR_LENGTH_DEFAULT + (max_name_width - 40))
+//     } else if max_name_width < 40 {
+//         // User has decreased width
+//         std::cmp::max(60, MAX_TUI_CHAR_LENGTH_DEFAULT - (40 - max_name_width))
+//     } else {
+//         // Default width
+//         MAX_TUI_CHAR_LENGTH_DEFAULT
+//     };
+
+//     // Calculate available width for dynamic columns (file and content)
+//     // Total fixed width: num(2) + sep(1) + line(6) + sep(1) + sep(1) = 11
+//     let fixed_width = NUM_COL_WIDTH + LINE_COL_WIDTH + NUM_SEPARATORS;
+//     let available_width = terminal_width.saturating_sub(fixed_width);
+
+//     // Split available width between file and content
+//     // File gets 40%, content gets 60% (content is usually more important)
+//     let file_col_width = std::cmp::max(15, (available_width * 40) / 100);
+//     let content_col_width = std::cmp::max(20, available_width.saturating_sub(file_col_width));
+
+//     // Display header with calculated column widths
+//     print!("{:<width$}{}", "#", COL_SEPARATOR, width = NUM_COL_WIDTH);
+//     print!("{:<width$}{}", "File", COL_SEPARATOR, width = file_col_width);
+//     print!("{:<width$}{}", "Line", COL_SEPARATOR, width = LINE_COL_WIDTH);
+//     println!("Content");
+
+//     // Display separator line matching exact terminal width
+//     let separator_width = NUM_COL_WIDTH + 1 + file_col_width + 1 + LINE_COL_WIDTH + 1 + content_col_width;
+//     println!("{}", "-".repeat(separator_width));
+
+//     // Display each result on current page
+//     for (index, result) in page_results.iter().enumerate() {
+//         if let UnifiedSearchResult::Grep(grep_result) = result {
+//             // Format the number (1-indexed)
+//             let display_num = format!("{}", index + 1);
+
+//             // Truncate filename if necessary
+//             let display_name = if grep_result.file_name.len() > file_col_width {
+//                 // Reserve 3 characters for "..."
+//                 let truncate_at = file_col_width.saturating_sub(3);
+//                 if truncate_at > 0 {
+//                     // Find a safe UTF-8 boundary for truncation
+//                     let safe_truncate = grep_result.file_name
+//                         .char_indices()
+//                         .take_while(|(i, _)| *i < truncate_at)
+//                         .map(|(i, c)| i + c.len_utf8())
+//                         .last()
+//                         .unwrap_or(0);
+
+//                     if safe_truncate > 0 {
+//                         format!("{}...", &grep_result.file_name[..safe_truncate])
+//                     } else {
+//                         // Filename is too short even for truncation
+//                         "...".to_string()
+//                     }
+//                 } else {
+//                     // Not enough space even for "..."
+//                     grep_result.file_name.chars().take(file_col_width).collect()
+//                 }
+//             } else {
+//                 grep_result.file_name.clone()
+//             };
+
+//             // Format line number
+//             let line_str = format!("{}", grep_result.line_number);
+
+//             // Prepare content - trim whitespace first
+//             let trimmed_content = grep_result.line_content.trim();
+
+//             // Truncate content if necessary
+//             let display_content = if trimmed_content.len() > content_col_width {
+//                 // Reserve 3 characters for "..."
+//                 let truncate_at = content_col_width.saturating_sub(3);
+//                 if truncate_at > 0 {
+//                     // Find a safe UTF-8 boundary for truncation
+//                     let safe_truncate = trimmed_content
+//                         .char_indices()
+//                         .take_while(|(i, _)| *i < truncate_at)
+//                         .map(|(i, c)| i + c.len_utf8())
+//                         .last()
+//                         .unwrap_or(0);
+
+//                     if safe_truncate > 0 {
+//                         format!("{}...", &trimmed_content[..safe_truncate])
+//                     } else {
+//                         // Content is too short even for truncation
+//                         "...".to_string()
+//                     }
+//                 } else {
+//                     // Not enough space even for "..."
+//                     trimmed_content.chars().take(content_col_width).collect()
+//                 }
+//             } else {
+//                 trimmed_content.to_string()
+//             };
+
+//             // Display the row with proper alignment and width constraints
+//             print!("{:<width$}{}", display_num, COL_SEPARATOR, width = NUM_COL_WIDTH);
+//             print!("{:<width$}{}", display_name, COL_SEPARATOR, width = file_col_width);
+//             print!("{:<width$}{}", line_str, COL_SEPARATOR, width = LINE_COL_WIDTH);
+//             println!("{:<width$}", display_content, width = content_col_width);
+//         }
+//     }
+
+//     Ok(())
+// }
+
 /// Helper function to display a page of grep search results
 ///
 /// # Purpose
 /// Formats and displays grep (content search) results for the current page.
-/// Handles column width adjustments and text truncation.
+/// Handles column width adjustments and text truncation to fit within terminal width.
 ///
 /// # Arguments
 /// * `page_results` - Slice of results for current page only
 /// * `current_page` - Current page number (1-indexed for display)
 /// * `total_pages` - Total number of pages
-/// * `max_name_width` - Maximum width for filename column
+/// * `max_total_width` - Total terminal width (derived from user's TUI width settings)
+///
+/// # Width Calculation
+/// The function respects terminal width constraints:
+/// - Fixed: 3 chars for number column, 7 chars for line column (total 10)
+/// - Dynamic: Remaining width split 60/40 between file and content
+/// - Layout: [##_][FILE...N1...][_LINE_][CONTENT...N2...]
+///           3    N1              7       N2
 fn display_grep_page(
     page_results: &[UnifiedSearchResult],
     current_page: usize,
     total_pages: usize,
-    max_name_width: usize
+    max_total_width: usize
 ) -> io::Result<()> {
     println!("\nContent Search Results (Page {}/{}) (try: -g -r -c)", current_page, total_pages);
 
-    // Calculate column width for filenames
-    // Cap at 40 for grep to leave room for line content
-    let file_col_width = std::cmp::min(max_name_width, 40);
+    // Calculate column widths based on total terminal width
+    // Fixed allocations: 3 for number, 7 for line (includes spacing)
+    const FIXED_WIDTH: usize = 10;  // 3 (number) + 7 (line with spaces)
 
-    // Display header with dynamic column width
-    println!("{:<5} {:<width$} {:<7} {}", "#", "File", "Line", "Content", width = file_col_width);
+    // Calculate available width for file and content columns
+    let available_width = max_total_width.saturating_sub(FIXED_WIDTH);
 
-    // Display separator line, adjusting for column width changes
-    let separator_width = 80 + file_col_width.saturating_sub(30);
-    println!("{}", "-".repeat(separator_width));
+    // Ensure minimum usable width (at least 20 chars for file+content)
+    if available_width < 20 {
+        // Fallback to minimum viable display
+        let file_width = 10;
+        let content_width = 10;
+        return display_grep_page_minimal(page_results, current_page, total_pages, file_width, content_width);
+    }
+
+    // Split available width: 60% for file, 40% for content
+    let file_width = (available_width * 6) / 10;  // 60% for file
+    let content_width = available_width - file_width;  // Remainder for content
+
+    // Display header with exact column widths
+    // Format: [##_][File...][_Line_][Content...]
+    print!("{:<2} ", "#");  // 2 chars + 1 space = 3 total
+    print!("{:<width$}", "File", width = file_width);
+    print!(" {:<5} ", "Line");  // 1 + 5 + 1 = 7 total
+    println!("{:<width$}", "Content", width = content_width);
+
+    // Display separator line matching exact total width
+    println!("{}", "-".repeat(max_total_width));
 
     // Display each result on current page
     for (index, result) in page_results.iter().enumerate() {
         if let UnifiedSearchResult::Grep(grep_result) = result {
-            // Truncate filename if it exceeds column width
-            // Leave room for "..." suffix if truncating
-            let display_name = if grep_result.file_name.len() > file_col_width - 2 {
-                let truncate_at = file_col_width.saturating_sub(5);
-                format!("{}...", &grep_result.file_name[..truncate_at])
-            } else {
-                grep_result.file_name.clone()
-            };
+            // Format the row number (1-indexed)
+            let row_num = format!("{}", index + 1);
 
-            // Calculate content column width (inversely related to name width)
-            // As filename column gets wider, content column gets narrower
-            let content_width = 35 + (30_usize.saturating_sub(file_col_width));
+            // Truncate filename if needed
+            let display_file = truncate_with_ellipsis(&grep_result.file_name, file_width);
 
-            // Truncate content if it exceeds available width
-            let display_content = if grep_result.line_content.len() > content_width {
-                let truncate_at = content_width.saturating_sub(3);
-                format!("{}...", &grep_result.line_content[..truncate_at])
-            } else {
-                grep_result.line_content.clone()
-            };
+            // Format line number (right-aligned in 5-char field)
+            let line_str = format!("{:>5}", grep_result.line_number);
 
-            // Display the result row with proper column alignment
-            println!(
-                "{:<5} {:<width$} {:<7} {}",
-                index + 1,  // Page-relative numbering (1-indexed for user)
-                display_name,
-                grep_result.line_number,
-                display_content,
-                width = file_col_width
-            );
+            // Prepare content - trim whitespace first
+            let trimmed_content = grep_result.line_content.trim();
+            let display_content = truncate_with_ellipsis(trimmed_content, content_width);
+
+            // Display the row with exact spacing to match header
+            print!("{:<2} ", row_num);  // 2 chars + 1 space
+            print!("{:<width$}", display_file, width = file_width);
+            print!(" {} ", line_str);  // 1 + 5 + 1 spaces
+            println!("{:<width$}", display_content, width = content_width);
         }
     }
+
     Ok(())
 }
+
+/// Helper function to truncate strings with ellipsis
+///
+/// # Purpose
+/// Safely truncates a string to fit within a specified width,
+/// adding "..." if truncation occurs.
+///
+/// # Arguments
+/// * `text` - The text to potentially truncate
+/// * `max_width` - Maximum width in characters
+///
+/// # Returns
+/// A String that fits within max_width, with "..." appended if truncated
+fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.len() <= max_width {
+        text.to_string()
+    } else if max_width <= 3 {
+        // If width is too small for ellipsis, just truncate
+        text.chars().take(max_width).collect()
+    } else {
+        // Leave room for "..."
+        let truncate_at = max_width - 3;
+        let truncated: String = text.chars().take(truncate_at).collect();
+        format!("{}...", truncated)
+    }
+}
+
+/// Minimal display for very narrow terminals
+///
+/// # Purpose
+/// Fallback display when terminal is too narrow for normal formatting
+fn display_grep_page_minimal(
+    page_results: &[UnifiedSearchResult],
+    current_page: usize,
+    total_pages: usize,
+    file_width: usize,
+    content_width: usize,
+) -> io::Result<()> {
+    println!("\nGrep Results ({}/{})", current_page, total_pages);
+    println!("---");
+
+    for (index, result) in page_results.iter().enumerate() {
+        if let UnifiedSearchResult::Grep(grep_result) = result {
+            println!("{}. {}:{}",
+                     index + 1,
+                     truncate_with_ellipsis(&grep_result.file_name, file_width),
+                     grep_result.line_number);
+            println!("   {}",
+                     truncate_with_ellipsis(grep_result.line_content.trim(), content_width));
+        }
+    }
+
+    Ok(())
+}
+
+// /// Helper function to truncate text with ellipsis if it exceeds maximum width
+// ///
+// /// # Purpose
+// /// Safely truncates text to fit within a specified width, adding "..."
+// /// if truncation occurs. Handles edge cases and ensures no panic on string slicing.
+// ///
+// /// # Arguments
+// /// * `text` - The text to potentially truncate
+// /// * `max_width` - Maximum allowed width including ellipsis
+// ///
+// /// # Returns
+// /// A String that fits within max_width, possibly with "..." appended
+// ///
+// /// # Examples
+// /// ```
+// /// let result = truncate_with_ellipsis("Hello World", 8);
+// /// assert_eq!(result, "Hello...");
+// /// ```
+// fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+//     // If text fits, return as-is
+//     if text.len() <= max_width {
+//         return text.to_string();
+//     }
+
+//     // If max_width is too small to show anything useful, return just ellipsis or empty
+//     if max_width < 4 {
+//         return if max_width >= 3 {
+//             "...".to_string()
+//         } else {
+//             // For very small widths, just return what we can
+//             text.chars().take(max_width).collect()
+//         };
+//     }
+
+//     // Calculate where to truncate, leaving room for "..."
+//     let truncate_at = max_width - 3;
+
+//     // Use char indices to avoid panicking on multi-byte UTF-8 characters
+//     let truncated: String = text.chars().take(truncate_at).collect();
+//     format!("{}...", truncated)
+// }
+
+// /// Helper function to display a page of grep search results
+// ///
+// /// # Purpose
+// /// Formats and displays grep (content search) results for the current page.
+// /// Handles column width adjustments and text truncation.
+// ///
+// /// # Arguments
+// /// * `page_results` - Slice of results for current page only
+// /// * `current_page` - Current page number (1-indexed for display)
+// /// * `total_pages` - Total number of pages
+// /// * `max_name_width` - Maximum width for filename column
+// fn display_grep_page(
+//     page_results: &[UnifiedSearchResult],
+//     current_page: usize,
+//     total_pages: usize,
+//     max_name_width: usize
+// ) -> io::Result<()> {
+//     println!("\nContent Search Results (Page {}/{}) (try: -g -r -c)", current_page, total_pages);
+
+//     // Calculate column widths
+//     // Fixed widths for number and line columns
+//     const NUM_COL_WIDTH: usize = 5;
+//     const LINE_COL_WIDTH: usize = 8;
+
+//     // File column width is adjustable but capped
+//     let file_col_width = std::cmp::min(max_name_width, 40);
+
+//     // Display header with exact spacing to match data rows
+//     // Using format specifiers that exactly match what we'll use for data
+//     print!("{:<num_width$} ", "#", num_width = NUM_COL_WIDTH);
+//     print!("{:<file_width$} ", "File", file_width = file_col_width);
+//     print!("{:<line_width$} ", "Line", line_width = LINE_COL_WIDTH);
+//     println!("Content");
+
+//     // Display separator line that matches the total width
+//     // Calculate exact width: num + space + file + space + line + space + content estimate
+//     let separator_width = NUM_COL_WIDTH + 1 + file_col_width + 1 + LINE_COL_WIDTH + 1 + 40;
+//     println!("{}", "-".repeat(separator_width));
+
+//     // Display each result on current page
+//     for (index, result) in page_results.iter().enumerate() {
+//         if let UnifiedSearchResult::Grep(grep_result) = result {
+//             // Prepare display number (1-indexed for user)
+//             let display_num = (index + 1).to_string();
+
+//             // Truncate filename if it exceeds column width
+//             let display_name = if grep_result.file_name.len() > file_col_width {
+//                 // Safe truncation with bounds checking
+//                 let truncate_at = file_col_width.saturating_sub(3);
+//                 if truncate_at > 0 && grep_result.file_name.len() >= truncate_at {
+//                     format!("{}...", &grep_result.file_name[..truncate_at])
+//                 } else {
+//                     // If name is very short, just use it as-is
+//                     grep_result.file_name.clone()
+//                 }
+//             } else {
+//                 grep_result.file_name.clone()
+//             };
+
+//             // Format line number as string
+//             let line_num_str = grep_result.line_number.to_string();
+
+//             // Prepare content - trim whitespace and limit length
+//             let trimmed_content = grep_result.line_content.trim();
+
+//             // Calculate available width for content
+//             // Assuming terminal is about 100-120 chars wide
+//             // Already used: num(5) + space + file(40) + space + line(8) + space = ~55
+//             let content_max_width = 50;
+
+//             // Truncate content if needed
+//             let display_content = if trimmed_content.len() > content_max_width {
+//                 let truncate_at = content_max_width.saturating_sub(3);
+//                 if truncate_at > 0 && trimmed_content.len() >= truncate_at {
+//                     format!("{}...", &trimmed_content[..truncate_at])
+//                 } else {
+//                     trimmed_content.to_string()
+//                 }
+//             } else {
+//                 trimmed_content.to_string()
+//             };
+
+//             // Display the result row using exact same spacing as header
+//             print!("{:<num_width$} ", display_num, num_width = NUM_COL_WIDTH);
+//             print!("{:<file_width$} ", display_name, file_width = file_col_width);
+//             print!("{:<line_width$} ", line_num_str, line_width = LINE_COL_WIDTH);
+//             println!("{}", display_content);
+//         }
+//     }
+//     Ok(())
+// }
 
 /// Helper function to display a page of fuzzy search results
 ///
@@ -5229,22 +5850,30 @@ fn display_fuzzy_page(
              current_page, total_pages);
 
     // Use the full adjusted width for fuzzy results (no need to save space for content)
-    let name_col_width = max_name_width;
+    let name_col_width = std::cmp::min(max_name_width, 60); // Cap at 60 for readability
 
-    // Display header with dynamic column width
-    println!("{:<5} {:<width$} {:<10}", "#", "Name", "Distance", width = name_col_width);
+    // Display header with consistent column widths
+    println!("{:<5} {:<width$} {:<10}",
+             "#", "Name", "Distance",
+             width = name_col_width);
 
-    // Display separator line
-    println!("{}", "-".repeat(15 + name_col_width));
+    // Display separator line that matches actual column widths
+    // 5 (number) + 1 (space) + name_col_width + 1 (space) + 10 (distance)
+    let separator_width = 5 + 1 + name_col_width + 1 + 10;
+    println!("{}", "-".repeat(separator_width));
 
     // Display each result on current page
     for (index, result) in page_results.iter().enumerate() {
         if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
             // Truncate name if it exceeds column width
             // Leave room for "..." suffix if truncating
-            let display_name = if fuzzy_result.item_name.len() > name_col_width - 2 {
-                let truncate_at = name_col_width.saturating_sub(5);
-                format!("{}...", &fuzzy_result.item_name[..truncate_at])
+            let display_name = if fuzzy_result.item_name.len() > name_col_width {
+                let truncate_at = name_col_width.saturating_sub(3);
+                if truncate_at > 0 && fuzzy_result.item_name.len() >= truncate_at {
+                    format!("{}...", &fuzzy_result.item_name[..truncate_at])
+                } else {
+                    fuzzy_result.item_name.clone()
+                }
             } else {
                 fuzzy_result.item_name.clone()
             };
@@ -6424,6 +7053,169 @@ impl NavigationState {
         results
     }
 
+    // /// Searches file contents for a pattern using memory-efficient line-by-line reading
+    // ///
+    // /// # Purpose
+    // /// Performs grep-like content searching across multiple files without loading
+    // /// entire files into memory. This prevents memory exhaustion and maintains
+    // /// responsive performance even with large files.
+    // ///
+    // /// # Arguments
+    // /// * `config` - Search configuration containing:
+    // ///   - `search_term`: The pattern to search for
+    // ///   - `case_sensitive`: Whether to match case exactly
+    // ///   - Other fields (recursive, grep_mode) are not used here
+    // /// * `entries` - File system entries to search through
+    // ///
+    // /// # Returns
+    // /// * `Result<Vec<SearchResult>, FileFantasticError>` - Vector of matches or error
+    // ///
+    // /// # Memory Efficiency Strategy
+    // /// - Uses `BufReader` to read files line by line
+    // /// - Only keeps one line in memory at a time
+    // /// - Typical memory usage: ~8KB buffer + current line
+    // /// - Can handle files of any size without memory issues
+    // ///
+    // /// # Search Behavior
+    // /// - Skips directories (only searches regular files)
+    // /// - Skips binary files (detected by read errors or null bytes)
+    // /// - Limits results to MAX_MATCHES_PER_FILE per file to prevent flooding
+    // /// - Case-insensitive by default (controlled by config.case_sensitive)
+    // ///
+    // /// # Error Handling
+    // /// - Files that cannot be opened are silently skipped
+    // /// - Read errors (often from binary files) cause file to be skipped
+    // /// - Continues searching other files even if some fail
+    // ///
+    // /// # Performance Characteristics
+    // /// - O(n) where n is total characters in searched files
+    // /// - Early exit after MAX_MATCHES_PER_FILE matches per file
+    // /// - No file size limits needed due to streaming approach
+    // ///
+    // /// # Implementation Details
+    // /// The function uses a line counter to track location of matches and
+    // /// limits matches per file to prevent overwhelming the user with results
+    // /// from files with many matches (like log files with repeated patterns).
+    // ///
+    // /// # Example
+    // /// ```rust
+    // /// let config = SearchConfig::new("TODO".to_string())
+    // ///     .with_grep(true)
+    // ///     .with_case_sensitive(false);
+    // ///
+    // /// let results = nav_state.grep_search_files(&config, &entries)?;
+    // /// // Results contain file path, line number, and context for each match
+    // /// ```
+    // fn grep_search_files(
+    //     &self,
+    //     config: &SearchConfig,
+    //     entries: &[FileSystemEntry],
+    // ) -> Result<Vec<GrepSearchResult>> {
+    //     use std::fs::File;
+    //     use std::io::{BufRead, BufReader};
+
+    //     let mut results = Vec::new();
+
+    //     // Prepare search pattern based on case sensitivity setting
+    //     let search_pattern = if config.case_sensitive {
+    //         config.search_term.clone()
+    //     } else {
+    //         config.search_term.to_lowercase()
+    //     };
+
+    //     // Limit matches per file to prevent result flooding
+    //     // This prevents files with hundreds of matches from overwhelming the display
+    //     const MAX_MATCHES_PER_FILE: usize = 10;
+
+    //     // Iterate through all provided file system entries
+    //     for (idx, entry) in entries.iter().enumerate() {
+    //         // Skip directories - we only search file contents
+    //         if entry.is_directory {
+    //             continue;
+    //         }
+
+    //         // Attempt to open the file, skip if we can't access it
+    //         // Common reasons for failure: permissions, file deleted, symlink broken
+    //         let file = match File::open(&entry.file_system_item_path) {
+    //             Ok(f) => f,
+    //             Err(_) => continue, // Silently skip inaccessible files
+    //         };
+
+    //         // Wrap file in BufReader for efficient line-by-line reading
+    //         // BufReader uses an 8KB buffer by default, reading ahead for performance
+    //         let reader = BufReader::new(file);
+
+    //         // Track current line number for reporting match locations
+    //         let mut line_number = 0;
+
+    //         // Count matches in this file to enforce MAX_MATCHES_PER_FILE limit
+    //         let mut matches_found = 0;
+
+    //         // Process file line by line - memory efficient approach
+    //         for line_result in reader.lines() {
+    //             // Increment line counter before processing
+    //             line_number += 1;
+
+    //             // Check if we've hit the match limit for this file
+    //             // This check MUST be before processing to ensure matches_found is read
+    //             if matches_found >= MAX_MATCHES_PER_FILE {
+    //                 // Stop searching this file, move to next file
+    //                 break;
+    //             }
+
+    //             // Attempt to read the line, handle errors
+    //             let line = match line_result {
+    //                 Ok(l) => l,
+    //                 Err(_) => {
+    //                     // Read error often indicates binary file
+    //                     // Stop processing this file
+    //                     break;
+    //                 }
+    //             };
+
+    //             // Additional binary file detection - check for null bytes
+    //             // Text files should not contain null bytes
+    //             if line.chars().any(|c| c == '\0') {
+    //                 // Binary file detected, skip rest of file
+    //                 break;
+    //             }
+
+    //             // Prepare line for comparison based on case sensitivity
+    //             let line_to_search = if config.case_sensitive {
+    //                 line.clone()
+    //             } else {
+    //                 line.to_lowercase()
+    //             };
+
+    //             // Check if this line contains our search pattern
+    //             if line_to_search.contains(&search_pattern) {
+    //                 // Found a match - increment counter
+    //                 matches_found += 1;
+
+    //                 // Truncate very long lines for display purposes
+    //                 // This prevents the display from being broken by extremely long lines
+    //                 let context = if line.len() > 100 {
+    //                     format!("{}...", &line[..97])
+    //                 } else {
+    //                     line.clone()
+    //                 };
+
+    //                 // Create search result for this match
+    //                 results.push(GrepSearchResult {
+    //                     file_name: entry.file_system_item_name.clone(),
+    //                     file_path: entry.file_system_item_path.clone(),
+    //                     line_number: line_number,  // Direct field, not Option
+    //                     line_content: context,      // Direct field, not Option
+    //                     display_index: idx + 1,
+    //                 });
+    //             }
+    //         }
+    //         // File automatically closed when `file` and `reader` go out of scope
+    //     }
+
+    //     Ok(results)
+    // }
+
     /// Searches file contents for a pattern using memory-efficient line-by-line reading
     ///
     /// # Purpose
@@ -6449,6 +7241,7 @@ impl NavigationState {
     ///
     /// # Search Behavior
     /// - Skips directories (only searches regular files)
+    /// - Skips non-plaintext files based on extension check
     /// - Skips binary files (detected by read errors or null bytes)
     /// - Limits results to MAX_MATCHES_PER_FILE per file to prevent flooding
     /// - Case-insensitive by default (controlled by config.case_sensitive)
@@ -6459,6 +7252,7 @@ impl NavigationState {
     /// - Continues searching other files even if some fail
     ///
     /// # Performance Characteristics
+    /// - O(1) extension check before file open (HashSet lookup)
     /// - O(n) where n is total characters in searched files
     /// - Early exit after MAX_MATCHES_PER_FILE matches per file
     /// - No file size limits needed due to streaming approach
@@ -6502,6 +7296,12 @@ impl NavigationState {
         for (idx, entry) in entries.iter().enumerate() {
             // Skip directories - we only search file contents
             if entry.is_directory {
+                continue;
+            }
+
+            // Check if file is plaintext based on extension
+            // This saves I/O operations by not attempting to open binary files
+            if !is_plaintext_file(&entry.file_system_item_path.to_string_lossy()) {
                 continue;
             }
 
@@ -6565,8 +7365,17 @@ impl NavigationState {
 
                     // Truncate very long lines for display purposes
                     // This prevents the display from being broken by extremely long lines
-                    let context = if line.len() > 100 {
-                        format!("{}...", &line[..97])
+                    // Use chars().take() to ensure we truncate at character boundaries,
+                    // not byte boundaries (which could split multi-byte UTF-8 characters)
+                    const MAX_DISPLAY_CHARS: usize = 97;
+
+                    let context = if line.chars().count() > 100 {
+                        // Take first 97 characters and append ellipsis
+                        // This handles multi-byte UTF-8 characters correctly
+                        let truncated: String = line.chars()
+                            .take(MAX_DISPLAY_CHARS)
+                            .collect();
+                        format!("{}...", truncated)
                     } else {
                         line.clone()
                     };
