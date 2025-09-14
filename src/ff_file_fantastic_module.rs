@@ -4080,12 +4080,12 @@ struct TuiAdjustmentAction {
 ///
 /// Add this variant to the NavigationAction enum:
 /// ```rust
-/// /// Adjust TUI display size settings
-/// ///
-/// /// Contains explicit adjustment parameters that clearly indicate:
-/// /// - What dimension is being adjusted (height vs width)
-/// /// - By how much (magnitude in positive units)
-/// /// - In which direction (increase vs decrease)
+///  Adjust TUI display size settings
+///
+///  Contains explicit adjustment parameters that clearly indicate:
+/// - What dimension is being adjusted (height vs width)
+/// - By how much (magnitude in positive units)
+/// - In which direction (increase vs decrease)
 ///
 /// AdjustTuiSize(TuiAdjustmentAction),
 /// ```
@@ -5290,21 +5290,6 @@ pub fn display_paginated_search_results(
     // Calculate final items per page, ensuring minimum of 5 for usability
     let items_per_page = std::cmp::max(5, base_items_per_page + tall_adjustment) as usize;
 
-    // Calculate maximum name width based on TUI width adjustments
-    // This determines how much of the filename we show before truncating with "..."
-    let base_name_width = MAX_NAME_LENGTH_DEFAULT;
-
-    // Apply width adjustment based on direction
-    // true = wider (show more of filename), false = narrower (show less of filename)
-    let max_name_width = if tui_wide_direction_sign {
-        // Add to base width for wider display
-        base_name_width + (tui_wide_adjustment as usize)
-    } else {
-        // Subtract from base width for narrower display
-        // Use saturating_sub to prevent underflow (stops at 0)
-        base_name_width.saturating_sub(tui_wide_adjustment as usize)
-    };
-
     // Apply width adjustment based on direction
     // true = wider (show more of filename), false = narrower (show less of filename)
     // Start with the default width constant, convert to signed for arithmetic
@@ -5322,9 +5307,6 @@ pub fn display_paginated_search_results(
 
     // Ensure minimum width of 40 for usability, then convert back to usize
     let max_total_width = std::cmp::max(40, adjusted_width) as usize;
-
-    // Ensure minimum width of 20 characters for readability
-    let max_name_width = std::cmp::max(20, max_name_width);
 
     // Calculate total number of pages needed
     // Uses ceiling division: (total + page_size - 1) / page_size
@@ -5356,7 +5338,12 @@ pub fn display_paginated_search_results(
                 )?;
             }
             UnifiedSearchResult::Fuzzy(_) => {
-                display_fuzzy_page(page_results, current_page + 1, total_pages, max_name_width)?;
+                display_fuzzy_page(
+                    page_results,
+                    current_page + 1,
+                    total_pages,
+                    max_total_width
+                )?;
             }
         }
 
@@ -5402,26 +5389,6 @@ pub fn display_paginated_search_results(
                 // Convert page-relative index to global index
                 // Page shows 1-N, but we need the actual index in the full results vector
                 let global_index = start_idx + page_relative_selection;
-
-                // Debug: Print what we're about to return
-                println!("DEBUG: Returning index string: '{}'", global_index.to_string());
-                println!("DEBUG: This corresponds to results[{}]", global_index);
-                if global_index < results.len() {
-                    match &results[global_index] {
-                        UnifiedSearchResult::Grep(g) => {
-                            println!("DEBUG: Grep result - display_index: {}, file: {}",
-                                     g.display_index, g.file_name);
-                        }
-                        UnifiedSearchResult::Fuzzy(f) => {
-                            println!("DEBUG: Fuzzy result - display_index: {}, name: {}",
-                                     f.display_index, f.item_name);
-                        }
-                    }
-                } else {
-                    println!("DEBUG: ERROR - Index {} is out of bounds for results length {}",
-                             global_index, results.len());
-                }
-
 
                 return Ok(global_index.to_string());
             } else {
@@ -5582,55 +5549,95 @@ fn display_grep_page_minimal(
 /// * `page_results` - Slice of results for current page only
 /// * `current_page` - Current page number (1-indexed for display)
 /// * `total_pages` - Total number of pages
-/// * `max_name_width` - Maximum width for name column
+/// * `max_total_width` - Total terminal width (derived from user's TUI width settings)
+///
+/// # Width Calculation
+/// The function respects terminal width constraints:
+/// - Fixed: 3 chars for number column, 10 chars for distance column (total 13)
+/// - Dynamic: Remaining width for the name/path column
+/// - Layout: [##_][NAME...N1...][_DISTANCE_]
+///           3    N1              10
 fn display_fuzzy_page(
     page_results: &[UnifiedSearchResult],
     current_page: usize,
     total_pages: usize,
-    max_name_width: usize
+    max_total_width: usize
 ) -> io::Result<()> {
-    println!("Fuzzy Name Search Results (Page {}/{}) (try: --grep --recursive --case-sensitive)",
+    println!("Fuzzy Search (Page {}/{}) (try: --grep --recursive --case-sensitive, -g -r -c)",
              current_page, total_pages);
 
-    // Use the full adjusted width for fuzzy results (no need to save space for content)
-    let name_col_width = std::cmp::min(max_name_width, 60); // Cap at 60 for readability
+    // Calculate column widths based on total terminal width
+    // Fixed allocations: 3 for number, 10 for distance (includes spacing)
+    const FIXED_WIDTH: usize = 13;  // 3 (number) + 10 (distance with spaces)
 
-    // Display header with consistent column widths
-    println!("{:<5} {:<width$} {:<10}",
-             "#", "Name", "Distance",
-             width = name_col_width);
+    // Calculate available width for name column
+    let name_width = max_total_width.saturating_sub(FIXED_WIDTH);
 
-    // Display separator line that matches actual column widths
-    // 5 (number) + 1 (space) + name_col_width + 1 (space) + 10 (distance)
-    let separator_width = 5 + 1 + name_col_width + 1 + 10;
+    // Ensure minimum usable width
+    if name_width < 10 {
+        // Fallback to minimal display
+        return display_fuzzy_page_minimal(page_results, current_page, total_pages);
+    }
+
+    // Cap name width at reasonable maximum for readability
+    let name_width = std::cmp::min(name_width, 80);
+
+    // Display header with exact column widths
+    // Format: [##_][Name...][_Distance_]
+    print!("{:<2} ", "#");  // 2 chars + 1 space = 3 total
+    print!("{:<width$}", "Name", width = name_width);
+    println!(" {:<9}", "Distance");  // 1 + 9 = 10 total
+
+    // Display separator line matching exact total width
+    // Use the minimum of max_total_width or actual used width (for very wide terminals)
+    let actual_width = 3 + name_width + 10;
+    let separator_width = std::cmp::min(max_total_width, actual_width);
     println!("{}", "-".repeat(separator_width));
 
     // Display each result on current page
     for (index, result) in page_results.iter().enumerate() {
         if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
-            // Truncate name if it exceeds column width
-            // Leave room for "..." suffix if truncating
-            let display_name = if fuzzy_result.item_name.len() > name_col_width {
-                let truncate_at = name_col_width.saturating_sub(3);
-                if truncate_at > 0 && fuzzy_result.item_name.len() >= truncate_at {
-                    format!("{}...", &fuzzy_result.item_name[..truncate_at])
-                } else {
-                    fuzzy_result.item_name.clone()
-                }
-            } else {
-                fuzzy_result.item_name.clone()
-            };
+            // Format the row number (1-indexed)
+            let row_num = format!("{}", index + 1);
 
-            // Display the result row with proper column alignment
-            println!(
-                "{:<5} {:<width$} {:<10}",
-                index + 1,  // Page-relative numbering (1-indexed for user)
-                display_name,
-                fuzzy_result.distance,
-                width = name_col_width
-            );
+            // Truncate name if needed (reuse helper function from grep)
+            let display_name = truncate_with_ellipsis(&fuzzy_result.item_name, name_width);
+
+            // Format distance (right-aligned for better readability)
+            let distance_str = format!("{:>9}", fuzzy_result.distance);
+
+            // Display the row with exact spacing to match header
+            print!("{:<2} ", row_num);  // 2 chars + 1 space
+            print!("{:<width$}", display_name, width = name_width);
+            println!(" {}", distance_str);  // 1 space + distance
         }
     }
+
+    Ok(())
+}
+
+/// Minimal display for very narrow terminals (fuzzy search)
+///
+/// # Purpose
+/// Fallback display when terminal is too narrow for normal formatting
+fn display_fuzzy_page_minimal(
+    page_results: &[UnifiedSearchResult],
+    current_page: usize,
+    total_pages: usize,
+) -> io::Result<()> {
+    println!("\nFuzzy Results ({}/{})", current_page, total_pages);
+    println!("---");
+
+    for (index, result) in page_results.iter().enumerate() {
+        if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
+            // For minimal display, show each item on two lines
+            println!("{}. {} (dist: {})",
+                     index + 1,
+                     truncate_with_ellipsis(&fuzzy_result.item_name, 20),
+                     fuzzy_result.distance);
+        }
+    }
+
     Ok(())
 }
 
@@ -6318,8 +6325,6 @@ impl NavigationState {
                 .collect()
         };
 
-        print!("results->{:?}", results);
-
         // Step 4: Renumber display indices for recursive or grep searches
         // This is critical for user selection to work correctly
         if recursive || grep {
@@ -6742,6 +6747,114 @@ impl NavigationState {
     ///   - Among equal distances, shorter names first
     ///   - Sequential display indices (1, 2, 3...) for user selection
     ///
+    /// # Output Format Requirements
+    ///
+    /// ## Critical Display Index Contract
+    /// The `display_index` field in each result MUST be sequential starting from 1.
+    /// This is an absolute requirement for the user interface to function correctly.
+    ///
+    /// ### Why This Matters
+    /// The application presents search results to users as a numbered list:
+    /// ```text
+    /// Search results for "doc":
+    /// 1. document.txt
+    /// 2. docker-compose.yml
+    /// 3. docs/
+    /// ```
+    ///
+    /// When the user types "2" to select an item, the system looks for the result
+    /// with `display_index == 2`. If display indices are not sequential (e.g., 3, 7, 15),
+    /// the user cannot select items reliably.
+    ///
+    /// ### Incorrect Implementation (DO NOT DO THIS)
+    /// ```rust
+    /// // WRONG: Using enumeration index from original entries
+    /// for (idx, entry) in entries.iter().enumerate() {
+    ///     if matches_search {
+    ///         results.push(FuzzySearchResult {
+    ///             display_index: idx + 1,  // WRONG! This is position in entries
+    ///             ...
+    ///         });
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// This fails because if entries[5] and entries[10] match, they get
+    /// display_index 6 and 11, but the user sees them as items 1 and 2.
+    ///
+    /// ### Correct Implementation (ALWAYS DO THIS)
+    /// ```rust
+    /// // Step 1: Collect all matches with placeholder indices
+    /// for entry in entries.iter() {
+    ///     if matches_search {
+    ///         results.push(FuzzySearchResult {
+    ///             display_index: 0,  // Temporary placeholder
+    ///             ...
+    ///         });
+    ///     }
+    /// }
+    ///
+    /// // Step 2: Sort by relevance
+    /// results.sort_by(|a, b| { ... });
+    ///
+    /// // Step 3: Assign sequential indices after sorting
+    /// for (idx, result) in results.iter_mut().enumerate() {
+    ///     result.display_index = idx + 1;  // Sequential: 1, 2, 3...
+    /// }
+    /// ```
+    ///
+    /// ## Uniformity Across Search Types
+    ///
+    /// This function is part of a larger search system that includes:
+    /// - **Fuzzy search** (this function): Matches file/directory names
+    /// - **Grep search**: Matches file contents
+    /// - **Recursive search**: Searches in subdirectories
+    /// - **Non-recursive search**: Searches current directory only
+    ///
+    /// ALL search types MUST produce the same output format:
+    /// - Sequential display indices starting from 1
+    /// - Sorted by relevance (best matches first)
+    /// - Consistent field population (no Option types for required fields)
+    ///
+    /// ### Integration with UnifiedSearchResult
+    /// The results from this function are wrapped in `UnifiedSearchResult::Fuzzy()`
+    /// by the calling function. The wrapper function relies on the display indices
+    /// being correct and sequential. For recursive searches, the wrapper may
+    /// renumber results, but for non-recursive searches, it uses these indices
+    /// directly.
+    ///
+    /// ## Testing the Output Format
+    ///
+    /// To verify correct implementation, check that:
+    /// 1. First result has `display_index == 1`
+    /// 2. Each subsequent result increments by exactly 1
+    /// 3. No gaps in the sequence
+    /// 4. No duplicate indices
+    ///
+    /// ```rust
+    /// #[test]
+    /// fn test_display_indices_are_sequential() {
+    ///     let results = fuzzy_search_entries(&config, &entries);
+    ///     for (i, result) in results.iter().enumerate() {
+    ///         assert_eq!(result.display_index, i + 1,
+    ///                    "Display index must be sequential");
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ## Common Pitfalls to Avoid
+    ///
+    /// 1. **Don't use original array indices**: The position in the input array
+    ///    is not relevant to the user-facing display.
+    ///
+    /// 2. **Don't assign indices before sorting**: The display order must match
+    ///    the relevance order.
+    ///
+    /// 3. **Don't skip numbers**: Even if you filter out some results after
+    ///    initial collection, renumber to maintain sequence.
+    ///
+    /// 4. **Don't start from 0**: User-facing indices conventionally start at 1.
+    ///
     /// # Algorithm Details
     /// 1. **Name Preparation**: For each entry, creates two versions:
     ///    - Full name with extension
@@ -6782,6 +6895,7 @@ impl NavigationState {
     /// let config = SearchConfig::new("ducment".to_string()); // Note the typo
     /// let results = nav_state.fuzzy_search_entries(&config, &entries);
     /// // Might find "document.txt" with distance 1 (one character substitution)
+    /// // Results will have display_index values: 1, 2, 3, etc.
     /// ```
     fn fuzzy_search_entries(
         &self,
@@ -6876,244 +6990,6 @@ impl NavigationState {
 
         results
     }
-
-    // /// Performs fuzzy search on collected entries
-    // ///
-    // /// # Arguments
-    // /// * `config` - Search configuration
-    // /// * `entries` - File system entries to search through
-    // ///
-    // /// # Returns
-    // /// * `Vec<SearchResult>` - Matching entries sorted by distance
-    // ///
-    // /// # Algorithm
-    // /// - Uses Levenshtein distance for fuzzy matching
-    // /// - Compares against truncated names (matching search term length)
-    // /// - Tests both with and without file extensions
-    // /// - Sorts by distance then by name length
-    // fn fuzzy_search_entries(
-    //     &self,
-    //     config: &SearchConfig,
-    //     entries: &[FileSystemEntry],
-    // ) -> Vec<FuzzySearchResult> {
-    //     if config.search_term.is_empty() {
-    //         return Vec::new();
-    //     }
-
-    //     let mut results = Vec::new();
-    //     let search_term = config.search_term.to_lowercase();
-    //     let search_len = search_term.chars().count();
-
-    //     for (idx, entry) in entries.iter().enumerate() {
-    //         // Remove file extension for comparison
-    //         let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
-    //             Some((name, _ext)) => name.to_string(),
-    //             None => entry.file_system_item_name.clone(),
-    //         };
-
-    //         // Get truncated versions of the names
-    //         let full_name_truncated: String = entry.file_system_item_name
-    //             .to_lowercase()
-    //             .chars()
-    //             .take(search_len)
-    //             .collect();
-
-    //         let no_ext_truncated: String = name_without_ext
-    //             .to_lowercase()
-    //             .chars()
-    //             .take(search_len)
-    //             .collect();
-
-    //         // Calculate distances
-    //         let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
-    //         let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
-
-    //         // Use the better distance
-    //         let distance = distance_with_ext.min(distance_without_ext);
-
-    //         if distance <= MAX_SEARCH_DISTANCE {
-    //             results.push(FuzzySearchResult {
-    //                 item_name: entry.file_system_item_name.clone(),
-    //                 item_path: entry.file_system_item_path.clone(),
-    //                 distance,
-    //                 display_index: idx + 1,
-    //             });
-    //         }
-    //     }
-
-    //     // Sort by distance, then by name length
-    //     results.sort_by(|a, b| {
-    //         match a.distance.cmp(&b.distance) {
-    //             std::cmp::Ordering::Equal => a.item_name.len().cmp(&b.item_name.len()),
-    //             other => other
-    //         }
-    //     });
-
-    //     results
-    // }
-
-    // /// Searches file contents for a pattern using memory-efficient line-by-line reading
-    // ///
-    // /// # Purpose
-    // /// Performs grep-like content searching across multiple files without loading
-    // /// entire files into memory. This prevents memory exhaustion and maintains
-    // /// responsive performance even with large files.
-    // ///
-    // /// # Arguments
-    // /// * `config` - Search configuration containing:
-    // ///   - `search_term`: The pattern to search for
-    // ///   - `case_sensitive`: Whether to match case exactly
-    // ///   - Other fields (recursive, grep_mode) are not used here
-    // /// * `entries` - File system entries to search through
-    // ///
-    // /// # Returns
-    // /// * `Result<Vec<SearchResult>, FileFantasticError>` - Vector of matches or error
-    // ///
-    // /// # Memory Efficiency Strategy
-    // /// - Uses `BufReader` to read files line by line
-    // /// - Only keeps one line in memory at a time
-    // /// - Typical memory usage: ~8KB buffer + current line
-    // /// - Can handle files of any size without memory issues
-    // ///
-    // /// # Search Behavior
-    // /// - Skips directories (only searches regular files)
-    // /// - Skips binary files (detected by read errors or null bytes)
-    // /// - Limits results to MAX_MATCHES_PER_FILE per file to prevent flooding
-    // /// - Case-insensitive by default (controlled by config.case_sensitive)
-    // ///
-    // /// # Error Handling
-    // /// - Files that cannot be opened are silently skipped
-    // /// - Read errors (often from binary files) cause file to be skipped
-    // /// - Continues searching other files even if some fail
-    // ///
-    // /// # Performance Characteristics
-    // /// - O(n) where n is total characters in searched files
-    // /// - Early exit after MAX_MATCHES_PER_FILE matches per file
-    // /// - No file size limits needed due to streaming approach
-    // ///
-    // /// # Implementation Details
-    // /// The function uses a line counter to track location of matches and
-    // /// limits matches per file to prevent overwhelming the user with results
-    // /// from files with many matches (like log files with repeated patterns).
-    // ///
-    // /// # Example
-    // /// ```rust
-    // /// let config = SearchConfig::new("TODO".to_string())
-    // ///     .with_grep(true)
-    // ///     .with_case_sensitive(false);
-    // ///
-    // /// let results = nav_state.grep_search_files(&config, &entries)?;
-    // /// // Results contain file path, line number, and context for each match
-    // /// ```
-    // fn grep_search_files(
-    //     &self,
-    //     config: &SearchConfig,
-    //     entries: &[FileSystemEntry],
-    // ) -> Result<Vec<GrepSearchResult>> {
-    //     use std::fs::File;
-    //     use std::io::{BufRead, BufReader};
-
-    //     let mut results = Vec::new();
-
-    //     // Prepare search pattern based on case sensitivity setting
-    //     let search_pattern = if config.case_sensitive {
-    //         config.search_term.clone()
-    //     } else {
-    //         config.search_term.to_lowercase()
-    //     };
-
-    //     // Limit matches per file to prevent result flooding
-    //     // This prevents files with hundreds of matches from overwhelming the display
-    //     const MAX_MATCHES_PER_FILE: usize = 10;
-
-    //     // Iterate through all provided file system entries
-    //     for (idx, entry) in entries.iter().enumerate() {
-    //         // Skip directories - we only search file contents
-    //         if entry.is_directory {
-    //             continue;
-    //         }
-
-    //         // Attempt to open the file, skip if we can't access it
-    //         // Common reasons for failure: permissions, file deleted, symlink broken
-    //         let file = match File::open(&entry.file_system_item_path) {
-    //             Ok(f) => f,
-    //             Err(_) => continue, // Silently skip inaccessible files
-    //         };
-
-    //         // Wrap file in BufReader for efficient line-by-line reading
-    //         // BufReader uses an 8KB buffer by default, reading ahead for performance
-    //         let reader = BufReader::new(file);
-
-    //         // Track current line number for reporting match locations
-    //         let mut line_number = 0;
-
-    //         // Count matches in this file to enforce MAX_MATCHES_PER_FILE limit
-    //         let mut matches_found = 0;
-
-    //         // Process file line by line - memory efficient approach
-    //         for line_result in reader.lines() {
-    //             // Increment line counter before processing
-    //             line_number += 1;
-
-    //             // Check if we've hit the match limit for this file
-    //             // This check MUST be before processing to ensure matches_found is read
-    //             if matches_found >= MAX_MATCHES_PER_FILE {
-    //                 // Stop searching this file, move to next file
-    //                 break;
-    //             }
-
-    //             // Attempt to read the line, handle errors
-    //             let line = match line_result {
-    //                 Ok(l) => l,
-    //                 Err(_) => {
-    //                     // Read error often indicates binary file
-    //                     // Stop processing this file
-    //                     break;
-    //                 }
-    //             };
-
-    //             // Additional binary file detection - check for null bytes
-    //             // Text files should not contain null bytes
-    //             if line.chars().any(|c| c == '\0') {
-    //                 // Binary file detected, skip rest of file
-    //                 break;
-    //             }
-
-    //             // Prepare line for comparison based on case sensitivity
-    //             let line_to_search = if config.case_sensitive {
-    //                 line.clone()
-    //             } else {
-    //                 line.to_lowercase()
-    //             };
-
-    //             // Check if this line contains our search pattern
-    //             if line_to_search.contains(&search_pattern) {
-    //                 // Found a match - increment counter
-    //                 matches_found += 1;
-
-    //                 // Truncate very long lines for display purposes
-    //                 // This prevents the display from being broken by extremely long lines
-    //                 let context = if line.len() > 100 {
-    //                     format!("{}...", &line[..97])
-    //                 } else {
-    //                     line.clone()
-    //                 };
-
-    //                 // Create search result for this match
-    //                 results.push(GrepSearchResult {
-    //                     file_name: entry.file_system_item_name.clone(),
-    //                     file_path: entry.file_system_item_path.clone(),
-    //                     line_number: line_number,  // Direct field, not Option
-    //                     line_content: context,      // Direct field, not Option
-    //                     display_index: idx + 1,
-    //                 });
-    //             }
-    //         }
-    //         // File automatically closed when `file` and `reader` go out of scope
-    //     }
-
-    //     Ok(results)
-    // }
 
     /// Searches file contents for a pattern using memory-efficient line-by-line reading
     ///
