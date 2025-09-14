@@ -8712,7 +8712,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
     }
 
-
     // Handle empty input - use system default (existing functionality)
     if user_input.is_empty() {
         #[cfg(target_os = "macos")]
