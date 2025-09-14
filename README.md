@@ -243,6 +243,7 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 20. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu')
 21. User can resize TUI: tall+/-N or wide+/-N (e.g. tall+2 or wide-4)
 22. modular to easy integration into other projects
+23. headless and tmux support: instead of a new terminal emulator, can use -h terminal editor in same terminal, or new tmux split
 
 ## Scrolling
 Instructions appear in info-bar:
