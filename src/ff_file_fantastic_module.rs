@@ -5361,10 +5361,11 @@ pub fn display_paginated_search_results(
         }
 
         // Display pagination information and navigation instructions
-        println!("\nPage {}/{} | {} total results",
-                current_page + 1, total_pages, results.len());
-        println!("up w/j/<,  down x/k/>,  select # 1-{}",
-                end_idx - start_idx);
+        println!("\nPage {}/{}, {} results, up w/j/<,  down x/k/>",
+                current_page + 1,
+                total_pages,
+                results.len(),
+        );
         print!("Enter choice: ");
         io::stdout().flush()?;  // Ensure prompt is displayed before waiting for input
 
@@ -5401,6 +5402,27 @@ pub fn display_paginated_search_results(
                 // Convert page-relative index to global index
                 // Page shows 1-N, but we need the actual index in the full results vector
                 let global_index = start_idx + page_relative_selection;
+
+                // Debug: Print what we're about to return
+                println!("DEBUG: Returning index string: '{}'", global_index.to_string());
+                println!("DEBUG: This corresponds to results[{}]", global_index);
+                if global_index < results.len() {
+                    match &results[global_index] {
+                        UnifiedSearchResult::Grep(g) => {
+                            println!("DEBUG: Grep result - display_index: {}, file: {}",
+                                     g.display_index, g.file_name);
+                        }
+                        UnifiedSearchResult::Fuzzy(f) => {
+                            println!("DEBUG: Fuzzy result - display_index: {}, name: {}",
+                                     f.display_index, f.item_name);
+                        }
+                    }
+                } else {
+                    println!("DEBUG: ERROR - Index {} is out of bounds for results length {}",
+                             global_index, results.len());
+                }
+
+
                 return Ok(global_index.to_string());
             } else {
                 // Invalid selection number - show error and wait for acknowledgment
@@ -5567,7 +5589,7 @@ fn display_fuzzy_page(
     total_pages: usize,
     max_name_width: usize
 ) -> io::Result<()> {
-    println!("\nFuzzy Name Search Results (Page {}/{}) (try: --grep --recursive --case-sensitive)",
+    println!("Fuzzy Name Search Results (Page {}/{}) (try: --grep --recursive --case-sensitive)",
              current_page, total_pages);
 
     // Use the full adjusted width for fuzzy results (no need to save space for content)
@@ -6296,6 +6318,8 @@ impl NavigationState {
                 .collect()
         };
 
+        print!("results->{:?}", results);
+
         // Step 4: Renumber display indices for recursive or grep searches
         // This is critical for user selection to work correctly
         if recursive || grep {
@@ -6699,45 +6723,104 @@ impl NavigationState {
         Ok(all_entries)
     }
 
-    /// Performs fuzzy search on collected entries
+    /// Performs fuzzy search on collected entries using Levenshtein distance
+    ///
+    /// # Purpose
+    /// Searches through file system entries to find items with names similar to
+    /// the search term. This function provides typo-tolerant searching, allowing
+    /// users to find files even with minor spelling mistakes.
     ///
     /// # Arguments
-    /// * `config` - Search configuration
-    /// * `entries` - File system entries to search through
+    /// * `config` - Search configuration containing:
+    ///   - `search_term`: The pattern to match against (required, non-empty)
+    ///   - Other fields (recursive, grep_mode, case_sensitive) are not used here
+    /// * `entries` - File system entries to search through (files and directories)
     ///
     /// # Returns
-    /// * `Vec<SearchResult>` - Matching entries sorted by distance
+    /// * `Vec<FuzzySearchResult>` - Matching entries sorted by relevance with:
+    ///   - Best matches (lowest distance) first
+    ///   - Among equal distances, shorter names first
+    ///   - Sequential display indices (1, 2, 3...) for user selection
     ///
-    /// # Algorithm
-    /// - Uses Levenshtein distance for fuzzy matching
-    /// - Compares against truncated names (matching search term length)
-    /// - Tests both with and without file extensions
-    /// - Sorts by distance then by name length
+    /// # Algorithm Details
+    /// 1. **Name Preparation**: For each entry, creates two versions:
+    ///    - Full name with extension
+    ///    - Name without extension (for files like "document.txt" vs "document")
+    /// 2. **Truncation**: Both versions are truncated to search term length
+    ///    - This ensures fair comparison (searching "doc" against "document")
+    /// 3. **Distance Calculation**: Computes Levenshtein distance for both versions
+    /// 4. **Selection**: Uses the better (lower) distance of the two
+    /// 5. **Filtering**: Only includes results within MAX_SEARCH_DISTANCE threshold
+    /// 6. **Sorting**: Orders by distance, then by name length for equal distances
+    /// 7. **Numbering**: Assigns sequential display indices after sorting
+    ///
+    /// # Display Index Assignment
+    /// Display indices are assigned AFTER filtering and sorting to ensure they
+    /// match what the user sees on screen. This creates a uniform output format
+    /// across all search types (fuzzy, grep, recursive, non-recursive).
+    ///
+    /// For example, if 3 matches are found:
+    /// - First result gets display_index: 1
+    /// - Second result gets display_index: 2
+    /// - Third result gets display_index: 3
+    ///
+    /// This allows consistent user selection regardless of search type.
+    ///
+    /// # Performance Characteristics
+    /// - O(n * m) where n is number of entries, m is search term length
+    /// - Early termination when distance exceeds MAX_SEARCH_DISTANCE
+    /// - Memory usage: O(k) where k is number of matches
+    ///
+    /// # Edge Cases
+    /// - Empty search term: Returns empty vector immediately
+    /// - No matches: Returns empty vector
+    /// - Files without extensions: Treated as having no extension
+    /// - Unicode handling: Correctly counts UTF-8 characters, not bytes
+    ///
+    /// # Example
+    /// ```rust
+    /// let config = SearchConfig::new("ducment".to_string()); // Note the typo
+    /// let results = nav_state.fuzzy_search_entries(&config, &entries);
+    /// // Might find "document.txt" with distance 1 (one character substitution)
+    /// ```
     fn fuzzy_search_entries(
         &self,
         config: &SearchConfig,
         entries: &[FileSystemEntry],
     ) -> Vec<FuzzySearchResult> {
+        // Early return for empty search term to avoid unnecessary processing
         if config.search_term.is_empty() {
             return Vec::new();
         }
 
+        // Initialize results vector - will hold all matches before sorting
         let mut results = Vec::new();
+
+        // Prepare search term for comparison (lowercase for case-insensitive matching)
         let search_term = config.search_term.to_lowercase();
+
+        // Count characters (not bytes) for proper UTF-8 handling
+        // This ensures "café" has length 4, not 5
         let search_len = search_term.chars().count();
 
-        for (idx, entry) in entries.iter().enumerate() {
-            // Remove file extension for comparison
+        // Iterate through all provided entries to find matches
+        // Note: We don't use enumerate's index here since we'll assign
+        // display indices after sorting for uniform output format
+        for entry in entries.iter() {
+            // Step 1: Create name without extension for flexible matching
+            // This allows "doc" to match both "document" and "document.txt"
             let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
                 Some((name, _ext)) => name.to_string(),
-                None => entry.file_system_item_name.clone(),
+                None => entry.file_system_item_name.clone(), // No extension found
             };
 
-            // Get truncated versions of the names
+            // Step 2: Create truncated versions for fair comparison
+            // We truncate to search term length to avoid penalizing longer names
+            // Example: searching "doc" against "document" compares "doc" vs "doc"
             let full_name_truncated: String = entry.file_system_item_name
                 .to_lowercase()
-                .chars()
-                .take(search_len)
+                .chars()          // Use chars() for proper UTF-8 handling
+                .take(search_len) // Take only as many characters as search term
                 .collect();
 
             let no_ext_truncated: String = name_without_ext
@@ -6746,33 +6829,128 @@ impl NavigationState {
                 .take(search_len)
                 .collect();
 
-            // Calculate distances
+            // Step 3: Calculate Levenshtein distances for both versions
+            // This measures how many single-character edits are needed
             let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
             let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
 
-            // Use the better distance
+            // Step 4: Use the better (lower) distance
+            // This gives the user the best possible match
             let distance = distance_with_ext.min(distance_without_ext);
 
+            // Step 5: Filter by maximum acceptable distance
+            // MAX_SEARCH_DISTANCE prevents irrelevant results from appearing
             if distance <= MAX_SEARCH_DISTANCE {
+                // Add to results with placeholder display_index
+                // We'll assign the real display_index after sorting
                 results.push(FuzzySearchResult {
                     item_name: entry.file_system_item_name.clone(),
                     item_path: entry.file_system_item_path.clone(),
                     distance,
-                    display_index: idx + 1,
+                    display_index: 0, // Placeholder - will be set after sorting
                 });
             }
         }
 
-        // Sort by distance, then by name length
+        // Step 6: Sort results by relevance
+        // Primary sort: by distance (best matches first)
+        // Secondary sort: by name length (shorter names first for equal distances)
+        // This ensures "doc.txt" appears before "document.txt" when both have distance 0
         results.sort_by(|a, b| {
             match a.distance.cmp(&b.distance) {
-                std::cmp::Ordering::Equal => a.item_name.len().cmp(&b.item_name.len()),
-                other => other
+                std::cmp::Ordering::Equal => {
+                    // For equal distances, prefer shorter names
+                    // This assumes shorter names are more likely what user wanted
+                    a.item_name.len().cmp(&b.item_name.len())
+                },
+                other => other // Different distances - use distance ordering
             }
         });
 
+        // Step 7: Assign sequential display indices after sorting
+        // This ensures display indices match what user sees on screen (1, 2, 3...)
+        // This is CRITICAL for maintaining uniform output format across all search types
+        for (idx, result) in results.iter_mut().enumerate() {
+            result.display_index = idx + 1; // User-facing indices start at 1
+        }
+
         results
     }
+
+    // /// Performs fuzzy search on collected entries
+    // ///
+    // /// # Arguments
+    // /// * `config` - Search configuration
+    // /// * `entries` - File system entries to search through
+    // ///
+    // /// # Returns
+    // /// * `Vec<SearchResult>` - Matching entries sorted by distance
+    // ///
+    // /// # Algorithm
+    // /// - Uses Levenshtein distance for fuzzy matching
+    // /// - Compares against truncated names (matching search term length)
+    // /// - Tests both with and without file extensions
+    // /// - Sorts by distance then by name length
+    // fn fuzzy_search_entries(
+    //     &self,
+    //     config: &SearchConfig,
+    //     entries: &[FileSystemEntry],
+    // ) -> Vec<FuzzySearchResult> {
+    //     if config.search_term.is_empty() {
+    //         return Vec::new();
+    //     }
+
+    //     let mut results = Vec::new();
+    //     let search_term = config.search_term.to_lowercase();
+    //     let search_len = search_term.chars().count();
+
+    //     for (idx, entry) in entries.iter().enumerate() {
+    //         // Remove file extension for comparison
+    //         let name_without_ext = match entry.file_system_item_name.rsplit_once('.') {
+    //             Some((name, _ext)) => name.to_string(),
+    //             None => entry.file_system_item_name.clone(),
+    //         };
+
+    //         // Get truncated versions of the names
+    //         let full_name_truncated: String = entry.file_system_item_name
+    //             .to_lowercase()
+    //             .chars()
+    //             .take(search_len)
+    //             .collect();
+
+    //         let no_ext_truncated: String = name_without_ext
+    //             .to_lowercase()
+    //             .chars()
+    //             .take(search_len)
+    //             .collect();
+
+    //         // Calculate distances
+    //         let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
+    //         let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
+
+    //         // Use the better distance
+    //         let distance = distance_with_ext.min(distance_without_ext);
+
+    //         if distance <= MAX_SEARCH_DISTANCE {
+    //             results.push(FuzzySearchResult {
+    //                 item_name: entry.file_system_item_name.clone(),
+    //                 item_path: entry.file_system_item_path.clone(),
+    //                 distance,
+    //                 display_index: idx + 1,
+    //             });
+    //         }
+    //     }
+
+    //     // Sort by distance, then by name length
+    //     results.sort_by(|a, b| {
+    //         match a.distance.cmp(&b.distance) {
+    //             std::cmp::Ordering::Equal => a.item_name.len().cmp(&b.item_name.len()),
+    //             other => other
+    //         }
+    //     });
+
+    //     results
+    // }
 
     // /// Searches file contents for a pattern using memory-efficient line-by-line reading
     // ///
