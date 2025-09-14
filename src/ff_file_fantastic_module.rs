@@ -8239,53 +8239,6 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
     }
 }
 
-// /// Parses user input for special flags and editor
-// ///
-// /// # Arguments
-// /// * `input` - The user input string
-// ///
-// /// # Returns
-// /// * `Option<(String, String)>` - Some((editor, flag)) if special flag found, None otherwise
-// ///
-// /// # Supported Flags
-// /// - `-h` or `--headless`: Open in current terminal
-// /// - `-vsplit` or `--vertical-split-tmux`: Open in vertical tmux split
-// /// - `-hsplit` or `--horizontal-split-tmux`: Open in horizontal tmux split
-// ///
-// /// # Examples
-// /// - "vim -h" -> Some(("vim", "-h"))
-// /// - "nano --headless" -> Some(("nano", "--headless"))
-// /// - "vim" -> None
-// fn parse_special_flags(input: &str) -> Option<(String, String)> {
-//     let special_flags = [
-//         "-h", "--headless",
-//         "-vsplit", "--vertical-split-tmux",
-//         "-hsplit", "--horizontal-split-tmux"
-//     ];
-
-//     // Check if input contains any special flag
-//     for flag in special_flags.iter() {
-//         if input.contains(flag) {
-//             // Split the input to extract editor and flag
-//             let parts: Vec<&str> = input.split_whitespace().collect();
-
-//             // Find the flag position
-//             if let Some(flag_pos) = parts.iter().position(|&p| p == *flag) {
-//                 // Editor should be everything before the flag
-//                 if flag_pos > 0 {
-//                     let editor = parts[0..flag_pos].join(" ");
-//                     return Some((editor, flag.to_string()));
-//                 } else {
-//                     // Flag without editor - return empty editor to trigger re-prompt
-//                     return Some((String::new(), flag.to_string()));
-//                 }
-//             }
-//         }
-//     }
-
-//     None
-// }
-
 /// Parses special flags from user input for headless mode, tmux splits, and CSV analysis
 ///
 /// # Arguments
@@ -8544,7 +8497,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     let prompt = if partner_programs.is_empty() {
         // Standard prompt when no partner programs are configured
         format!(
-            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi --headless, gedit, firefox...tmux: nano -hsplit|vsplit) {}",
+            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi --headless, gedit, firefox...tmux: nano -hsplit|vsplit, -rc for .csv stats) {}",
             YELLOW, RESET
         )
     } else {
@@ -8560,7 +8513,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
 
         format!(
-            "{}Open with... (Enter for default, or software 'name' as w/ terminal: vi --headless, nano -hsplit, gedit, firefox OR by number: {}): {}",
+            "{}Open with... (Enter for default, or software 'name' as w/ terminal: vi --headless, nano -hsplit, gedit, firefox, -rc for .csv stats OR by number: {}): {}",
             YELLOW, numbered_options, RESET
         )
     };
@@ -8578,61 +8531,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         FileFantasticError::Io(e)
     })?;
     let user_input = user_input.trim();
-
-    // // Check for special flags (headless and tmux splits)
-    // if let Some((editor, flag)) = parse_special_flags(user_input) {
-    //     // User must provide an editor with these flags
-    //     if editor.is_empty() {
-    //         println!("{}Error: You must specify an editor with the {} flag (e.g., 'vim {}'){}",
-    //                     RED, flag, flag, RESET);
-    //         println!("Press Enter to continue...");
-    //         let mut buf = String::new();
-    //         io::stdin().read_line(&mut buf).map_err(|e| {
-    //             eprintln!("Failed to read input: {}", e);
-    //             FileFantasticError::Io(e)
-    //         })?;
-    //         return open_file(file_path); // Re-prompt
-    //     }
-
-    //     // Handle the different flag types
-    //     let result = match flag.as_str() {
-    //         "-h" | "--headless" => {
-    //             // Open in current terminal (headless mode)
-    //             println!("Opening file in current terminal with {}...", editor);
-    //             open_in_current_terminal(&editor, file_path)
-    //         },
-    //         "-vsplit" | "--vertical-split-tmux" => {
-    //             // Open in vertical tmux split
-    //             open_in_tmux_split(&editor, file_path, "-v")
-    //         },
-    //         "-hsplit" | "--horizontal-split-tmux" => {
-    //             // Open in horizontal tmux split
-    //             open_in_tmux_split(&editor, file_path, "-h")
-    //         },
-    //         _ => {
-    //             // This shouldn't happen due to parse_special_flags logic
-    //             Err(FileFantasticError::EditorLaunchFailed(
-    //                 format!("Unknown flag: {}", flag)
-    //             ))
-    //         }
-    //     };
-
-    //     // Handle any errors from the special mode operations
-    //     match result {
-    //         Ok(_) => return Ok(()),
-    //         Err(e) => {
-    //             // Display error and re-prompt
-    //             println!("{}Error: {}{}",RED, e, RESET);
-    //             println!("Press Enter to continue...");
-    //             let mut buf = String::new();
-    //             io::stdin().read_line(&mut buf).map_err(|e| {
-    //                 eprintln!("Failed to read input: {}", e);
-    //                 FileFantasticError::Io(e)
-    //             })?;
-    //             return open_file(file_path); // Re-prompt for new selection
-    //         }
-    //     }
-    // }
 
     // Check for special flags (headless, tmux splits, and CSV analysis)
     if let Some((editor, flags)) = parse_special_flags(user_input) {
