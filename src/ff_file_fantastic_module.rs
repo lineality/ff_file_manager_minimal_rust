@@ -8822,6 +8822,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to open Terminal.app for editor: {}", e);
                     FileFantasticError::EditorLaunchFailed(editor.to_string())
                 })?;
+            return Ok(());  // Add explicit return here
         }
 
         #[cfg(target_os = "linux")]
@@ -8862,6 +8863,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 })?;
                 return open_file(file_path); // Ask again
             }
+            return Ok(());  // Add explicit return here
         }
 
         #[cfg(target_os = "windows")]
@@ -8874,6 +8876,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to open cmd.exe for editor: {}", e);
                     FileFantasticError::EditorLaunchFailed(editor.to_string())
                 })?;
+            return Ok(());  // Add explicit return here
         }
 
         // Fallback for unsupported platforms (like Android/Termux)
@@ -8884,7 +8887,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 .arg(file_path)
                 .spawn()
             {
-                Ok(_) => {},
+                Ok(_) => return Ok(()),  // Add explicit return here
                 Err(e) => {
                     eprintln!("Error launching {} on this platform: {}", editor, e);
                     println!("Falling back to system default... \nPress Enter to continue");
@@ -8899,7 +8902,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
     }
 
-    Ok(())  // Keep the original Ok() at the end
+// Remove the Ok(()) that was here - it's no longer needed since each cfg block returns
 }
 
 /// Handles opening a file with optional editor selection
