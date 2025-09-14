@@ -5441,7 +5441,13 @@ fn display_grep_page(
         // Fallback to minimum viable display
         let file_width = 10;
         let content_width = 10;
-        return display_grep_page_minimal(page_results, current_page, total_pages, file_width, content_width);
+        return display_grep_page_minimal(
+            page_results,
+            current_page,
+            total_pages,
+            file_width,
+            content_width,
+        );
     }
 
     // Split available width: 60% for file, 40% for content
@@ -6156,8 +6162,8 @@ impl NavigationState {
         // Set width adjustment based on platform
         // Android terminals typically need reduced width
         let (width_adjustment, width_direction) = if is_android {
-            // Android: reduce width by 23 characters
-            (23, false)  // false represents negative direction
+            // Android: reduce width by 24 characters
+            (24, false)  // false represents negative direction
         } else {
             // Non-Android: no adjustment needed
             (0, true)    // true represents positive direction (though 0 makes direction irrelevant)
