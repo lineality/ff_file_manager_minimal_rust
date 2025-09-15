@@ -8607,23 +8607,26 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             },
             "" if !editor.is_empty() => {
                 // Just -rc flag or no special terminal flag, open normally
-                // Platform-specific handling
+                // Continue to the regular editor opening logic below
+                // by falling through to the standard editor handling
 
-                #[cfg(target_os = "macos")]
-                {
-                    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-                    if gui_editors.contains(&editor.to_lowercase().as_str()) {
-                        // Launch GUI editor directly on macOS
-                        std::process::Command::new(&editor)
-                            .arg(&file_to_open)
-                            .spawn()
-                            .map_err(|e| {
-                                FileFantasticError::EditorLaunchFailed(
-                                    format!("{}: {}", editor, e)
-                                )
-                            })?;
-                    } else {
-                        // Open terminal editor in Terminal.app
+                // Check if it's a GUI editor
+                let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+                if gui_editors.contains(&editor.to_lowercase().as_str()) {
+                    // Launch GUI editor directly
+                    std::process::Command::new(&editor)
+                        .arg(&file_to_open)
+                        .spawn()
+                        .map_err(|e| {
+                            FileFantasticError::EditorLaunchFailed(
+                                format!("{}: {}", editor, e)
+                            )
+                        })?;
+                    Ok(())
+                } else {
+                    // Open terminal-based editor in new terminal window
+                    #[cfg(target_os = "macos")]
+                    {
                         std::process::Command::new("open")
                             .args(["-a", "Terminal"])
                             .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
@@ -8633,26 +8636,11 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                     format!("{}: {}", editor, e)
                                 )
                             })?;
-                    }
-                    Ok(())
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-                    if gui_editors.contains(&editor.to_lowercase().as_str()) {
-                        // Launch GUI editor directly on Linux
-                        std::process::Command::new(&editor)
-                            .arg(&file_to_open)
-                            .spawn()
-                            .map_err(|e| {
-                                FileFantasticError::EditorLaunchFailed(
-                                    format!("{}: {}", editor, e)
-                                )
-                            })?;
                         Ok(())
-                    } else {
-                        // Try different terminal emulators for terminal editors
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        // Try different terminal emulators
                         let terminal_commands = [
                             ("gnome-terminal", vec!["--", &editor]),
                             ("ptyxis", vec!["--", &editor]),
@@ -8684,23 +8672,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                             ))
                         }
                     }
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-                    if gui_editors.contains(&editor.to_lowercase().as_str()) {
-                        // Launch GUI editor directly on Windows
-                        std::process::Command::new(&editor)
-                            .arg(&file_to_open)
-                            .spawn()
-                            .map_err(|e| {
-                                FileFantasticError::EditorLaunchFailed(
-                                    format!("{}: {}", editor, e)
-                                )
-                            })?;
-                    } else {
-                        // Open terminal editor in cmd
+                    #[cfg(target_os = "windows")]
+                    {
                         std::process::Command::new("cmd")
                             .args(["/C", "start", "cmd", "/C"])
                             .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
@@ -8710,23 +8683,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                     format!("{}: {}", editor, e)
                                 )
                             })?;
+                        Ok(())
                     }
-                    Ok(())
-                }
-
-                // For any other platform (Android/Termux, BSD, etc.)
-                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-                {
-                    // Just try to launch the editor directly - no GUI/terminal distinction needed
-                    std::process::Command::new(&editor)
-                        .arg(&file_to_open)
-                        .spawn()
-                        .map_err(|e| {
-                            FileFantasticError::EditorLaunchFailed(
-                                format!("{}: {}", editor, e)
-                            )
-                        })?;
-                    Ok(())
                 }
             },
             _ => {
@@ -8736,111 +8694,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 ))
             }
         };
-
-        // // Handle the different flag types
-        // let result = match primary_flag {
-        //     "-h" => {
-        //         // Open in current terminal (headless mode)
-        //         println!("Opening file in current terminal with {}...", editor);
-        //         open_in_current_terminal(&editor, &file_to_open)
-        //     },
-        //     "-vsplit" => {
-        //         // Open in vertical tmux split
-        //         open_in_tmux_split(&editor, &file_to_open, "-v")
-        //     },
-        //     "-hsplit" => {
-        //         // Open in horizontal tmux split
-        //         open_in_tmux_split(&editor, &file_to_open, "-h")
-        //     },
-        //     "" if !editor.is_empty() => {
-        //         // Just -rc flag or no special terminal flag, open normally
-        //         // Continue to the regular editor opening logic below
-        //         // by falling through to the standard editor handling
-
-        //         // Check if it's a GUI editor
-        //         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-        //         if gui_editors.contains(&editor.to_lowercase().as_str()) {
-        //             // Launch GUI editor directly
-        //             std::process::Command::new(&editor)
-        //                 .arg(&file_to_open)
-        //                 .spawn()
-        //                 .map_err(|e| {
-        //                     FileFantasticError::EditorLaunchFailed(
-        //                         format!("{}: {}", editor, e)
-        //                     )
-        //                 })?;
-        //             Ok(())
-        //         } else {
-        //             // Open terminal-based editor in new terminal window
-        //             #[cfg(target_os = "macos")]
-        //             {
-        //                 std::process::Command::new("open")
-        //                     .args(["-a", "Terminal"])
-        //                     .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
-        //                     .spawn()
-        //                     .map_err(|e| {
-        //                         FileFantasticError::EditorLaunchFailed(
-        //                             format!("{}: {}", editor, e)
-        //                         )
-        //                     })?;
-        //                 Ok(())
-        //             }
-        //             #[cfg(target_os = "linux")]
-        //             {
-        //                 // Try different terminal emulators
-        //                 let terminal_commands = [
-        //                     ("gnome-terminal", vec!["--", &editor]),
-        //                     ("ptyxis", vec!["--", &editor]),
-        //                     ("konsole", vec!["--e", &editor]),
-        //                     ("xfce4-terminal", vec!["--command", &editor]),
-        //                     ("terminator", vec!["-e", &editor]),
-        //                     ("tilix", vec!["-e", &editor]),
-        //                     ("kitty", vec!["-e", &editor]),
-        //                     ("alacritty", vec!["-e", &editor]),
-        //                     ("xterm", vec!["-e", &editor]),
-        //                 ];
-
-        //                 let mut success = false;
-        //                 for (terminal, args) in terminal_commands.iter() {
-        //                     let mut cmd = std::process::Command::new(terminal);
-        //                     cmd.args(args).arg(&file_to_open);
-
-        //                     if cmd.spawn().is_ok() {
-        //                         success = true;
-        //                         break;
-        //                     }
-        //                 }
-
-        //                 if success {
-        //                     Ok(())
-        //                 } else {
-        //                     Err(FileFantasticError::EditorLaunchFailed(
-        //                         "No terminal emulator found".to_string()
-        //                     ))
-        //                 }
-        //             }
-        //             #[cfg(target_os = "windows")]
-        //             {
-        //                 std::process::Command::new("cmd")
-        //                     .args(["/C", "start", "cmd", "/C"])
-        //                     .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
-        //                     .spawn()
-        //                     .map_err(|e| {
-        //                         FileFantasticError::EditorLaunchFailed(
-        //                             format!("{}: {}", editor, e)
-        //                         )
-        //                     })?;
-        //                 Ok(())
-        //             }
-        //         }
-        //     },
-        //     _ => {
-        //         // This shouldn't happen
-        //         Err(FileFantasticError::EditorLaunchFailed(
-        //             format!("Unknown flag: {}", primary_flag)
-        //         ))
-        //     }
-        // };
 
         // Handle any errors from the special mode operations
         match result {
@@ -8858,6 +8711,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             }
         }
     }
+
 
     // Handle empty input - use system default (existing functionality)
     if user_input.is_empty() {
@@ -8932,101 +8786,98 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         // If no partner programs configured, fall through to treat as program name
     }
 
-    // Handle traditional program name input (simplified - no GUI/terminal distinction)
+    // Handle traditional program name input (existing functionality preserved)
     let editor = user_input;
 
-    // Platform-specific handling for ALL editors
-    #[cfg(target_os = "macos")]
-    {
-        // On macOS, try direct launch first
-        if std::process::Command::new(editor).arg(file_path).spawn().is_ok() {
-            return Ok(());
-        }
-        // If that fails, try opening in Terminal
-        std::process::Command::new("open")
-            .args(["-a", "Terminal"])
-            .arg(format!("{} {}; exit", editor, file_path.to_string_lossy()))
+    // List of known GUI editors that shouldn't need a terminal (existing logic)
+    let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+
+    if gui_editors.contains(&editor.to_lowercase().as_str()) {
+        // Launch GUI editors directly (existing functionality)
+        match std::process::Command::new(editor)
+            .arg(file_path)
             .spawn()
-            .map_err(|e| {
-                eprintln!("Failed to launch editor: {}", e);
-                FileFantasticError::EditorLaunchFailed(editor.to_string())
-            })?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, try direct launch first
-        if std::process::Command::new(editor).arg(file_path).spawn().is_ok() {
-            return Ok(());
-        }
-
-        // If that fails, try terminal emulators
-        let terminal_commands = [
-            ("gnome-terminal", vec!["--", editor]),
-            ("ptyxis", vec!["--", editor]),
-            ("konsole", vec!["--e", editor]),
-            ("xfce4-terminal", vec!["--command", editor]),
-            ("terminator", vec!["-e", editor]),
-            ("tilix", vec!["-e", editor]),
-            ("kitty", vec!["-e", editor]),
-            ("alacritty", vec!["-e", editor]),
-            ("xterm", vec!["-e", editor]),
-        ];
-
-        for (terminal, args) in terminal_commands.iter() {
-            let mut cmd = std::process::Command::new(terminal);
-            cmd.args(args).arg(file_path);
-            if cmd.spawn().is_ok() {
-                return Ok(());
-            }
-        }
-
-        // All attempts failed
-        println!("Could not launch editor. Press Enter to continue...");
-        let mut buf = String::new();
-        io::stdin().read_line(&mut buf).map_err(|e| {
-            eprintln!("Failed to read input: {}", e);
-            FileFantasticError::Io(e)
-        })?;
-        return open_file(file_path);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // On Windows, try direct launch first
-        if std::process::Command::new(editor).arg(file_path).spawn().is_ok() {
-            return Ok(());
-        }
-        // If that fails, try with cmd wrapper
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "cmd", "/C"])
-            .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
-            .spawn()
-            .map_err(|e| {
-                eprintln!("Failed to launch editor: {}", e);
-                FileFantasticError::EditorLaunchFailed(editor.to_string())
-            })?;
-        return Ok(());
-    }
-
-    // Fallback for other platforms (Android/Termux, etc.)
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        match std::process::Command::new(editor).arg(file_path).spawn() {
+        {
             Ok(_) => return Ok(()),
             Err(e) => {
+                // Follow existing error handling pattern
                 eprintln!("Error launching {}: {}", editor, e);
-                println!("Press Enter to continue...");
+                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                println!("Falling back to system default due to: {}. \nPress Enter to continue", error);
                 let mut buf = String::new();
                 io::stdin().read_line(&mut buf).map_err(|e| {
                     eprintln!("Failed to read input: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-                return open_file(file_path);
+                return open_file(file_path); // Ask again
             }
         }
+    } else {
+        // Open terminal-based editors in new terminal window (existing logic preserved)
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .args(["-a", "Terminal"])
+                .arg(format!("{} {}; exit", editor, file_path.to_string_lossy()))
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open Terminal.app for editor: {}", e);
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Try different terminal emulators (existing logic)
+            let terminal_commands = [
+                ("gnome-terminal", vec!["--", editor]),
+                ("ptyxis", vec!["--", editor]),
+                ("konsole", vec!["--e", editor]),
+                ("xfce4-terminal", vec!["--command", editor]),
+                ("terminator", vec!["-e", editor]),
+                ("tilix", vec!["-e", editor]),
+                ("kitty", vec!["-e", editor]),
+                ("alacritty", vec!["-e", editor]),
+                ("xterm", vec!["-e", editor]),
+            ];
+
+            let mut success = false;
+            for (terminal, args) in terminal_commands.iter() {
+                let mut cmd = std::process::Command::new(terminal);
+                cmd.args(args).arg(file_path);
+
+                if cmd.spawn().is_ok() {
+                    success = true;
+                    break;
+                }
+            }
+
+            if !success {
+                // Follow existing error handling pattern
+                println!("No terminal available. Falling back to system default... \nPress Enter to continue");
+                let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                eprintln!("Error: {}", error);
+                let mut buf = String::new();
+                io::stdin().read_line(&mut buf).map_err(|e| {
+                    eprintln!("Failed to read input: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
+                return open_file(file_path); // Ask again
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "cmd", "/C"])
+                .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open cmd.exe for editor: {}", e);
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
+        }
     }
+
+    Ok(())
 }
 
 /// Handles opening a file with optional editor selection
