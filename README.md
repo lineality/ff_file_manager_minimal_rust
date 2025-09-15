@@ -243,6 +243,7 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 21. User can resize TUI: tall+/-N or wide+/-N (e.g. tall+2 or wide-4)
 22. modular to easy integration into other projects
 23. headless and tmux support: instead of a new terminal emulator, can use -h terminal editor in same terminal, or new tmux split
+24. 'Rows & Columns' -rc to inspect .csv tabular data when opening file
 
 ## Scrolling
 Instructions appear in info-bar:
