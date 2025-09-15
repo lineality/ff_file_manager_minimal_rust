@@ -3,17 +3,16 @@
 ## Build
 see https://github.com/lineality/rust_compile_optimizations_cheatsheet
 
-#### For smallest size, build (~0.48 mb)
+#### For smallest size, build (~0.9 mb)
 ```bash
 cargo build --profile release-small
 ```
-#### or for optimal performance (~6 mb)
+#### or for optimal performance (~9 mb)
 ```bash
 cargo build --profile release-performance
 ```
 
 # ~Install
-
 
 ## 1. local/bin method
 - compile or otherwise get a binary/executible

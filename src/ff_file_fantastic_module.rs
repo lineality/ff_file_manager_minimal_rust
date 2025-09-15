@@ -776,108 +776,6 @@ fn create_directory_zip_archive(
     }
 }
 
-// /// Creates a zip file using platform-appropriate system commands
-// ///
-// /// # Purpose
-// /// Executes platform-specific zip creation commands to compress directories,
-// /// avoiding external dependencies while providing cross-platform functionality.
-// ///
-// /// # Arguments
-// /// * `source_path` - Directory to compress
-// /// * `zip_path` - Output path for the zip file
-// ///
-// /// # Returns
-// /// * `Result<bool>` - True if zip creation succeeded, false if failed
-// ///
-// /// # Platform Implementation
-// /// - **Linux/macOS**: Uses `zip -r` command for recursive compression
-// /// - **Windows**: Uses PowerShell `Compress-Archive` cmdlet
-// ///
-// /// # Command Details
-// /// ## Linux/macOS
-// /// ```bash
-// /// zip -r "output.zip" "source_directory/"
-// /// ```
-// ///
-// /// ## Windows
-// /// ```powershell
-// /// Compress-Archive -Path "source_directory" -DestinationPath "output.zip"
-// /// ```
-// ///
-// /// # Error Handling
-// /// - Handles command execution failures
-// /// - Checks exit status of zip commands
-// /// - Provides platform-specific error context
-// ///
-// /// # Example
-// /// ```rust
-// /// let source = PathBuf::from("/home/user/documents");
-// /// let zip_file = PathBuf::from("/home/user/documents_backup.zip");
-// ///
-// /// match create_zip_with_system_command(&source, &zip_file) {
-// ///     Ok(true) => println!("Zip created successfully"),
-// ///     Ok(false) => println!("Zip command failed"),
-// ///     Err(e) => eprintln!("Error executing zip command: {}", e),
-// /// }
-// /// ```
-// fn create_zip_with_system_command(
-//     source_path: &PathBuf,
-//     zip_path: &PathBuf,
-// ) -> Result<bool> {
-//     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-//     {
-//         // Use zip command on Unix-like systems
-//         let output = std::process::Command::new("zip")
-//             .arg("-r")  // Recursive
-//             .arg(zip_path)
-//             .arg(source_path)
-//             .output()
-//             .map_err(|e| {
-//                 eprintln!("Failed to execute zip command: {}", e);
-//                 eprintln!("Make sure 'zip' is installed on your system");
-//                 FileFantasticError::Io(e)
-//             })?;
-
-//         if output.status.success() {
-//             Ok(true)
-//         } else {
-//             let error_msg = String::from_utf8_lossy(&output.stderr);
-//             eprintln!("Zip command failed: {}", error_msg);
-//             Ok(false)
-//         }
-//     }
-
-//     #[cfg(target_os = "windows")]
-//     {
-//         // Use PowerShell Compress-Archive on Windows
-//         let output = std::process::Command::new("powershell")
-//             .arg("-Command")
-//             .arg(format!(
-//                 "Compress-Archive -Path '{}' -DestinationPath '{}'",
-//                 source_path.display(),
-//                 zip_path.display()
-//             ))
-//             .output()
-//             .map_err(|e| {
-//                 eprintln!("Failed to execute PowerShell compress command: {}", e);
-//                 FileFantasticError::Io(e)
-//             })?;
-
-//         if output.status.success() {
-//             Ok(true)
-//         } else {
-//             let error_msg = String::from_utf8_lossy(&output.stderr);
-//             eprintln!("PowerShell compress command failed: {}", error_msg);
-//             Ok(false)
-//         }
-//     }
-
-//     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-//     {
-//         Err(FileFantasticError::UnsupportedPlatform)
-//     }
-// }
-
 /// Creates a zip file using platform-appropriate system commands
 ///
 /// # Purpose
@@ -4042,7 +3940,6 @@ fn sort_directory_entries(
     }
 }
 
-// TODO android has directory_path not used warning here
 /// Opens a new terminal window at the specified directory
 ///
 /// # Purpose
@@ -8545,6 +8442,7 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
 /// Enhanced file opening interface that supports traditional system applications,
 /// user-configured local partner programs, and system default file associations.
 /// Partner programs are custom executables defined in a configuration file.
+/// Also supports -rc --rows-and-columns .csv analysis
 ///
 /// # Arguments
 /// * `file_path` - PathBuf of the file to open
@@ -8618,50 +8516,6 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
 /// Result: Opens with system default application
 /// ```
 fn open_file(file_path: &PathBuf) -> Result<()> {
-    /*
-     *
-     new feature,
-     put in the path to the file
-
-     * useing
-     * rc_analyze_datafile_save_results_to_resultsfile()
-     * pub fn rc_analyze_datafile_save_results_to_resultsfile(
-         csv_file_path_argument: &str,
-     ) -> RowsAndColumnsResult<PathBuf> {
-
-     if file is .csv
-     user can says 'rows and columns'
-
-     then file will be analysed
-
-     and a results file path will be returned
-
-     then the use can view that analysis in whatever editor
-
-
-     steps
-     new flag for user
-     -rc
-     or
-     --rows-and-columns
-
-     this will put the path into the above function
-     then use the output path of that function
-
-     as the file to open
-
-     e.g.
-
-     1 gedit -rc
-     means open the analysis of file 1 with gedit
-
-     if there is an error or no analysis file is returned
-     pass an error message to try again
-     but don't crash the application,
-     empty return from this function (or similar) is fine
-     user can
-
-     */
 
     // Read partner programs configuration (gracefully handles all errors)
     let partner_programs = read_partner_programs_file();
@@ -8764,111 +8618,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         } else {
             ""
         };
-
-        // // Handle the different flag types
-        // let result = match primary_flag {
-        //     "-h" => {
-        //         // Open in current terminal (headless mode)
-        //         println!("Opening file in current terminal with {}...", editor);
-        //         open_in_current_terminal(&editor, &file_to_open)
-        //     },
-        //     "-vsplit" => {
-        //         // Open in vertical tmux split
-        //         open_in_tmux_split(&editor, &file_to_open, "-v")
-        //     },
-        //     "-hsplit" => {
-        //         // Open in horizontal tmux split
-        //         open_in_tmux_split(&editor, &file_to_open, "-h")
-        //     },
-        //     "" if !editor.is_empty() => {
-        //         // Just -rc flag or no special terminal flag, open normally
-        //         // Continue to the regular editor opening logic below
-        //         // by falling through to the standard editor handling
-
-        //         // Check if it's a GUI editor
-        //         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
-        //         if gui_editors.contains(&editor.to_lowercase().as_str()) {
-        //             // Launch GUI editor directly
-        //             std::process::Command::new(&editor)
-        //                 .arg(&file_to_open)
-        //                 .spawn()
-        //                 .map_err(|e| {
-        //                     FileFantasticError::EditorLaunchFailed(
-        //                         format!("{}: {}", editor, e)
-        //                     )
-        //                 })?;
-        //             Ok(())
-        //         } else {
-        //             // Open terminal-based editor in new terminal window
-        //             #[cfg(target_os = "macos")]
-        //             {
-        //                 std::process::Command::new("open")
-        //                     .args(["-a", "Terminal"])
-        //                     .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
-        //                     .spawn()
-        //                     .map_err(|e| {
-        //                         FileFantasticError::EditorLaunchFailed(
-        //                             format!("{}: {}", editor, e)
-        //                         )
-        //                     })?;
-        //                 Ok(())
-        //             }
-        //             #[cfg(target_os = "linux")]
-        //             {
-        //                 // Try different terminal emulators
-        //                 let terminal_commands = [
-        //                     ("gnome-terminal", vec!["--", &editor]),
-        //                     ("ptyxis", vec!["--", &editor]),
-        //                     ("konsole", vec!["--e", &editor]),
-        //                     ("xfce4-terminal", vec!["--command", &editor]),
-        //                     ("terminator", vec!["-e", &editor]),
-        //                     ("tilix", vec!["-e", &editor]),
-        //                     ("kitty", vec!["-e", &editor]),
-        //                     ("alacritty", vec!["-e", &editor]),
-        //                     ("xterm", vec!["-e", &editor]),
-        //                 ];
-
-        //                 let mut success = false;
-        //                 for (terminal, args) in terminal_commands.iter() {
-        //                     let mut cmd = std::process::Command::new(terminal);
-        //                     cmd.args(args).arg(&file_to_open);
-
-        //                     if cmd.spawn().is_ok() {
-        //                         success = true;
-        //                         break;
-        //                     }
-        //                 }
-
-        //                 if success {
-        //                     Ok(())
-        //                 } else {
-        //                     Err(FileFantasticError::EditorLaunchFailed(
-        //                         "No terminal emulator found".to_string()
-        //                     ))
-        //                 }
-        //             }
-        //             #[cfg(target_os = "windows")]
-        //             {
-        //                 std::process::Command::new("cmd")
-        //                     .args(["/C", "start", "cmd", "/C"])
-        //                     .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
-        //                     .spawn()
-        //                     .map_err(|e| {
-        //                         FileFantasticError::EditorLaunchFailed(
-        //                             format!("{}: {}", editor, e)
-        //                         )
-        //                     })?;
-        //                 Ok(())
-        //             }
-        //         }
-        //     },
-        //     _ => {
-        //         // This shouldn't happen
-        //         Err(FileFantasticError::EditorLaunchFailed(
-        //             format!("Unknown flag: {}", primary_flag)
-        //         ))
-        //     }
-        // };
 
         // Handle the different flag types
         let result = match primary_flag {
