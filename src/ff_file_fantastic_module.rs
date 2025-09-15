@@ -200,6 +200,24 @@ if the size is no more than 99 of that unit
 - default terminal size 80/24
 - 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
 
+
+General Pattern for Platform-Specific Code
+When adding new platforms to conditional compilation, always remember to update all relevant cfg attributes:
+// If you have:
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+{ /* implementation A */ }
+
+#[cfg(target_os = "windows")]
+{ /* implementation B */ }
+
+// Then the fallback must exclude ALL handled platforms:
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "android"  // Don't forget to add here too!
+)))]
+{ /* fallback implementation */ }
 */
 
 /// ff - A minimal file manager in Rust
@@ -758,6 +776,108 @@ fn create_directory_zip_archive(
     }
 }
 
+// /// Creates a zip file using platform-appropriate system commands
+// ///
+// /// # Purpose
+// /// Executes platform-specific zip creation commands to compress directories,
+// /// avoiding external dependencies while providing cross-platform functionality.
+// ///
+// /// # Arguments
+// /// * `source_path` - Directory to compress
+// /// * `zip_path` - Output path for the zip file
+// ///
+// /// # Returns
+// /// * `Result<bool>` - True if zip creation succeeded, false if failed
+// ///
+// /// # Platform Implementation
+// /// - **Linux/macOS**: Uses `zip -r` command for recursive compression
+// /// - **Windows**: Uses PowerShell `Compress-Archive` cmdlet
+// ///
+// /// # Command Details
+// /// ## Linux/macOS
+// /// ```bash
+// /// zip -r "output.zip" "source_directory/"
+// /// ```
+// ///
+// /// ## Windows
+// /// ```powershell
+// /// Compress-Archive -Path "source_directory" -DestinationPath "output.zip"
+// /// ```
+// ///
+// /// # Error Handling
+// /// - Handles command execution failures
+// /// - Checks exit status of zip commands
+// /// - Provides platform-specific error context
+// ///
+// /// # Example
+// /// ```rust
+// /// let source = PathBuf::from("/home/user/documents");
+// /// let zip_file = PathBuf::from("/home/user/documents_backup.zip");
+// ///
+// /// match create_zip_with_system_command(&source, &zip_file) {
+// ///     Ok(true) => println!("Zip created successfully"),
+// ///     Ok(false) => println!("Zip command failed"),
+// ///     Err(e) => eprintln!("Error executing zip command: {}", e),
+// /// }
+// /// ```
+// fn create_zip_with_system_command(
+//     source_path: &PathBuf,
+//     zip_path: &PathBuf,
+// ) -> Result<bool> {
+//     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+//     {
+//         // Use zip command on Unix-like systems
+//         let output = std::process::Command::new("zip")
+//             .arg("-r")  // Recursive
+//             .arg(zip_path)
+//             .arg(source_path)
+//             .output()
+//             .map_err(|e| {
+//                 eprintln!("Failed to execute zip command: {}", e);
+//                 eprintln!("Make sure 'zip' is installed on your system");
+//                 FileFantasticError::Io(e)
+//             })?;
+
+//         if output.status.success() {
+//             Ok(true)
+//         } else {
+//             let error_msg = String::from_utf8_lossy(&output.stderr);
+//             eprintln!("Zip command failed: {}", error_msg);
+//             Ok(false)
+//         }
+//     }
+
+//     #[cfg(target_os = "windows")]
+//     {
+//         // Use PowerShell Compress-Archive on Windows
+//         let output = std::process::Command::new("powershell")
+//             .arg("-Command")
+//             .arg(format!(
+//                 "Compress-Archive -Path '{}' -DestinationPath '{}'",
+//                 source_path.display(),
+//                 zip_path.display()
+//             ))
+//             .output()
+//             .map_err(|e| {
+//                 eprintln!("Failed to execute PowerShell compress command: {}", e);
+//                 FileFantasticError::Io(e)
+//             })?;
+
+//         if output.status.success() {
+//             Ok(true)
+//         } else {
+//             let error_msg = String::from_utf8_lossy(&output.stderr);
+//             eprintln!("PowerShell compress command failed: {}", error_msg);
+//             Ok(false)
+//         }
+//     }
+
+//     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+//     {
+//         Err(FileFantasticError::UnsupportedPlatform)
+//     }
+// }
+
 /// Creates a zip file using platform-appropriate system commands
 ///
 /// # Purpose
@@ -772,11 +892,11 @@ fn create_directory_zip_archive(
 /// * `Result<bool>` - True if zip creation succeeded, false if failed
 ///
 /// # Platform Implementation
-/// - **Linux/macOS**: Uses `zip -r` command for recursive compression
+/// - **Linux/macOS/Android**: Uses `zip -r` command for recursive compression
 /// - **Windows**: Uses PowerShell `Compress-Archive` cmdlet
 ///
 /// # Command Details
-/// ## Linux/macOS
+/// ## Linux/macOS/Android
 /// ```bash
 /// zip -r "output.zip" "source_directory/"
 /// ```
@@ -808,7 +928,7 @@ fn create_zip_with_system_command(
 ) -> Result<bool> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     {
-        // Use zip command on Unix-like systems
+        // Use zip command on Unix-like systems (including Android/Termux)
         let output = std::process::Command::new("zip")
             .arg("-r")  // Recursive
             .arg(zip_path)
@@ -817,6 +937,10 @@ fn create_zip_with_system_command(
             .map_err(|e| {
                 eprintln!("Failed to execute zip command: {}", e);
                 eprintln!("Make sure 'zip' is installed on your system");
+                // On Android/Termux, provide specific installation hint
+                if cfg!(target_os = "android") {
+                    eprintln!("On Termux, install zip with: pkg install zip");
+                }
                 FileFantasticError::Io(e)
             })?;
 
@@ -854,7 +978,8 @@ fn create_zip_with_system_command(
         }
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    // Fixed: Added target_os = "android" to the exclusion list
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
     {
         Err(FileFantasticError::UnsupportedPlatform)
     }
