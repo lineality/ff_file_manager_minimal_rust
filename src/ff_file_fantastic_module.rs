@@ -2809,73 +2809,6 @@ fn generate_archive_timestamp() -> String {
     )
 }
 
-// /// Creates archive directory if it doesn't exist
-// ///
-// /// # Purpose
-// /// Ensures that an "archive" subdirectory exists in the specified parent directory,
-// /// creating it if necessary. This directory is used to store copies of files
-// /// when avoiding overwrites.
-// ///
-// /// # Arguments
-// /// * `parent_directory` - The directory where the archive folder should exist
-// ///
-// /// # Returns
-// /// * `Result<PathBuf>` - Absolute path to the archive directory, or error
-// ///
-// /// # Error Conditions
-// /// - IO errors when creating the directory
-// /// - Permission denied when writing to parent directory
-// /// - Invalid parent directory path
-// ///
-// /// # Archive Directory Structure
-// /// ```text
-// /// parent_directory/
-// /// ├── existing_files...
-// /// └── archive/          <- Created by this function
-// ///     ├── file1_timestamp.ext
-// ///     └── file2_timestamp.ext
-// /// ```
-// ///
-// /// # Example
-// /// ```rust
-// /// let current_dir = PathBuf::from("/home/user/documents");
-// /// match ensure_archive_directory_exists(&current_dir) {
-// ///     Ok(archive_path) => {
-// ///         // archive_path is "/home/user/documents/archive"
-// ///         println!("Archive directory ready: {}", archive_path.display());
-// ///     },
-// ///     Err(e) => eprintln!("Failed to create archive directory: {}", e),
-// /// }
-// /// ```
-// fn ensure_archive_directory_exists(parent_directory: &PathBuf) -> Result<PathBuf> {
-//     let archive_directory_path = parent_directory.join("archive");
-
-//     // Check if archive directory already exists
-//     if !archive_directory_path.exists() {
-//         // Create the archive directory
-//         fs::create_dir(&archive_directory_path).map_err(|e| {
-//             match e.kind() {
-//                 io::ErrorKind::PermissionDenied => {
-//                     FileFantasticError::PermissionDenied(archive_directory_path.clone())
-//                 },
-//                 _ => FileFantasticError::Io(e)
-//             }
-//         })?;
-
-//         println!("Created archive directory: {}", archive_directory_path.display());
-//     }
-
-//     // Verify it's actually a directory
-//     if !archive_directory_path.is_dir() {
-//         return Err(FileFantasticError::InvalidName(
-//             format!("Archive path exists but is not a directory: {}",
-//                    archive_directory_path.display())
-//         ));
-//     }
-
-//     Ok(archive_directory_path)
-// }
-
 /// Creates archive directory if it doesn't exist, avoiding nested archive directories
 ///
 /// # Purpose
@@ -5108,6 +5041,14 @@ fn is_plaintext_file(path: &str) -> bool {
         "Gemfile",
         "Podfile",
         "Rakefile",
+        ".gitignore",     // Add this
+        ".gitattributes", // And other common dotfiles
+        ".editorconfig",
+        ".env.example",
+        ".dockerignore",
+        ".env",
+        ".config",
+        ".flake8",
     ];
 
     // Check if it's a known extensionless text file (case-insensitive)
