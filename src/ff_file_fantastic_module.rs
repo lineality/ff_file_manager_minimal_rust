@@ -446,6 +446,10 @@ pub enum FileFantasticError {
 
     /// Current platform is not supported for a specific operation
     UnsupportedPlatform,
+
+    /// Levenshtein distance calculation failed due to string length constraints
+    /// Contains the problematic filename and the length that exceeded limits
+    LevenshteinError { filename: String, length: usize },
 }
 
 impl std::fmt::Display for FileFantasticError {
@@ -461,6 +465,17 @@ impl std::fmt::Display for FileFantasticError {
             }
             Self::EditorLaunchFailed(editor) => write!(f, "Failed to launch editor: {}", editor),
             Self::UnsupportedPlatform => write!(f, "Current platform is not supported"),
+            Self::LevenshteinError { filename, length } => write!(
+                f,
+                "String too long for fuzzy search: '{}' ({} chars, max 1000)",
+                // Truncate filename for display if it's too long
+                if filename.len() > 50 {
+                    format!("{}...", &filename[..50])
+                } else {
+                    filename.clone()
+                },
+                length
+            ),
         }
     }
 }
@@ -7073,6 +7088,7 @@ impl NavigationState {
         Ok(all_entries)
     }
 
+    /// TODO: make this more parallel?
     /// Performs fuzzy search on collected entries using Levenshtein distance
     ///
     /// # Purpose
@@ -7289,10 +7305,28 @@ impl NavigationState {
                 .take(search_len)
                 .collect();
 
+            // // Step 3: Calculate Levenshtein distances for both versions
+            // // This measures how many single-character edits are needed
+            // let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
+            // let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
+
             // Step 3: Calculate Levenshtein distances for both versions
             // This measures how many single-character edits are needed
-            let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
-            let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
+            // Handle potential errors gracefully by skipping problematic entries
+            let (distance_with_ext, distance_without_ext) = match (
+                levenshtein_distance(&full_name_truncated, &search_term),
+                levenshtein_distance(&no_ext_truncated, &search_term),
+            ) {
+                (Ok(dist_with), Ok(dist_without)) => (dist_with, dist_without),
+                (Err(e), _) | (_, Err(e)) => {
+                    // Print warning to stderr and skip this entry
+                    eprintln!("Warning: Skipping file in fuzzy search - {}", e);
+                    // Optionally include more context
+                    eprintln!("  File path: {:?}", entry);
+                    // Skip this entry by continuing to next iteration
+                    continue;
+                }
+            };
 
             // Step 4: Use the better (lower) distance
             // This gives the user the best possible match
@@ -9427,7 +9461,90 @@ Distance between '' and 'test' is 4
 Distance between 'test' and '' is 4
 */
 
-/// Vanilla home made pair compair levenshtein_distance
+// /// Vanilla home made pair compair levenshtein_distance
+// /// e.g. for simple fuzzy search
+// /// Calculates the Levenshtein distance between two strings
+// ///
+// /// # Purpose
+// /// Provides fuzzy text matching capability for the search functionality,
+// /// measuring how many single-character edits (insertions, deletions, substitutions)
+// /// are needed to transform one string into another.
+// ///
+// /// # Arguments
+// /// * `s` - First string for comparison
+// /// * `t` - Second string for comparison
+// ///
+// /// # Returns
+// /// * `usize` - The edit distance between the strings (lower = more similar)
+// ///
+// /// # Algorithm
+// /// Uses a dynamic programming approach with two work vectors to calculate
+// /// the minimum edit distance between strings:
+// /// - 0 means strings are identical
+// /// - Higher values indicate greater differences
+// /// - Equal to max(s.len(), t.len()) when strings share no characters
+// ///
+// /// # Performance Considerations
+// /// - O(m*n) time complexity where m and n are string lengths
+// /// - O(n) space complexity using the two-vector approach
+// /// - Efficient for short strings like filenames, but may not scale well
+// ///   for very long strings
+// ///
+// /// # Usage Context
+// /// Used in the `fuzzy_search` method to find files matching a partial query,
+// /// allowing for approximate/inexact matches when users don't know the exact filename.
+// ///
+// /// # Examples
+// /// ```
+// /// assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+// /// assert_eq!(levenshtein_distance("rust", "dust"), 1);
+// /// assert_eq!(levenshtein_distance("", "test"), 4);
+// /// ```
+// fn levenshtein_distance(s: &str, t: &str) -> usize {
+//     // Convert strings to vectors of chars for easier indexing
+//     // Do this FIRST to get correct character counts
+//     let s_chars: Vec<char> = s.chars().collect();
+//     let t_chars: Vec<char> = t.chars().collect();
+
+//     // Get the CHARACTER lengths, not byte lengths
+//     let m = s_chars.len();
+//     let n = t_chars.len();
+
+//     // Handle empty string cases
+//     if m == 0 {
+//         return n;
+//     }
+//     if n == 0 {
+//         return m;
+//     }
+
+//     // Create two work vectors
+//     let mut v0: Vec<usize> = (0..=n).collect();
+//     let mut v1: Vec<usize> = vec![0; n + 1];
+
+//     // Iterate through each character of s
+//     for i in 0..m {
+//         // First element of v1 is the deletion cost
+//         v1[0] = i + 1;
+
+//         // Calculate costs for each character of t
+//         for j in 0..n {
+//             let deletion_cost = v0[j + 1] + 1;
+//             let insertion_cost = v1[j] + 1;
+//             let substitution_cost = v0[j] + if s_chars[i] == t_chars[j] { 0 } else { 1 };
+
+//             v1[j + 1] = deletion_cost.min(insertion_cost).min(substitution_cost);
+//         }
+
+//         // Swap vectors for next iteration
+//         std::mem::swap(&mut v0, &mut v1);
+//     }
+
+//     // Return final distance
+//     v0[n]
+// }
+
+/// Vanilla home made pair compare levenshtein_distance with error handling
 /// e.g. for simple fuzzy search
 /// Calculates the Levenshtein distance between two strings
 ///
@@ -9441,7 +9558,14 @@ Distance between 'test' and '' is 4
 /// * `t` - Second string for comparison
 ///
 /// # Returns
-/// * `usize` - The edit distance between the strings (lower = more similar)
+/// * `Ok(usize)` - The edit distance between the strings (lower = more similar)
+/// * `Err(FileFantasticError)` - If either string exceeds the maximum length limit
+///
+/// # Error Handling
+/// Returns an error if either string exceeds 1000 characters to prevent:
+/// - Excessive memory allocation
+/// - Performance degradation
+/// - Potential integer overflow in extreme cases
 ///
 /// # Algorithm
 /// Uses a dynamic programming approach with two work vectors to calculate
@@ -9453,6 +9577,7 @@ Distance between 'test' and '' is 4
 /// # Performance Considerations
 /// - O(m*n) time complexity where m and n are string lengths
 /// - O(n) space complexity using the two-vector approach
+/// - Maximum string length of 1000 characters enforced for safety
 /// - Efficient for short strings like filenames, but may not scale well
 ///   for very long strings
 ///
@@ -9462,11 +9587,14 @@ Distance between 'test' and '' is 4
 ///
 /// # Examples
 /// ```
-/// assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
-/// assert_eq!(levenshtein_distance("rust", "dust"), 1);
-/// assert_eq!(levenshtein_distance("", "test"), 4);
+/// assert_eq!(levenshtein_distance("kitten", "sitting")?, 3);
+/// assert_eq!(levenshtein_distance("rust", "dust")?, 1);
+/// assert_eq!(levenshtein_distance("", "test")?, 4);
 /// ```
-fn levenshtein_distance(s: &str, t: &str) -> usize {
+fn levenshtein_distance(s: &str, t: &str) -> Result<usize> {
+    // Define maximum allowed string length for safety
+    const MAX_STRING_LENGTH: usize = 1000;
+
     // Convert strings to vectors of chars for easier indexing
     // Do this FIRST to get correct character counts
     let s_chars: Vec<char> = s.chars().collect();
@@ -9476,15 +9604,49 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     let m = s_chars.len();
     let n = t_chars.len();
 
-    // Handle empty string cases
-    if m == 0 {
-        return n;
-    }
-    if n == 0 {
-        return m;
+    // Check length constraints before expensive operations
+    if m > MAX_STRING_LENGTH {
+        return Err(FileFantasticError::LevenshteinError {
+            filename: s.to_string(),
+            length: m,
+        });
     }
 
-    // Create two work vectors
+    if n > MAX_STRING_LENGTH {
+        return Err(FileFantasticError::LevenshteinError {
+            filename: t.to_string(),
+            length: n,
+        });
+    }
+
+    // Also check the combined computational complexity
+    // This prevents issues with two 1000-char strings creating a million operations
+    const MAX_COMPUTATION_SIZE: usize = 500_000; // 500k operations max
+    if m.saturating_mul(n) > MAX_COMPUTATION_SIZE {
+        // Return error for the longer string
+        if m >= n {
+            return Err(FileFantasticError::LevenshteinError {
+                filename: s.to_string(),
+                length: m,
+            });
+        } else {
+            return Err(FileFantasticError::LevenshteinError {
+                filename: t.to_string(),
+                length: n,
+            });
+        }
+    }
+
+    // Handle empty string cases
+    if m == 0 {
+        return Ok(n);
+    }
+    if n == 0 {
+        return Ok(m);
+    }
+
+    // Create two work vectors - these allocations could theoretically fail
+    // but with our length checks above, they should be safe
     let mut v0: Vec<usize> = (0..=n).collect();
     let mut v1: Vec<usize> = vec![0; n + 1];
 
@@ -9507,7 +9669,96 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     }
 
     // Return final distance
-    v0[n]
+    Ok(v0[n])
+}
+
+#[cfg(test)]
+mod levenshtein_tests {
+    use super::*;
+
+    #[test]
+    fn test_levenshtein_normal_strings() {
+        // Normal cases should work as before
+        assert_eq!(levenshtein_distance("kitten", "sitting").unwrap(), 3);
+        assert_eq!(levenshtein_distance("rust", "dust").unwrap(), 1);
+        assert_eq!(levenshtein_distance("", "test").unwrap(), 4);
+        assert_eq!(levenshtein_distance("same", "same").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_levenshtein_long_string_error() {
+        // Create a string longer than 1000 characters
+        let long_string: String = "a".repeat(1001);
+        let normal_string = "test";
+
+        // Should return an error for the long string
+        let result = levenshtein_distance(&long_string, normal_string);
+        assert!(result.is_err());
+
+        // Check the error contains expected information
+        if let Err(FileFantasticError::LevenshteinError { length, .. }) = result {
+            assert_eq!(length, 1001);
+        } else {
+            panic!("Expected LevenshteinError");
+        }
+    }
+
+    #[test]
+    fn test_levenshtein_both_strings_long() {
+        // Both strings exceed limit
+        let long_string1: String = "a".repeat(1001);
+        let long_string2: String = "b".repeat(1002);
+
+        // Should return an error
+        let result = levenshtein_distance(&long_string1, &long_string2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_levenshtein_edge_case_exactly_max() {
+        // Strings exactly at the limit should work if they don't exceed computational limit
+        // For 500,000 limit: sqrt(500,000) ≈ 707
+        // So two 700-char strings should work (700*700 = 490,000 < 500,000)
+        let max_string1: String = "a".repeat(700);
+        let max_string2: String = "b".repeat(700);
+
+        // Should succeed
+        let result = levenshtein_distance(&max_string1, &max_string2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn no_test_levenshtein_edge_case_exactly_max() {
+        // Strings exactly at the limit should work if they don't exceed computational limit
+        // For 500,000 limit: sqrt(500,000) ≈ 707
+        // So two 700-char strings should work (700*700 = 490,000 < 500,000)
+        let max_string1: String = "a".repeat(700);
+        let max_string2: String = "b".repeat(700);
+
+        // Should succeed
+        let result = levenshtein_distance(&max_string1, &max_string2);
+        assert!(result.is_ok());
+
+        // But two 1000-char strings should fail with 500k limit
+        let too_long1: String = "a".repeat(1000);
+        let too_long2: String = "b".repeat(1000);
+        let result = levenshtein_distance(&too_long1, &too_long2);
+        assert!(result.is_err());
+        // This should fail if MAX_COMPUTATION_SIZE is 500,000
+        // Or pass if MAX_COMPUTATION_SIZE is 1,000,000
+        // Adjust based on your chosen limit
+    }
+
+    #[test]
+    fn test_levenshtein_computational_limit() {
+        // Test the computational limit check
+        // Two 800-char strings = 640,000 operations > 500,000 limit
+        let string1: String = "a".repeat(800);
+        let string2: String = "b".repeat(800);
+
+        let result = levenshtein_distance(&string1, &string2);
+        assert!(result.is_err());
+    }
 }
 
 /// Determines the starting directory path from command line arguments
