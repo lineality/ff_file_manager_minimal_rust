@@ -806,7 +806,7 @@ fn create_zip_with_system_command(
     source_path: &PathBuf,
     zip_path: &PathBuf,
 ) -> Result<bool> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     {
         // Use zip command on Unix-like systems
         let output = std::process::Command::new("zip")
@@ -3917,6 +3917,7 @@ fn sort_directory_entries(
     }
 }
 
+// TODO android has directory_path not used warning here
 /// Opens a new terminal window at the specified directory
 ///
 /// # Purpose
@@ -3985,6 +3986,55 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
+    {
+        // Try different terminal emulators in order of preference
+        let terminal_commands = [
+            ("gnome-terminal", vec!["--working-directory"]),
+            ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
+            ("konsole", vec!["--workdir"]),
+            ("xfce4-terminal", vec!["--working-directory"]),
+            ("mate-terminal", vec!["--working-directory"]),
+            ("terminator", vec!["--working-directory"]),
+            ("alacritty", vec!["--working-directory"]),
+            ("kitty", vec!["--directory"]),
+            ("tilix", vec!["--working-directory"]),
+            ("urxvt", vec!["-cd"]),
+            ("rxvt", vec!["-cd"]),
+            ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
+        ];
+
+        for (terminal, args) in terminal_commands.iter() {
+            let mut command = std::process::Command::new(terminal);
+
+            if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
+                // These terminals need special handling with the shell
+                command.args(args)
+                    .arg(directory_path.to_string_lossy().to_string())
+                    .arg("&& bash");
+            } else if *terminal == "alacritty" || *terminal == "kitty" {
+                // Some newer terminals handle working directory differently
+                command.arg(args[0])
+                    .arg(directory_path);
+            } else {
+                command.args(args)
+                    .arg(directory_path);
+            }
+
+            match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    // Log the attempt but continue trying other terminals
+                    eprintln!("Failed to open terminal {}: {}", terminal, e);
+                    continue;
+                }
+            }
+        }
+
+        // None of the terminals worked
+        return Err(FileFantasticError::NoTerminalFound);
+    }
+
+    #[cfg(target_os = "android")]
     {
         // Try different terminal emulators in order of preference
         let terminal_commands = [
@@ -8590,6 +8640,111 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             ""
         };
 
+        // // Handle the different flag types
+        // let result = match primary_flag {
+        //     "-h" => {
+        //         // Open in current terminal (headless mode)
+        //         println!("Opening file in current terminal with {}...", editor);
+        //         open_in_current_terminal(&editor, &file_to_open)
+        //     },
+        //     "-vsplit" => {
+        //         // Open in vertical tmux split
+        //         open_in_tmux_split(&editor, &file_to_open, "-v")
+        //     },
+        //     "-hsplit" => {
+        //         // Open in horizontal tmux split
+        //         open_in_tmux_split(&editor, &file_to_open, "-h")
+        //     },
+        //     "" if !editor.is_empty() => {
+        //         // Just -rc flag or no special terminal flag, open normally
+        //         // Continue to the regular editor opening logic below
+        //         // by falling through to the standard editor handling
+
+        //         // Check if it's a GUI editor
+        //         let gui_editors = ["code", "sublime", "subl", "gedit", "kate", "notepad++"];
+        //         if gui_editors.contains(&editor.to_lowercase().as_str()) {
+        //             // Launch GUI editor directly
+        //             std::process::Command::new(&editor)
+        //                 .arg(&file_to_open)
+        //                 .spawn()
+        //                 .map_err(|e| {
+        //                     FileFantasticError::EditorLaunchFailed(
+        //                         format!("{}: {}", editor, e)
+        //                     )
+        //                 })?;
+        //             Ok(())
+        //         } else {
+        //             // Open terminal-based editor in new terminal window
+        //             #[cfg(target_os = "macos")]
+        //             {
+        //                 std::process::Command::new("open")
+        //                     .args(["-a", "Terminal"])
+        //                     .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
+        //                     .spawn()
+        //                     .map_err(|e| {
+        //                         FileFantasticError::EditorLaunchFailed(
+        //                             format!("{}: {}", editor, e)
+        //                         )
+        //                     })?;
+        //                 Ok(())
+        //             }
+        //             #[cfg(target_os = "linux")]
+        //             {
+        //                 // Try different terminal emulators
+        //                 let terminal_commands = [
+        //                     ("gnome-terminal", vec!["--", &editor]),
+        //                     ("ptyxis", vec!["--", &editor]),
+        //                     ("konsole", vec!["--e", &editor]),
+        //                     ("xfce4-terminal", vec!["--command", &editor]),
+        //                     ("terminator", vec!["-e", &editor]),
+        //                     ("tilix", vec!["-e", &editor]),
+        //                     ("kitty", vec!["-e", &editor]),
+        //                     ("alacritty", vec!["-e", &editor]),
+        //                     ("xterm", vec!["-e", &editor]),
+        //                 ];
+
+        //                 let mut success = false;
+        //                 for (terminal, args) in terminal_commands.iter() {
+        //                     let mut cmd = std::process::Command::new(terminal);
+        //                     cmd.args(args).arg(&file_to_open);
+
+        //                     if cmd.spawn().is_ok() {
+        //                         success = true;
+        //                         break;
+        //                     }
+        //                 }
+
+        //                 if success {
+        //                     Ok(())
+        //                 } else {
+        //                     Err(FileFantasticError::EditorLaunchFailed(
+        //                         "No terminal emulator found".to_string()
+        //                     ))
+        //                 }
+        //             }
+        //             #[cfg(target_os = "windows")]
+        //             {
+        //                 std::process::Command::new("cmd")
+        //                     .args(["/C", "start", "cmd", "/C"])
+        //                     .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
+        //                     .spawn()
+        //                     .map_err(|e| {
+        //                         FileFantasticError::EditorLaunchFailed(
+        //                             format!("{}: {}", editor, e)
+        //                         )
+        //                     })?;
+        //                 Ok(())
+        //             }
+        //         }
+        //     },
+        //     _ => {
+        //         // This shouldn't happen
+        //         Err(FileFantasticError::EditorLaunchFailed(
+        //             format!("Unknown flag: {}", primary_flag)
+        //         ))
+        //     }
+        // };
+
         // Handle the different flag types
         let result = match primary_flag {
             "-h" => {
@@ -8625,66 +8780,107 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     Ok(())
                 } else {
                     // Open terminal-based editor in new terminal window
-                    #[cfg(target_os = "macos")]
-                    {
-                        std::process::Command::new("open")
-                            .args(["-a", "Terminal"])
-                            .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
-                            .spawn()
-                            .map_err(|e| {
-                                FileFantasticError::EditorLaunchFailed(
-                                    format!("{}: {}", editor, e)
-                                )
-                            })?;
-                        Ok(())
-                    }
-                    #[cfg(target_os = "linux")]
-                    {
-                        // Try different terminal emulators
-                        let terminal_commands = [
-                            ("gnome-terminal", vec!["--", &editor]),
-                            ("ptyxis", vec!["--", &editor]),
-                            ("konsole", vec!["--e", &editor]),
-                            ("xfce4-terminal", vec!["--command", &editor]),
-                            ("terminator", vec!["-e", &editor]),
-                            ("tilix", vec!["-e", &editor]),
-                            ("kitty", vec!["-e", &editor]),
-                            ("alacritty", vec!["-e", &editor]),
-                            ("xterm", vec!["-e", &editor]),
-                        ];
+                    // Store the result to ensure all paths return Result<()>
+                    let terminal_result = {
+                        #[cfg(target_os = "macos")]
+                        {
+                            std::process::Command::new("open")
+                                .args(["-a", "Terminal"])
+                                .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
+                                .spawn()
+                                .map_err(|e| {
+                                    FileFantasticError::EditorLaunchFailed(
+                                        format!("{}: {}", editor, e)
+                                    )
+                                })
+                                .map(|_| ())
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            // Check if we're in Termux environment first
+                            if std::env::var("TERMUX_VERSION").is_ok() ||
+                               std::path::Path::new("/data/data/com.termux").exists() {
+                                // In Termux, try to open directly without spawning new terminal
+                                // since Termux doesn't have traditional terminal emulators
+                                std::process::Command::new("termux-open")
+                                    .arg(&file_to_open)
+                                    .spawn()
+                                    .or_else(|_| {
+                                        // Fallback to direct editor launch in current terminal
+                                        std::process::Command::new(&editor)
+                                            .arg(&file_to_open)
+                                            .spawn()
+                                    })
+                                    .map_err(|e| {
+                                        FileFantasticError::EditorLaunchFailed(
+                                            format!("Termux launch failed for {}: {}", editor, e)
+                                        )
+                                    })
+                                    .map(|_| ())
+                            } else {
+                                // Try different terminal emulators for desktop Linux
+                                let terminal_commands = [
+                                    ("gnome-terminal", vec!["--", &editor]),
+                                    ("ptyxis", vec!["--", &editor]),
+                                    ("konsole", vec!["--e", &editor]),
+                                    ("xfce4-terminal", vec!["--command", &editor]),
+                                    ("terminator", vec!["-e", &editor]),
+                                    ("tilix", vec!["-e", &editor]),
+                                    ("kitty", vec!["-e", &editor]),
+                                    ("alacritty", vec!["-e", &editor]),
+                                    ("xterm", vec!["-e", &editor]),
+                                ];
 
-                        let mut success = false;
-                        for (terminal, args) in terminal_commands.iter() {
-                            let mut cmd = std::process::Command::new(terminal);
-                            cmd.args(args).arg(&file_to_open);
+                                let mut success = false;
+                                for (terminal, args) in terminal_commands.iter() {
+                                    let mut cmd = std::process::Command::new(terminal);
+                                    cmd.args(args).arg(&file_to_open);
 
-                            if cmd.spawn().is_ok() {
-                                success = true;
-                                break;
+                                    if cmd.spawn().is_ok() {
+                                        success = true;
+                                        break;
+                                    }
+                                }
+
+                                if success {
+                                    Ok(())
+                                } else {
+                                    Err(FileFantasticError::EditorLaunchFailed(
+                                        "No terminal emulator found".to_string()
+                                    ))
+                                }
                             }
                         }
-
-                        if success {
-                            Ok(())
-                        } else {
-                            Err(FileFantasticError::EditorLaunchFailed(
-                                "No terminal emulator found".to_string()
-                            ))
+                        #[cfg(target_os = "windows")]
+                        {
+                            std::process::Command::new("cmd")
+                                .args(["/C", "start", "cmd", "/C"])
+                                .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
+                                .spawn()
+                                .map_err(|e| {
+                                    FileFantasticError::EditorLaunchFailed(
+                                        format!("{}: {}", editor, e)
+                                    )
+                                })
+                                .map(|_| ())
                         }
-                    }
-                    #[cfg(target_os = "windows")]
-                    {
-                        std::process::Command::new("cmd")
-                            .args(["/C", "start", "cmd", "/C"])
-                            .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
-                            .spawn()
-                            .map_err(|e| {
-                                FileFantasticError::EditorLaunchFailed(
-                                    format!("{}: {}", editor, e)
-                                )
-                            })?;
-                        Ok(())
-                    }
+                        // Fallback for any other platform not covered by cfg directives
+                        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                        {
+                            // Try to launch editor directly as last resort
+                            std::process::Command::new(&editor)
+                                .arg(&file_to_open)
+                                .spawn()
+                                .map_err(|e| {
+                                    FileFantasticError::EditorLaunchFailed(
+                                        format!("Platform not fully supported. Direct launch failed for {}: {}", editor, e)
+                                    )
+                                })
+                                .map(|_| ())
+                        }
+                    };
+
+                    terminal_result
                 }
             },
             _ => {
