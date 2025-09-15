@@ -1,4 +1,8 @@
 // src/lib.rs (or src/ff_file_fantastic_module.rs)
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::env;
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small
@@ -336,17 +340,12 @@ When adding new platforms to conditional compilation, always remember to update 
 /// - default terminal size 80/24
 /// - or first MVP, terminal size is default terminal size
 /// - for MVP...mouse to scroll up and down works fine for mvp
-
 use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::io::{self, Write, Read};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use std::env;
 use std::process::Command;
-use std::collections::VecDeque;
-use std::collections::HashSet;
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
@@ -375,9 +374,7 @@ const YELLOW: &str = "\x1b[33m";
 // const UNDERLINE: &str = "\x1b[4m";
 
 /// analyze rows and colums of data file
-use super::rows_and_columns_module::{
-    rc_analyze_datafile_save_results_to_resultsfile
-};
+use super::rows_and_columns_module::rc_analyze_datafile_save_results_to_resultsfile;
 
 /*
 Error Handling section starts
@@ -459,7 +456,9 @@ impl std::fmt::Display for FileFantasticError {
             Self::PermissionDenied(path) => write!(f, "Permission denied: {}", path.display()),
             Self::InvalidName(name) => write!(f, "Invalid file name: {}", name),
             Self::NoTerminalFound => write!(f, "No suitable terminal emulator found"),
-            Self::MetadataError(path) => write!(f, "Failed to read metadata for: {}", path.display()),
+            Self::MetadataError(path) => {
+                write!(f, "Failed to read metadata for: {}", path.display())
+            }
             Self::EditorLaunchFailed(editor) => write!(f, "Failed to launch editor: {}", editor),
             Self::UnsupportedPlatform => write!(f, "Current platform is not supported"),
         }
@@ -537,7 +536,7 @@ impl From<io::Error> for FileFantasticError {
 /// ```
 fn calculate_name_width(
     adjustment_magnitude: u16,
-    adjustment_direction_true_is_positive_false_is_negative: bool
+    adjustment_direction_true_is_positive_false_is_negative: bool,
 ) -> u16 {
     // Convert default to u16 for calculation
     let base_width: u16 = MAX_NAME_LENGTH_DEFAULT as u16;
@@ -554,7 +553,9 @@ fn calculate_name_width(
         // Negative adjustment: subtract from base width
         // saturating_sub prevents underflow, returns 0 if result would be negative
         // max ensures we never go below minimum_width
-        base_width.saturating_sub(adjustment_magnitude).max(minimum_width)
+        base_width
+            .saturating_sub(adjustment_magnitude)
+            .max(minimum_width)
     }
 }
 
@@ -603,7 +604,7 @@ fn calculate_name_width(
 /// ```
 fn calculate_items_per_page(
     adjustment_magnitude: u16,
-    adjustment_direction_true_is_positive_false_is_negative: bool
+    adjustment_direction_true_is_positive_false_is_negative: bool,
 ) -> u16 {
     // Convert default to u16 for calculation
     let base_items: u16 = ITEMS_PER_PAGE_DEFAULT as u16;
@@ -647,7 +648,7 @@ fn calculate_items_per_page(
 fn calculate_name_width_from_state(nav_state: &NavigationState) -> u16 {
     calculate_name_width(
         nav_state.tui_wide_adjustment,
-        nav_state.tui_wide_direction_sign
+        nav_state.tui_wide_direction_sign,
     )
 }
 
@@ -676,7 +677,7 @@ fn calculate_name_width_from_state(nav_state: &NavigationState) -> u16 {
 fn calculate_items_per_page_from_state(nav_state: &NavigationState) -> u16 {
     calculate_items_per_page(
         nav_state.tui_tall_adjustment,
-        nav_state.tui_tall_direction_sign
+        nav_state.tui_tall_direction_sign,
     )
 }
 
@@ -719,27 +720,35 @@ fn create_directory_zip_archive(
     }
 
     if !source_directory_path.is_dir() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Source is not a directory: {}", source_directory_path.display())
-        ));
+        return Err(FileFantasticError::InvalidName(format!(
+            "Source is not a directory: {}",
+            source_directory_path.display()
+        )));
     }
 
     // Validate destination directory exists and is writable
     if !destination_directory_path.exists() {
-        return Err(FileFantasticError::NotFound(destination_directory_path.clone()));
-    }
-
-    if !destination_directory_path.is_dir() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Destination is not a directory: {}", destination_directory_path.display())
+        return Err(FileFantasticError::NotFound(
+            destination_directory_path.clone(),
         ));
     }
 
+    if !destination_directory_path.is_dir() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "Destination is not a directory: {}",
+            destination_directory_path.display()
+        )));
+    }
+
     // Extract source directory name
-    let source_directory_name = source_directory_path.file_name()
-        .ok_or_else(|| FileFantasticError::InvalidName(
-            format!("Cannot determine directory name from: {}", source_directory_path.display())
-        ))?
+    let source_directory_name = source_directory_path
+        .file_name()
+        .ok_or_else(|| {
+            FileFantasticError::InvalidName(format!(
+                "Cannot determine directory name from: {}",
+                source_directory_path.display()
+            ))
+        })?
         .to_string_lossy()
         .to_string();
 
@@ -751,7 +760,12 @@ fn create_directory_zip_archive(
             format!("{}_{}.zip", source_directory_name, timestamp)
         } else {
             // Include custom name before timestamp
-            format!("{}_{}_{}.zip", source_directory_name, custom_name.trim(), timestamp)
+            format!(
+                "{}_{}_{}.zip",
+                source_directory_name,
+                custom_name.trim(),
+                timestamp
+            )
         }
     } else {
         // No custom name, use standard format
@@ -761,17 +775,14 @@ fn create_directory_zip_archive(
     let zip_destination_path = destination_directory_path.join(&zip_filename);
 
     // Create zip archive using system commands
-    let zip_result = create_zip_with_system_command(
-        source_directory_path,
-        &zip_destination_path,
-    )?;
+    let zip_result = create_zip_with_system_command(source_directory_path, &zip_destination_path)?;
 
     if zip_result {
         println!("Directory archived: {}", zip_destination_path.display());
         Ok(zip_destination_path)
     } else {
         Err(FileFantasticError::InvalidName(
-            "Zip creation failed".to_string()
+            "Zip creation failed".to_string(),
         ))
     }
 }
@@ -820,15 +831,12 @@ fn create_directory_zip_archive(
 ///     Err(e) => eprintln!("Error executing zip command: {}", e),
 /// }
 /// ```
-fn create_zip_with_system_command(
-    source_path: &PathBuf,
-    zip_path: &PathBuf,
-) -> Result<bool> {
+fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> Result<bool> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     {
         // Use zip command on Unix-like systems (including Android/Termux)
         let output = std::process::Command::new("zip")
-            .arg("-r")  // Recursive
+            .arg("-r") // Recursive
             .arg(zip_path)
             .arg(source_path)
             .output()
@@ -877,7 +885,12 @@ fn create_zip_with_system_command(
     }
 
     // Fixed: Added target_os = "android" to the exclusion list
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android"
+    )))]
     {
         Err(FileFantasticError::UnsupportedPlatform)
     }
@@ -1128,12 +1141,14 @@ impl SavedNavigationState {
     /// ```
     fn generate_auto_nickname(path: &PathBuf, timestamp: SystemTime) -> String {
         // Extract the directory name from the path
-        let path_name = path.file_name()
+        let path_name = path
+            .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "root".to_string());
 
         // Get timestamp seconds since epoch for uniqueness
-        let timestamp_secs = timestamp.duration_since(UNIX_EPOCH)
+        let timestamp_secs = timestamp
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
@@ -1197,16 +1212,36 @@ impl SavedNavigationState {
 
         // Generate sort description with direction arrows
         let sort_desc = match sort_method {
-            DirectorySortingMethodEnum::Name(asc) => if *asc { " name↑" } else { " name↓" },
-            DirectorySortingMethodEnum::Size(asc) => if *asc { " size↑" } else { " size↓" },
-            DirectorySortingMethodEnum::Modified(asc) => if *asc { " date↑" } else { " date↓" },
+            DirectorySortingMethodEnum::Name(asc) => {
+                if *asc {
+                    " name↑"
+                } else {
+                    " name↓"
+                }
+            }
+            DirectorySortingMethodEnum::Size(asc) => {
+                if *asc {
+                    " size↑"
+                } else {
+                    " size↓"
+                }
+            }
+            DirectorySortingMethodEnum::Modified(asc) => {
+                if *asc {
+                    " date↑"
+                } else {
+                    " date↓"
+                }
+            }
         };
 
         // Combine all elements into description
-        format!("{}{}{}",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                filter_desc,
-                sort_desc)
+        format!(
+            "{}{}{}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            filter_desc,
+            sort_desc
+        )
     }
 }
 
@@ -1390,22 +1425,31 @@ impl NavigationStateManager {
 
         // Check for duplicate nicknames and handle them gracefully
         if self.pocket_dimensions.contains_key(&final_nickname) {
-            println!("Warning: Pocket dimension '{}' already exists and will be overwritten.",
-                     final_nickname);
+            println!(
+                "Warning: Pocket dimension '{}' already exists and will be overwritten.",
+                final_nickname
+            );
             print!("Continue? (y/N): ");
-            io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+            io::stdout()
+                .flush()
+                .map_err(|e| FileFantasticError::Io(e))?;
 
             let mut response = String::new();
-            io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+            io::stdin()
+                .read_line(&mut response)
+                .map_err(|e| FileFantasticError::Io(e))?;
 
             // Only proceed if user explicitly confirms with 'y'
             if !response.trim().eq_ignore_ascii_case("y") {
-                return Err(FileFantasticError::InvalidName("Operation cancelled by user".to_string()));
+                return Err(FileFantasticError::InvalidName(
+                    "Operation cancelled by user".to_string(),
+                ));
             }
         }
 
         // Store the pocket dimension
-        self.pocket_dimensions.insert(final_nickname.clone(), saved_state);
+        self.pocket_dimensions
+            .insert(final_nickname.clone(), saved_state);
         Ok(final_nickname)
     }
 
@@ -1542,7 +1586,7 @@ impl NavigationStateManager {
             Ok(())
         } else {
             Err(FileFantasticError::InvalidName(
-                "Path is not a file".to_string()
+                "Path is not a file".to_string(),
             ))
         }
     }
@@ -1766,7 +1810,6 @@ impl NavigationStateManager {
         current_directory_entries: &[FileSystemEntry],
         current_directory_path: &PathBuf,
     ) -> Result<()> {
-
         // WORKFLOW STEP 1: Display directory contents for user selection
         display_directory_contents(
             current_directory_entries,
@@ -1774,16 +1817,21 @@ impl NavigationStateManager {
             None,
             nav_state.current_filter,
             nav_state,
-        ).map_err(|e| FileFantasticError::Io(e))?;
+        )
+        .map_err(|e| FileFantasticError::Io(e))?;
 
         // WORKFLOW STEP 1 (continued): Prompt for selection
         println!("\n=== Archive Selection ===");
         println!("Select item to archive (creates timestamped copy/zip)");
         print!("Enter item number (or 'b' to back/cancel): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
         let input = input.trim();
 
         // Handle cancellation request
@@ -1795,37 +1843,50 @@ impl NavigationStateManager {
         // Validate and process the user's selection
         if let Ok(number) = input.parse::<usize>() {
             if let Some(item_info) = nav_state.lookup_item(number) {
-
                 // Extract item name for display purposes
-                let item_name = item_info.item_path.file_name()
+                let item_name = item_info
+                    .item_path
+                    .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
 
                 // WORKFLOW STEP 2: Ask for confirmation based on item type
                 let confirmation_message = if item_info.item_type == FileSystemItemType::Directory {
-                    format!("Archive directory '{}' as zip with timestamp? (Y/n): ", item_name)
+                    format!(
+                        "Archive directory '{}' as zip with timestamp? (Y/n): ",
+                        item_name
+                    )
                 } else {
                     format!("Archive file '{}' with timestamp? (Y/n): ", item_name)
                 };
 
                 print!("\n{}", confirmation_message);
-                io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                io::stdout()
+                    .flush()
+                    .map_err(|e| FileFantasticError::Io(e))?;
 
                 let mut response = String::new();
-                io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                io::stdin()
+                    .read_line(&mut response)
+                    .map_err(|e| FileFantasticError::Io(e))?;
 
                 // Default to 'yes' if user just presses enter
                 if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
-
                     // WORKFLOW STEP 3: Process archive options based on item type
                     if item_info.item_type == FileSystemItemType::Directory {
                         // DIRECTORY WORKFLOW: Ask for optional name prefix, then create zip
 
-                        print!("\nAdd custom name prefix to archive? (optional, or Enter to skip): ");
-                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        print!(
+                            "\nAdd custom name prefix to archive? (optional, or Enter to skip): "
+                        );
+                        io::stdout()
+                            .flush()
+                            .map_err(|e| FileFantasticError::Io(e))?;
 
                         let mut custom_name = String::new();
-                        io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
+                        io::stdin()
+                            .read_line(&mut custom_name)
+                            .map_err(|e| FileFantasticError::Io(e))?;
                         let custom_name = custom_name.trim();
 
                         let custom_name_option = if custom_name.is_empty() {
@@ -1845,12 +1906,12 @@ impl NavigationStateManager {
                                     Ok(zip_path) => {
                                         println!("\n✓ Directory archived successfully!");
                                         println!("Archive location: {}", zip_path.display());
-                                    },
+                                    }
                                     Err(e) => {
                                         eprintln!("\n✗ Directory archive creation failed: {}", e);
                                     }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 eprintln!("\n✗ Failed to create archive directory: {}", e);
                             }
@@ -1860,18 +1921,28 @@ impl NavigationStateManager {
 
                         // Ask if user wants to zip the file
                         print!("\nWould you like to zip the archived file? (y/N): ");
-                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        io::stdout()
+                            .flush()
+                            .map_err(|e| FileFantasticError::Io(e))?;
 
                         let mut zip_response = String::new();
-                        io::stdin().read_line(&mut zip_response).map_err(|e| FileFantasticError::Io(e))?;
+                        io::stdin()
+                            .read_line(&mut zip_response)
+                            .map_err(|e| FileFantasticError::Io(e))?;
                         let should_zip = zip_response.trim().eq_ignore_ascii_case("y");
 
                         // Ask for optional custom name prefix
-                        print!("\nAdd custom name prefix to archive? (optional, or Enter to skip): ");
-                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                        print!(
+                            "\nAdd custom name prefix to archive? (optional, or Enter to skip): "
+                        );
+                        io::stdout()
+                            .flush()
+                            .map_err(|e| FileFantasticError::Io(e))?;
 
                         let mut custom_name = String::new();
-                        io::stdin().read_line(&mut custom_name).map_err(|e| FileFantasticError::Io(e))?;
+                        io::stdin()
+                            .read_line(&mut custom_name)
+                            .map_err(|e| FileFantasticError::Io(e))?;
                         let custom_name = custom_name.trim();
 
                         let custom_name_option = if custom_name.is_empty() {
@@ -1893,9 +1964,12 @@ impl NavigationStateManager {
                                         Ok(zip_path) => {
                                             println!("\n✓ File archived and zipped successfully!");
                                             println!("Archive location: {}", zip_path.display());
-                                        },
+                                        }
                                         Err(e) => {
-                                            eprintln!("\n✗ File zip archive creation failed: {}", e);
+                                            eprintln!(
+                                                "\n✗ File zip archive creation failed: {}",
+                                                e
+                                            );
                                         }
                                     }
                                 } else {
@@ -1907,14 +1981,17 @@ impl NavigationStateManager {
                                     ) {
                                         Ok(archived_path) => {
                                             println!("\n✓ File archived successfully!");
-                                            println!("Archive location: {}", archived_path.display());
-                                        },
+                                            println!(
+                                                "Archive location: {}",
+                                                archived_path.display()
+                                            );
+                                        }
                                         Err(e) => {
                                             eprintln!("\n✗ File archive creation failed: {}", e);
                                         }
                                     }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 eprintln!("\n✗ Failed to create archive directory: {}", e);
                             }
@@ -1923,7 +2000,6 @@ impl NavigationStateManager {
                 } else {
                     println!("Archive cancelled.");
                 }
-
             } else {
                 println!("Error: Invalid item number {}. Please try again.", number);
             }
@@ -1963,23 +2039,22 @@ impl NavigationStateManager {
 
         // Validate that it's actually a file
         if !file_path.is_file() {
-            return Err(FileFantasticError::InvalidName(
-                format!("Path is not a file: {}", file_path.display())
-            ));
+            return Err(FileFantasticError::InvalidName(format!(
+                "Path is not a file: {}",
+                file_path.display()
+            )));
         }
 
         // Get the file name without extension for the archive name
-        let file_stem = file_path.file_stem()
-            .ok_or_else(|| FileFantasticError::InvalidName(
-                "Could not extract file name".to_string()
-            ))?
+        let file_stem = file_path
+            .file_stem()
+            .ok_or_else(|| {
+                FileFantasticError::InvalidName("Could not extract file name".to_string())
+            })?
             .to_string_lossy();
 
         // Generate full timestamp
-        let timestamp = createarchive_timestamp_with_precision(
-            SystemTime::now(),
-            true,
-            );
+        let timestamp = createarchive_timestamp_with_precision(SystemTime::now(), true);
 
         // Build the archive name with optional prefix
         let archive_name = if let Some(prefix) = custom_prefix {
@@ -2021,21 +2096,20 @@ impl NavigationStateManager {
         }
 
         // Get file name components
-        let file_stem = file_path.file_stem()
-            .ok_or_else(|| FileFantasticError::InvalidName(
-                "Could not extract file name".to_string()
-            ))?
+        let file_stem = file_path
+            .file_stem()
+            .ok_or_else(|| {
+                FileFantasticError::InvalidName("Could not extract file name".to_string())
+            })?
             .to_string_lossy();
 
-        let extension = file_path.extension()
+        let extension = file_path
+            .extension()
             .map(|ext| format!(".{}", ext.to_string_lossy()))
             .unwrap_or_else(|| String::new());
 
         // Generate full timestamp
-        let timestamp = createarchive_timestamp_with_precision(
-            SystemTime::now(),
-            true,
-            );
+        let timestamp = createarchive_timestamp_with_precision(SystemTime::now(), true);
 
         // Build the archive name with optional prefix
         let archive_name = if let Some(prefix) = custom_prefix {
@@ -2048,8 +2122,7 @@ impl NavigationStateManager {
         let archive_path = archive_directory.join(archive_name);
 
         // Copy the file
-        fs::copy(file_path, &archive_path)
-            .map_err(|e| FileFantasticError::Io(e))?;
+        fs::copy(file_path, &archive_path).map_err(|e| FileFantasticError::Io(e))?;
 
         Ok(archive_path)
     }
@@ -2065,33 +2138,37 @@ impl NavigationStateManager {
     /// implement proper ZIP format or use a library.
     fn create_simple_file_archive(&self, source_file: &Path, archive_path: &Path) -> Result<()> {
         // Read source file
-        let mut source = File::open(source_file)
-            .map_err(|e| FileFantasticError::Io(e))?;
+        let mut source = File::open(source_file).map_err(|e| FileFantasticError::Io(e))?;
 
         let mut contents = Vec::new();
-        source.read_to_end(&mut contents)
+        source
+            .read_to_end(&mut contents)
             .map_err(|e| FileFantasticError::Io(e))?;
 
         // Create archive file with simple format
-        let mut archive = File::create(archive_path)
-            .map_err(|e| FileFantasticError::Io(e))?;
+        let mut archive = File::create(archive_path).map_err(|e| FileFantasticError::Io(e))?;
 
-        let filename = source_file.file_name()
-            .ok_or_else(|| FileFantasticError::InvalidName(
-                "Could not extract filename".to_string()
-            ))?
+        let filename = source_file
+            .file_name()
+            .ok_or_else(|| {
+                FileFantasticError::InvalidName("Could not extract filename".to_string())
+            })?
             .to_string_lossy();
 
         // Write simple archive format
         // Format: [filename_length:u32][filename][file_size:u64][file_contents]
         let filename_bytes = filename.as_bytes();
-        archive.write_all(&(filename_bytes.len() as u32).to_le_bytes())
+        archive
+            .write_all(&(filename_bytes.len() as u32).to_le_bytes())
             .map_err(|e| FileFantasticError::Io(e))?;
-        archive.write_all(filename_bytes)
+        archive
+            .write_all(filename_bytes)
             .map_err(|e| FileFantasticError::Io(e))?;
-        archive.write_all(&(contents.len() as u64).to_le_bytes())
+        archive
+            .write_all(&(contents.len() as u64).to_le_bytes())
             .map_err(|e| FileFantasticError::Io(e))?;
-        archive.write_all(&contents)
+        archive
+            .write_all(&contents)
             .map_err(|e| FileFantasticError::Io(e))?;
 
         Ok(())
@@ -2159,26 +2236,30 @@ impl NavigationStateManager {
         current_directory_entries: &[FileSystemEntry],
         current_directory_path: &PathBuf,
     ) -> Result<()> {
-
         // WORKFLOW STEP 1: Display current directory contents
         // This shows the current page with existing filters and numbering
         display_directory_contents(
             current_directory_entries,
             current_directory_path,
-            None,  // Pagination info handled by main navigation
+            None, // Pagination info handled by main navigation
             nav_state.current_filter,
             nav_state,
-        ).map_err(|e| FileFantasticError::Io(e))?;
+        )
+        .map_err(|e| FileFantasticError::Io(e))?;
 
         // WORKFLOW STEP 2: Prompt for file selection
         println!("\n=== Add File to Stack ===");
         println!("Select file to add to stack");
         print!("Enter file number (or 'b' to back/cancel): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         // Read user input
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
         let input = input.trim();
 
         // Handle cancellation request
@@ -2191,19 +2272,25 @@ impl NavigationStateManager {
         if let Ok(number) = input.parse::<usize>() {
             // Use navigation state's lookup to find the selected item
             if let Some(item_info) = nav_state.lookup_item(number) {
-
                 // Check if selected item is a file (not a directory)
                 if item_info.item_type == FileSystemItemType::Directory {
                     // User selected a directory - show error and return
-                    let item_name = item_info.item_path.file_name()
+                    let item_name = item_info
+                        .item_path
+                        .file_name()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    eprintln!("\n✗ Error: '{}' is a directory. Please select a file.", item_name);
+                    eprintln!(
+                        "\n✗ Error: '{}' is a directory. Please select a file.",
+                        item_name
+                    );
                 } else {
                     // WORKFLOW STEP 4: It's a file - add to stack
 
                     // Extract file name for display
-                    let file_name = item_info.item_path.file_name()
+                    let file_name = item_info
+                        .item_path
+                        .file_name()
                         .unwrap_or_default()
                         .to_string_lossy();
 
@@ -2211,17 +2298,18 @@ impl NavigationStateManager {
                     match self.add_file_to_stack(item_info.item_path.clone()) {
                         Ok(()) => {
                             // Success - show confirmation with stack count
-                            println!("\n✓ Added '{}' to file stack. Total files: {}",
-                                    file_name,
-                                    self.file_path_stack.len());
-                        },
+                            println!(
+                                "\n✓ Added '{}' to file stack. Total files: {}",
+                                file_name,
+                                self.file_path_stack.len()
+                            );
+                        }
                         Err(e) => {
                             // Failed to add to stack - show error
                             eprintln!("\n✗ Failed to add file to stack: {}", e);
                         }
                     }
                 }
-
             } else {
                 // Invalid item number - not in lookup table
                 println!("Error: Invalid item number {}. Please try again.", number);
@@ -2284,16 +2372,22 @@ impl NavigationStateManager {
         println!("\n=== File Stack ===");
         // Display files in reverse order (most recent first) for user-friendly numbering
         for (i, file) in self.file_path_stack.iter().enumerate().rev() {
-            println!("{}. {}",
-                     self.file_path_stack.len() - i,
-                     file.file_name().unwrap_or_default().to_string_lossy());
+            println!(
+                "{}. {}",
+                self.file_path_stack.len() - i,
+                file.file_name().unwrap_or_default().to_string_lossy()
+            );
         }
 
         print!("Select file number (Enter for most recent, 'c' to cancel): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
         let input = input.trim();
 
         // Handle cancellation
@@ -2305,7 +2399,10 @@ impl NavigationStateManager {
         // Default to most recent (pop from end) if no input
         if input.is_empty() {
             if let Some(file) = self.pop_file_from_stack() {
-                println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
+                println!(
+                    "Retrieved: {}",
+                    file.file_name().unwrap_or_default().to_string_lossy()
+                );
                 return Ok(Some(file));
             }
         }
@@ -2334,16 +2431,25 @@ impl NavigationStateManager {
 
                 // Use .get() for bounds-checked access
                 if let Some(file) = self.file_path_stack.get(actual_index) {
-                    println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
+                    println!(
+                        "Retrieved: {}",
+                        file.file_name().unwrap_or_default().to_string_lossy()
+                    );
                     return Ok(Some(file.clone())); // Clone to return ownership
                 } else {
                     println!("Error: Index out of bounds");
                 }
             } else {
-                println!("Error: Invalid file number {}. Valid range: 1-{}", index, self.file_path_stack.len());
+                println!(
+                    "Error: Invalid file number {}. Valid range: 1-{}",
+                    index,
+                    self.file_path_stack.len()
+                );
             }
         } else {
-            println!("Error: Please enter a valid number, press Enter for most recent, or 'c' to cancel.");
+            println!(
+                "Error: Please enter a valid number, press Enter for most recent, or 'c' to cancel."
+            );
         }
 
         Ok(None)
@@ -2450,17 +2556,18 @@ impl NavigationStateManager {
         println!("\n=== Pocket Dimensions ===");
         // Display all dimensions with numbers and descriptions
         for (i, (nickname, state)) in dimensions.iter().enumerate() {
-            println!("{}. {} - {}",
-                     i + 1,
-                     nickname,
-                     state.description);
+            println!("{}. {} - {}", i + 1, nickname, state.description);
         }
 
         print!("Select pocket dimension number ('c' to cancel): ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
         let input = input.trim();
 
         // Handle cancellation
@@ -2475,7 +2582,11 @@ impl NavigationStateManager {
                 let (nickname, _) = dimensions[index - 1];
                 return Ok(Some(nickname.clone()));
             } else {
-                println!("Error: Invalid pocket dimension number {}. Valid range: 1-{}", index, dimensions.len());
+                println!(
+                    "Error: Invalid pocket dimension number {}. Valid range: 1-{}",
+                    index,
+                    dimensions.len()
+                );
             }
         } else {
             println!("Error: Please enter a valid number or 'c' to cancel.");
@@ -2547,10 +2658,14 @@ impl NavigationStateManager {
         // println!("--  --");
         println!();
         print!("Select Action (1-7)  or (b)ack / empty-Enter ");
-        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| FileFantasticError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
 
         // Process user selection and return appropriate action
         match input.trim() {
@@ -2625,7 +2740,6 @@ pub enum GetSendModeAction {
     // // Add current directory to the directory path stack
     // // Triggers the directory addition workflow with confirmation
     // AddDirectoryToStack,
-
     /// Save current navigation state as a pocket dimension
     /// Triggers the pocket dimension creation workflow with nickname selection
     SavePocketDimension,
@@ -2681,23 +2795,94 @@ End Of Pocket-Dimensions
 /// ```
 fn generate_archive_timestamp() -> String {
     let now = SystemTime::now();
-    let duration_since_epoch = now.duration_since(UNIX_EPOCH)
+    let duration_since_epoch = now
+        .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
     let seconds = duration_since_epoch.as_secs();
 
     let (year, month, day, hour, minute) = seconds_to_components(seconds);
     let second = (seconds % 60) as u32;
 
-    format!("{:04}_{:02}_{:02}_{:02}_{:02}_{:02}",
-            year, month, day, hour, minute, second)
+    format!(
+        "{:04}_{:02}_{:02}_{:02}_{:02}_{:02}",
+        year, month, day, hour, minute, second
+    )
 }
 
-/// Creates archive directory if it doesn't exist
+// /// Creates archive directory if it doesn't exist
+// ///
+// /// # Purpose
+// /// Ensures that an "archive" subdirectory exists in the specified parent directory,
+// /// creating it if necessary. This directory is used to store copies of files
+// /// when avoiding overwrites.
+// ///
+// /// # Arguments
+// /// * `parent_directory` - The directory where the archive folder should exist
+// ///
+// /// # Returns
+// /// * `Result<PathBuf>` - Absolute path to the archive directory, or error
+// ///
+// /// # Error Conditions
+// /// - IO errors when creating the directory
+// /// - Permission denied when writing to parent directory
+// /// - Invalid parent directory path
+// ///
+// /// # Archive Directory Structure
+// /// ```text
+// /// parent_directory/
+// /// ├── existing_files...
+// /// └── archive/          <- Created by this function
+// ///     ├── file1_timestamp.ext
+// ///     └── file2_timestamp.ext
+// /// ```
+// ///
+// /// # Example
+// /// ```rust
+// /// let current_dir = PathBuf::from("/home/user/documents");
+// /// match ensure_archive_directory_exists(&current_dir) {
+// ///     Ok(archive_path) => {
+// ///         // archive_path is "/home/user/documents/archive"
+// ///         println!("Archive directory ready: {}", archive_path.display());
+// ///     },
+// ///     Err(e) => eprintln!("Failed to create archive directory: {}", e),
+// /// }
+// /// ```
+// fn ensure_archive_directory_exists(parent_directory: &PathBuf) -> Result<PathBuf> {
+//     let archive_directory_path = parent_directory.join("archive");
+
+//     // Check if archive directory already exists
+//     if !archive_directory_path.exists() {
+//         // Create the archive directory
+//         fs::create_dir(&archive_directory_path).map_err(|e| {
+//             match e.kind() {
+//                 io::ErrorKind::PermissionDenied => {
+//                     FileFantasticError::PermissionDenied(archive_directory_path.clone())
+//                 },
+//                 _ => FileFantasticError::Io(e)
+//             }
+//         })?;
+
+//         println!("Created archive directory: {}", archive_directory_path.display());
+//     }
+
+//     // Verify it's actually a directory
+//     if !archive_directory_path.is_dir() {
+//         return Err(FileFantasticError::InvalidName(
+//             format!("Archive path exists but is not a directory: {}",
+//                    archive_directory_path.display())
+//         ));
+//     }
+
+//     Ok(archive_directory_path)
+// }
+
+/// Creates archive directory if it doesn't exist, avoiding nested archive directories
 ///
 /// # Purpose
 /// Ensures that an "archive" subdirectory exists in the specified parent directory,
 /// creating it if necessary. This directory is used to store copies of files
-/// when avoiding overwrites.
+/// when avoiding overwrites. If the parent directory is already named "archive",
+/// returns the parent directory itself to avoid creating nested archive directories.
 ///
 /// # Arguments
 /// * `parent_directory` - The directory where the archive folder should exist
@@ -2712,15 +2897,22 @@ fn generate_archive_timestamp() -> String {
 ///
 /// # Archive Directory Structure
 /// ```text
+/// Normal case:
 /// parent_directory/
 /// ├── existing_files...
 /// └── archive/          <- Created by this function
 ///     ├── file1_timestamp.ext
 ///     └── file2_timestamp.ext
+///
+/// Already in archive case:
+/// some_path/archive/    <- If parent is already "archive"
+/// ├── file1_timestamp.ext
+/// └── file2_timestamp.ext  <- Files go here directly, no nested archive/
 /// ```
 ///
 /// # Example
 /// ```rust
+/// // Normal case - creates archive subdirectory
 /// let current_dir = PathBuf::from("/home/user/documents");
 /// match ensure_archive_directory_exists(&current_dir) {
 ///     Ok(archive_path) => {
@@ -2729,31 +2921,72 @@ fn generate_archive_timestamp() -> String {
 ///     },
 ///     Err(e) => eprintln!("Failed to create archive directory: {}", e),
 /// }
+///
+/// // Already in archive - returns same directory
+/// let archive_dir = PathBuf::from("/home/user/documents/archive");
+/// match ensure_archive_directory_exists(&archive_dir) {
+///     Ok(archive_path) => {
+///         // archive_path is "/home/user/documents/archive" (same as input)
+///         println!("Already in archive: {}", archive_path.display());
+///     },
+///     Err(e) => eprintln!("Failed to process archive directory: {}", e),
+/// }
 /// ```
 fn ensure_archive_directory_exists(parent_directory: &PathBuf) -> Result<PathBuf> {
+    // Step 1: Check if the parent directory itself is already named "archive"
+    // This prevents creating nested archive directories like archive/archive/
+    if let Some(dir_name) = parent_directory.file_name() {
+        if dir_name == "archive" {
+            // We're already in an archive directory, return the current directory
+            println!(
+                "Already in archive directory: {}",
+                parent_directory.display()
+            );
+
+            // Verify it exists and is a directory before returning
+            if !parent_directory.exists() {
+                return Err(FileFantasticError::InvalidName(format!(
+                    "Archive directory doesn't exist: {}",
+                    parent_directory.display()
+                )));
+            }
+
+            if !parent_directory.is_dir() {
+                return Err(FileFantasticError::InvalidName(format!(
+                    "Archive path exists but is not a directory: {}",
+                    parent_directory.display()
+                )));
+            }
+
+            return Ok(parent_directory.clone());
+        }
+    }
+
+    // Step 2: Not already in archive, proceed with normal archive directory creation
     let archive_directory_path = parent_directory.join("archive");
 
     // Check if archive directory already exists
     if !archive_directory_path.exists() {
         // Create the archive directory
-        fs::create_dir(&archive_directory_path).map_err(|e| {
-            match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    FileFantasticError::PermissionDenied(archive_directory_path.clone())
-                },
-                _ => FileFantasticError::Io(e)
+        fs::create_dir(&archive_directory_path).map_err(|e| match e.kind() {
+            io::ErrorKind::PermissionDenied => {
+                FileFantasticError::PermissionDenied(archive_directory_path.clone())
             }
+            _ => FileFantasticError::Io(e),
         })?;
 
-        println!("Created archive directory: {}", archive_directory_path.display());
+        println!(
+            "Created archive directory: {}",
+            archive_directory_path.display()
+        );
     }
 
     // Verify it's actually a directory
     if !archive_directory_path.is_dir() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Archive path exists but is not a directory: {}",
-                   archive_directory_path.display())
-        ));
+        return Err(FileFantasticError::InvalidName(format!(
+            "Archive path exists but is not a directory: {}",
+            archive_directory_path.display()
+        )));
     }
 
     Ok(archive_directory_path)
@@ -2852,9 +3085,10 @@ fn copy_file_with_archive_handling(
     }
 
     if !source_file_path.is_file() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Source is not a file: {}", source_file_path.display())
-        ));
+        return Err(FileFantasticError::InvalidName(format!(
+            "Source is not a file: {}",
+            source_file_path.display()
+        )));
     }
 
     // Validate destination directory exists and is a directory
@@ -2863,16 +3097,21 @@ fn copy_file_with_archive_handling(
     }
 
     if !destination_directory.is_dir() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Destination is not a directory: {}", destination_directory.display())
-        ));
+        return Err(FileFantasticError::InvalidName(format!(
+            "Destination is not a directory: {}",
+            destination_directory.display()
+        )));
     }
 
     // Extract source filename
-    let source_filename = source_file_path.file_name()
-        .ok_or_else(|| FileFantasticError::InvalidName(
-            format!("Cannot determine filename from: {}", source_file_path.display())
-        ))?
+    let source_filename = source_file_path
+        .file_name()
+        .ok_or_else(|| {
+            FileFantasticError::InvalidName(format!(
+                "Cannot determine filename from: {}",
+                source_file_path.display()
+            ))
+        })?
         .to_string_lossy()
         .to_string();
 
@@ -2896,16 +3135,17 @@ fn copy_file_with_archive_handling(
 
         // Check if temp backup already exists (very unlikely but possible)
         if temp_backup_path.exists() {
-            return Err(FileFantasticError::InvalidName(
-                format!("Temporary backup file already exists: {}", temp_backup_path.display())
-            ));
+            return Err(FileFantasticError::InvalidName(format!(
+                "Temporary backup file already exists: {}",
+                temp_backup_path.display()
+            )));
         }
 
         // Copy existing file to temporary backup - handle race condition where file might have been deleted
         match fs::copy(&primary_destination_path, &temp_backup_path) {
             Ok(_) => {
                 println!("Created temporary backup: {}", temp_backup_path.display());
-            },
+            }
             Err(e) => {
                 // Check if the error is because the file no longer exists (race condition)
                 if e.kind() == io::ErrorKind::NotFound {
@@ -2915,9 +3155,11 @@ fn copy_file_with_archive_handling(
                     fs::copy(source_file_path, &primary_destination_path).map_err(|copy_err| {
                         match copy_err.kind() {
                             io::ErrorKind::PermissionDenied => {
-                                FileFantasticError::PermissionDenied(primary_destination_path.clone())
-                            },
-                            _ => FileFantasticError::Io(copy_err)
+                                FileFantasticError::PermissionDenied(
+                                    primary_destination_path.clone(),
+                                )
+                            }
+                            _ => FileFantasticError::Io(copy_err),
                         }
                     })?;
 
@@ -2929,8 +3171,8 @@ fn copy_file_with_archive_handling(
                 return Err(match e.kind() {
                     io::ErrorKind::PermissionDenied => {
                         FileFantasticError::PermissionDenied(primary_destination_path.clone())
-                    },
-                    _ => FileFantasticError::Io(e)
+                    }
+                    _ => FileFantasticError::Io(e),
                 });
             }
         }
@@ -2943,16 +3185,20 @@ fn copy_file_with_archive_handling(
         if temp_new_path.exists() {
             // Clean up temp backup before returning error
             let _ = fs::remove_file(&temp_backup_path);
-            return Err(FileFantasticError::InvalidName(
-                format!("Temporary new file already exists: {}", temp_new_path.display())
-            ));
+            return Err(FileFantasticError::InvalidName(format!(
+                "Temporary new file already exists: {}",
+                temp_new_path.display()
+            )));
         }
 
         // Copy source file to temporary location
         match fs::copy(source_file_path, &temp_new_path) {
             Ok(_) => {
-                println!("Copied new file to temporary location: {}", temp_new_path.display());
-            },
+                println!(
+                    "Copied new file to temporary location: {}",
+                    temp_new_path.display()
+                );
+            }
             Err(e) => {
                 // Rollback: remove temp backup since we're failing
                 let _ = fs::remove_file(&temp_backup_path);
@@ -2960,8 +3206,8 @@ fn copy_file_with_archive_handling(
                 return Err(match e.kind() {
                     io::ErrorKind::PermissionDenied => {
                         FileFantasticError::PermissionDenied(temp_new_path)
-                    },
-                    _ => FileFantasticError::Io(e)
+                    }
+                    _ => FileFantasticError::Io(e),
                 });
             }
         }
@@ -2986,44 +3232,59 @@ fn copy_file_with_archive_handling(
             // Clean up temp files before returning error
             let _ = fs::remove_file(&temp_new_path);
             let _ = fs::remove_file(&temp_backup_path);
-            return Err(FileFantasticError::InvalidName(
-                format!("Archive file already exists: {}", archive_destination_path.display())
-            ));
+            return Err(FileFantasticError::InvalidName(format!(
+                "Archive file already exists: {}",
+                archive_destination_path.display()
+            )));
         }
 
         // Try to rename first (atomic on same filesystem), fall back to copy+delete
         // Explicitly specify the type for the Result
-        let archive_result: std::result::Result<(), io::Error> = fs::rename(&primary_destination_path, &archive_destination_path)
-            .or_else(|rename_err| {
-                // Rename failed, probably cross-filesystem - try copy then delete
-                eprintln!("Rename to archive failed ({}), trying copy+delete...", rename_err);
-                fs::copy(&primary_destination_path, &archive_destination_path).map_err(|copy_err| {
-                    eprintln!("Failed to copy to archive: {}", copy_err);
-                    copy_err
-                })?;
-                fs::remove_file(&primary_destination_path).map_err(|rm_err| {
-                    eprintln!("Failed to remove original after archive copy: {} {}", rm_err, rename_err);
-                    rm_err
-                })?;
-                Ok(())
-            });
+        let archive_result: std::result::Result<(), io::Error> = fs::rename(
+            &primary_destination_path,
+            &archive_destination_path,
+        )
+        .or_else(|rename_err| {
+            // Rename failed, probably cross-filesystem - try copy then delete
+            eprintln!(
+                "Rename to archive failed ({}), trying copy+delete...",
+                rename_err
+            );
+            fs::copy(&primary_destination_path, &archive_destination_path).map_err(|copy_err| {
+                eprintln!("Failed to copy to archive: {}", copy_err);
+                copy_err
+            })?;
+            fs::remove_file(&primary_destination_path).map_err(|rm_err| {
+                eprintln!(
+                    "Failed to remove original after archive copy: {} {}",
+                    rm_err, rename_err
+                );
+                rm_err
+            })?;
+            Ok(())
+        });
 
         match archive_result {
             Ok(_) => {
-                println!("Archived existing file to: {}", archive_destination_path.display());
-            },
+                println!(
+                    "Archived existing file to: {}",
+                    archive_destination_path.display()
+                );
+            }
             Err(e) => {
                 // Rollback: remove temp new file, keep temp backup for manual recovery
                 let _ = fs::remove_file(&temp_new_path);
 
-                eprintln!("Failed to archive existing file. Backup preserved at: {}",
-                         temp_backup_path.display());
+                eprintln!(
+                    "Failed to archive existing file. Backup preserved at: {}",
+                    temp_backup_path.display()
+                );
 
                 return Err(match e.kind() {
                     io::ErrorKind::PermissionDenied => {
                         FileFantasticError::PermissionDenied(archive_destination_path)
-                    },
-                    _ => FileFantasticError::Io(e)
+                    }
+                    _ => FileFantasticError::Io(e),
                 });
             }
         }
@@ -3031,16 +3292,22 @@ fn copy_file_with_archive_handling(
         // Step 5: Move temp new file to final destination
         // Try rename first (atomic), fall back to copy+delete
         // Explicitly specify the type for the Result
-        let rename_result: std::result::Result<(), io::Error> = fs::rename(&temp_new_path, &primary_destination_path)
-            .or_else(|rename_err| {
+        let rename_result: std::result::Result<(), io::Error> =
+            fs::rename(&temp_new_path, &primary_destination_path).or_else(|rename_err| {
                 // Rename failed - try copy then delete
-                eprintln!("Rename of new file failed ({}), trying copy+delete...", rename_err);
+                eprintln!(
+                    "Rename of new file failed ({}), trying copy+delete...",
+                    rename_err
+                );
                 fs::copy(&temp_new_path, &primary_destination_path).map_err(|copy_err| {
                     eprintln!("Failed to copy new file to destination: {}", copy_err);
                     copy_err
                 })?;
                 fs::remove_file(&temp_new_path).map_err(|rm_err| {
-                    eprintln!("Failed to remove temp new file after copy: {} {}", rm_err, rename_err);
+                    eprintln!(
+                        "Failed to remove temp new file after copy: {} {}",
+                        rm_err, rename_err
+                    );
                     rm_err
                 })?;
                 Ok(())
@@ -3048,22 +3315,28 @@ fn copy_file_with_archive_handling(
 
         match rename_result {
             Ok(_) => {
-                println!("New file installed at: {}", primary_destination_path.display());
+                println!(
+                    "New file installed at: {}",
+                    primary_destination_path.display()
+                );
 
                 // Step 6: Clean up temp backup (success case)
                 match fs::remove_file(&temp_backup_path) {
                     Ok(_) => {
                         println!("Cleaned up temporary backup.");
-                    },
+                    }
                     Err(e) => {
                         // Non-critical error, just warn
-                        eprintln!("Warning: Could not remove temporary backup at {}: {}",
-                                 temp_backup_path.display(), e);
+                        eprintln!(
+                            "Warning: Could not remove temporary backup at {}: {}",
+                            temp_backup_path.display(),
+                            e
+                        );
                     }
                 }
 
                 primary_destination_path
-            },
+            }
             Err(e) => {
                 // Critical failure: try to restore original state
                 eprintln!("Failed to move new file to destination: {}", e);
@@ -3075,26 +3348,29 @@ fn copy_file_with_archive_handling(
                         eprintln!("Successfully restored original file from backup.");
                         // Remove the file we put in archive since we're restoring
                         let _ = fs::remove_file(&archive_destination_path);
-                    },
+                    }
                     Err(restore_err) => {
                         // Try to restore from archive as last resort
                         // Explicitly specify type
                         let restore_from_archive: std::result::Result<(), io::Error> =
                             fs::rename(&archive_destination_path, &primary_destination_path)
-                            .or_else(|_rename_err| {
-                                fs::copy(&archive_destination_path, &primary_destination_path)?;
-                                fs::remove_file(&archive_destination_path)?;
-                                Ok(())
-                            });
+                                .or_else(|_rename_err| {
+                                    fs::copy(&archive_destination_path, &primary_destination_path)?;
+                                    fs::remove_file(&archive_destination_path)?;
+                                    Ok(())
+                                });
 
                         match restore_from_archive {
                             Ok(_) => {
                                 eprintln!("Successfully restored original file from archive.");
-                            },
+                            }
                             Err(archive_restore_err) => {
                                 eprintln!("Could not restore original file: {}", restore_err);
                                 eprintln!("Archive restore also failed: {}", archive_restore_err);
-                                eprintln!("Original file is in archive: {}", archive_destination_path.display());
+                                eprintln!(
+                                    "Original file is in archive: {}",
+                                    archive_destination_path.display()
+                                );
                                 eprintln!("Backup available at: {}", temp_backup_path.display());
                             }
                         }
@@ -3107,20 +3383,18 @@ fn copy_file_with_archive_handling(
                 return Err(match e.kind() {
                     io::ErrorKind::PermissionDenied => {
                         FileFantasticError::PermissionDenied(primary_destination_path)
-                    },
-                    _ => FileFantasticError::Io(e)
+                    }
+                    _ => FileFantasticError::Io(e),
                 });
             }
         }
     } else {
         // No conflict, copy directly to destination
-        fs::copy(source_file_path, &primary_destination_path).map_err(|e| {
-            match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    FileFantasticError::PermissionDenied(primary_destination_path.clone())
-                },
-                _ => FileFantasticError::Io(e)
+        fs::copy(source_file_path, &primary_destination_path).map_err(|e| match e.kind() {
+            io::ErrorKind::PermissionDenied => {
+                FileFantasticError::PermissionDenied(primary_destination_path.clone())
             }
+            _ => FileFantasticError::Io(e),
         })?;
 
         println!("File copied to: {}", primary_destination_path.display());
@@ -3319,7 +3593,6 @@ impl<'a> DirectoryView<'a> {
     fn get_current_page(&self) -> usize {
         self.current_page
     }
-
 }
 
 /// Represents a search result with its Levenshtein distance score and item details
@@ -3505,9 +3778,11 @@ fn format_timestamp(timestamp: SystemTime) -> String {
     let now = SystemTime::now();
 
     // Convert timestamps to Duration since UNIX_EPOCH, handling errors
-    let now_duration = now.duration_since(UNIX_EPOCH)
+    let now_duration = now
+        .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
-    let file_duration = timestamp.duration_since(UNIX_EPOCH)
+    let file_duration = timestamp
+        .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
 
     // Convert to seconds
@@ -3576,12 +3851,13 @@ fn create_archive_timestamp(time: SystemTime) -> String {
     let total_seconds = duration_since_epoch.as_secs();
 
     // Use the accurate date calculation
-    let (year, month, day, hour, minute, second) = epoch_seconds_to_datetime_components(total_seconds);
+    let (year, month, day, hour, minute, second) =
+        epoch_seconds_to_datetime_components(total_seconds);
 
     // Format as YY_MM_DD_HH_MM_SS
     format!(
         "{:02}_{:02}_{:02}_{:02}_{:02}_{:02}",
-        year % 100,  // Two-digit year
+        year % 100, // Two-digit year
         month,
         day,
         hour,
@@ -3648,9 +3924,7 @@ fn days_to_ymd(days_since_epoch: u64) -> (u32, u32, u32) {
     let mut remaining_days = days_since_epoch;
 
     // Helper function to check if a year is a leap year
-    let is_leap_year = |y: u32| -> bool {
-        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-    };
+    let is_leap_year = |y: u32| -> bool { (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) };
 
     // Subtract complete years
     while remaining_days > 0 {
@@ -3710,7 +3984,7 @@ fn days_to_ymd(days_since_epoch: u64) -> (u32, u32, u32) {
 /// - With microseconds: "YY_MM_DD_HH_MM_SS_UUUUUU"
 pub fn createarchive_timestamp_with_precision(
     time: SystemTime,
-    include_microseconds: bool
+    include_microseconds: bool,
 ) -> String {
     let base_timestamp = create_archive_timestamp(time);
 
@@ -3818,7 +4092,11 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
 
     // Account for leap years
     loop {
-        let days_in_year = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 366 } else { 365 };
+        let days_in_year = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            366
+        } else {
+            365
+        };
         if days_remaining < days_in_year as u64 {
             break;
         }
@@ -3827,9 +4105,24 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
     }
 
     // Simplified month calculation
-    let days_in_month = [31,
-        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let days_in_month = [
+        31,
+        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            29
+        } else {
+            28
+        },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
 
     let mut month = 0;
     while month < 12 && days_remaining >= days_in_month[month] as u64 {
@@ -3912,31 +4205,31 @@ fn sort_directory_entries(
                     }
                 }
             });
-        },
+        }
         DirectorySortingMethodEnum::Size(ascending) => {
-            entries.sort_by(|a, b| {
-                match (a.is_directory, b.is_directory) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => {
-                        let cmp = a.file_system_item_size_in_bytes.cmp(&b.file_system_item_size_in_bytes);
-                        if ascending { cmp } else { cmp.reverse() }
-                    }
+            entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let cmp = a
+                        .file_system_item_size_in_bytes
+                        .cmp(&b.file_system_item_size_in_bytes);
+                    if ascending { cmp } else { cmp.reverse() }
                 }
             });
-        },
+        }
         DirectorySortingMethodEnum::Modified(ascending) => {
-            entries.sort_by(|a, b| {
-                match (a.is_directory, b.is_directory) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => {
-                        let cmp = a.file_system_item_last_modified_time.cmp(&b.file_system_item_last_modified_time);
-                        if ascending { cmp } else { cmp.reverse() }
-                    }
+            entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let cmp = a
+                        .file_system_item_last_modified_time
+                        .cmp(&b.file_system_item_last_modified_time);
+                    if ascending { cmp } else { cmp.reverse() }
                 }
             });
-        },
+        }
     }
 }
 
@@ -4012,7 +4305,7 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         // Try different terminal emulators in order of preference
         let terminal_commands = [
             ("gnome-terminal", vec!["--working-directory"]),
-            ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
+            ("ptyxis", vec!["--working-directory"]), // New Fedora 41+ default
             ("konsole", vec!["--workdir"]),
             ("xfce4-terminal", vec!["--working-directory"]),
             ("mate-terminal", vec!["--working-directory"]),
@@ -4022,7 +4315,7 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
             ("tilix", vec!["--working-directory"]),
             ("urxvt", vec!["-cd"]),
             ("rxvt", vec!["-cd"]),
-            ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
+            ("xterm", vec!["-e", "cd"]), // xterm needs special handling
         ];
 
         for (terminal, args) in terminal_commands.iter() {
@@ -4030,16 +4323,15 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
 
             if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
                 // These terminals need special handling with the shell
-                command.args(args)
+                command
+                    .args(args)
                     .arg(directory_path.to_string_lossy().to_string())
                     .arg("&& bash");
             } else if *terminal == "alacritty" || *terminal == "kitty" {
                 // Some newer terminals handle working directory differently
-                command.arg(args[0])
-                    .arg(directory_path);
+                command.arg(args[0]).arg(directory_path);
             } else {
-                command.args(args)
-                    .arg(directory_path);
+                command.args(args).arg(directory_path);
             }
 
             match command.spawn() {
@@ -4061,7 +4353,7 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         // Try different terminal emulators in order of preference
         let terminal_commands = [
             ("gnome-terminal", vec!["--working-directory"]),
-            ("ptyxis", vec!["--working-directory"]),  // New Fedora 41+ default
+            ("ptyxis", vec!["--working-directory"]), // New Fedora 41+ default
             ("konsole", vec!["--workdir"]),
             ("xfce4-terminal", vec!["--working-directory"]),
             ("mate-terminal", vec!["--working-directory"]),
@@ -4071,7 +4363,7 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
             ("tilix", vec!["--working-directory"]),
             ("urxvt", vec!["-cd"]),
             ("rxvt", vec!["-cd"]),
-            ("xterm", vec!["-e", "cd"]),  // xterm needs special handling
+            ("xterm", vec!["-e", "cd"]), // xterm needs special handling
         ];
 
         for (terminal, args) in terminal_commands.iter() {
@@ -4079,16 +4371,15 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
 
             if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
                 // These terminals need special handling with the shell
-                command.args(args)
+                command
+                    .args(args)
                     .arg(directory_path.to_string_lossy().to_string())
                     .arg("&& bash");
             } else if *terminal == "alacritty" || *terminal == "kitty" {
                 // Some newer terminals handle working directory differently
-                command.arg(args[0])
-                    .arg(directory_path);
+                command.arg(args[0]).arg(directory_path);
             } else {
-                command.args(args)
-                    .arg(directory_path);
+                command.args(args).arg(directory_path);
             }
 
             match command.spawn() {
@@ -4228,22 +4519,20 @@ fn parse_tui_adjustment_command(input: &str) -> Option<TuiAdjustmentAction> {
 
     // Extract the direction character and remaining number
     let first_char = remaining_after_keyword.chars().next()?;
-    let (adjustment_direction_true_is_positive_false_is_negative, number_string) =
-        match first_char {
-            '+' => (true, &remaining_after_keyword[1..]),
-            '-' => (false, &remaining_after_keyword[1..]),
-            _ => return None, // Must have + or - after keyword
-        };
+    let (adjustment_direction_true_is_positive_false_is_negative, number_string) = match first_char
+    {
+        '+' => (true, &remaining_after_keyword[1..]),
+        '-' => (false, &remaining_after_keyword[1..]),
+        _ => return None, // Must have + or - after keyword
+    };
 
     // Parse the magnitude, ensuring it's valid and non-zero
     match number_string.parse::<u16>() {
-        Ok(magnitude) if magnitude > 0 => {
-            Some(TuiAdjustmentAction {
-                adjustment_type_true_is_tall_false_is_wide,
-                adjustment_magnitude: magnitude,
-                adjustment_direction_true_is_positive_false_is_negative,
-            })
-        },
+        Ok(magnitude) if magnitude > 0 => Some(TuiAdjustmentAction {
+            adjustment_type_true_is_tall_false_is_wide,
+            adjustment_magnitude: magnitude,
+            adjustment_direction_true_is_positive_false_is_negative,
+        }),
         _ => None, // Parse failed or value was zero
     }
 }
@@ -4282,13 +4571,15 @@ fn apply_tui_adjustment(nav_state: &mut NavigationState, adjustment_action: &Tui
     if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
         // This is a height (tall) adjustment
         nav_state.tui_tall_adjustment = adjustment_action.adjustment_magnitude;
-        nav_state.tui_tall_direction_sign = adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
+        nav_state.tui_tall_direction_sign =
+            adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
         // Reset to first page since the number of items per page has changed
         nav_state.current_page_index = 0;
     } else {
         // This is a width (wide) adjustment
         nav_state.tui_wide_adjustment = adjustment_action.adjustment_magnitude;
-        nav_state.tui_wide_direction_sign = adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
+        nav_state.tui_wide_direction_sign =
+            adjustment_action.adjustment_direction_true_is_positive_false_is_negative;
         // Page index remains the same - only display width changes, not content
     }
 }
@@ -4326,22 +4617,26 @@ fn format_tui_adjustments(
     tall_adjustment: u16,
     tall_direction_sign: bool,
     wide_adjustment: u16,
-    wide_direction_sign: bool
+    wide_direction_sign: bool,
 ) -> (String, String) {
     let tall_display = if tall_adjustment == 0 {
         String::from("tall+N")
     } else {
-        format!("tall{}{}",
-                if tall_direction_sign { "+" } else { "-" },
-                tall_adjustment)
+        format!(
+            "tall{}{}",
+            if tall_direction_sign { "+" } else { "-" },
+            tall_adjustment
+        )
     };
 
     let wide_display = if wide_adjustment == 0 {
         String::from("wide-N")
     } else {
-        format!("wide{}{}",
-                if wide_direction_sign { "+" } else { "-" },
-                wide_adjustment)
+        format!(
+            "wide{}{}",
+            if wide_direction_sign { "+" } else { "-" },
+            wide_adjustment
+        )
     };
 
     (tall_display, wide_display)
@@ -4459,20 +4754,15 @@ fn process_user_input(
                 FileSystemItemType::Directory => {
                     NavigationAction::ChangeDirectory(item_info.item_path.clone())
                 }
-                FileSystemItemType::File => {
-                    NavigationAction::OpenFile(item_info.item_path.clone())
-                }
+                FileSystemItemType::File => NavigationAction::OpenFile(item_info.item_path.clone()),
             });
         }
     }
 
     // Get both results and search type from wrapper
     // In process_user_input, you need to pass the current navigation directory
-    let search_results = nav_state.fuzzy_search_manager_wrapper(
-        input,
-        all_entries,
-        &current_directory_path
-    );
+    let search_results =
+        nav_state.fuzzy_search_manager_wrapper(input, all_entries, &current_directory_path);
 
     // Display paginated search results and get user selection
     let selection = display_paginated_search_results(
@@ -4481,7 +4771,8 @@ fn process_user_input(
         nav_state.tui_tall_direction_sign,
         nav_state.tui_wide_adjustment,
         nav_state.tui_wide_direction_sign,
-    ).map_err(|e| {
+    )
+    .map_err(|e| {
         eprintln!("Failed to display search results: {}", e);
         FileFantasticError::Io(e)
     })?;
@@ -4505,11 +4796,9 @@ fn process_user_input(
     // - Grep search: display_index is renumbered, results are ALWAYS files
     if let Ok(number) = selection.trim().parse::<usize>() {
         // Find the search result with the matching display_index
-        if let Some(selected) = search_results.iter().find(|r| {
-            match r {
-                UnifiedSearchResult::Grep(g) => g.display_index == number,
-                UnifiedSearchResult::Fuzzy(f) => f.display_index == number,
-            }
+        if let Some(selected) = search_results.iter().find(|r| match r {
+            UnifiedSearchResult::Grep(g) => g.display_index == number,
+            UnifiedSearchResult::Fuzzy(f) => f.display_index == number,
         }) {
             let path = match selected {
                 UnifiedSearchResult::Grep(g) => &g.file_path,
@@ -4598,106 +4887,106 @@ fn get_plaintext_extensions() -> &'static HashSet<&'static str> {
         extensions.insert("gitattributes");
 
         // Programming languages - Systems
-        extensions.insert("rs");     // Rust
-        extensions.insert("c");      // C
-        extensions.insert("cpp");    // C++
-        extensions.insert("cxx");    // C++
-        extensions.insert("cc");     // C++
-        extensions.insert("h");      // C/C++ header
-        extensions.insert("hpp");    // C++ header
-        extensions.insert("hxx");    // C++ header
-        extensions.insert("go");     // Go
-        extensions.insert("zig");    // Zig
-        extensions.insert("nim");    // Nim
-        extensions.insert("v");      // V
+        extensions.insert("rs"); // Rust
+        extensions.insert("c"); // C
+        extensions.insert("cpp"); // C++
+        extensions.insert("cxx"); // C++
+        extensions.insert("cc"); // C++
+        extensions.insert("h"); // C/C++ header
+        extensions.insert("hpp"); // C++ header
+        extensions.insert("hxx"); // C++ header
+        extensions.insert("go"); // Go
+        extensions.insert("zig"); // Zig
+        extensions.insert("nim"); // Nim
+        extensions.insert("v"); // V
 
         // Programming languages - JVM
-        extensions.insert("java");   // Java
-        extensions.insert("kt");     // Kotlin
-        extensions.insert("kts");    // Kotlin Script
-        extensions.insert("scala");  // Scala
-        extensions.insert("clj");    // Clojure
-        extensions.insert("cljs");   // ClojureScript
+        extensions.insert("java"); // Java
+        extensions.insert("kt"); // Kotlin
+        extensions.insert("kts"); // Kotlin Script
+        extensions.insert("scala"); // Scala
+        extensions.insert("clj"); // Clojure
+        extensions.insert("cljs"); // ClojureScript
         extensions.insert("groovy"); // Groovy
 
         // Programming languages - Scripting
-        extensions.insert("py");     // Python
-        extensions.insert("pyw");    // Python Windows
-        extensions.insert("pyi");    // Python Interface
-        extensions.insert("rb");     // Ruby
-        extensions.insert("php");    // PHP
-        extensions.insert("lua");    // Lua
-        extensions.insert("perl");   // Perl
-        extensions.insert("pl");     // Perl
+        extensions.insert("py"); // Python
+        extensions.insert("pyw"); // Python Windows
+        extensions.insert("pyi"); // Python Interface
+        extensions.insert("rb"); // Ruby
+        extensions.insert("php"); // PHP
+        extensions.insert("lua"); // Lua
+        extensions.insert("perl"); // Perl
+        extensions.insert("pl"); // Perl
 
         // Programming languages - Web/JavaScript ecosystem
-        extensions.insert("js");     // JavaScript
-        extensions.insert("mjs");    // JavaScript Module
-        extensions.insert("cjs");    // CommonJS
-        extensions.insert("ts");     // TypeScript
-        extensions.insert("tsx");    // TypeScript JSX
-        extensions.insert("jsx");    // React JSX
-        extensions.insert("vue");    // Vue.js
+        extensions.insert("js"); // JavaScript
+        extensions.insert("mjs"); // JavaScript Module
+        extensions.insert("cjs"); // CommonJS
+        extensions.insert("ts"); // TypeScript
+        extensions.insert("tsx"); // TypeScript JSX
+        extensions.insert("jsx"); // React JSX
+        extensions.insert("vue"); // Vue.js
         extensions.insert("svelte"); // Svelte
 
         // Programming languages - Functional
-        extensions.insert("hs");     // Haskell
-        extensions.insert("lhs");    // Literate Haskell
-        extensions.insert("ml");     // OCaml/Standard ML
-        extensions.insert("mli");    // OCaml Interface
-        extensions.insert("fs");     // F#
-        extensions.insert("fsx");    // F# Script
-        extensions.insert("elm");    // Elm
-        extensions.insert("ex");     // Elixir
-        extensions.insert("exs");    // Elixir Script
-        extensions.insert("erl");    // Erlang
-        extensions.insert("hrl");    // Erlang Header
+        extensions.insert("hs"); // Haskell
+        extensions.insert("lhs"); // Literate Haskell
+        extensions.insert("ml"); // OCaml/Standard ML
+        extensions.insert("mli"); // OCaml Interface
+        extensions.insert("fs"); // F#
+        extensions.insert("fsx"); // F# Script
+        extensions.insert("elm"); // Elm
+        extensions.insert("ex"); // Elixir
+        extensions.insert("exs"); // Elixir Script
+        extensions.insert("erl"); // Erlang
+        extensions.insert("hrl"); // Erlang Header
 
         // Programming languages - Other
-        extensions.insert("r");      // R
-        extensions.insert("jl");     // Julia
-        extensions.insert("m");      // MATLAB/Objective-C
-        extensions.insert("swift");  // Swift
-        extensions.insert("dart");   // Dart
-        extensions.insert("pas");    // Pascal
-        extensions.insert("pp");     // Pascal
-        extensions.insert("asm");    // Assembly
-        extensions.insert("s");      // Assembly
+        extensions.insert("r"); // R
+        extensions.insert("jl"); // Julia
+        extensions.insert("m"); // MATLAB/Objective-C
+        extensions.insert("swift"); // Swift
+        extensions.insert("dart"); // Dart
+        extensions.insert("pas"); // Pascal
+        extensions.insert("pp"); // Pascal
+        extensions.insert("asm"); // Assembly
+        extensions.insert("s"); // Assembly
 
         // Web technologies
-        extensions.insert("html");   // HTML
-        extensions.insert("htm");    // HTML
-        extensions.insert("xhtml");  // XHTML
-        extensions.insert("css");    // CSS
-        extensions.insert("scss");   // Sass
-        extensions.insert("sass");   // Sass
-        extensions.insert("less");   // Less
-        extensions.insert("styl");   // Stylus
+        extensions.insert("html"); // HTML
+        extensions.insert("htm"); // HTML
+        extensions.insert("xhtml"); // XHTML
+        extensions.insert("css"); // CSS
+        extensions.insert("scss"); // Sass
+        extensions.insert("sass"); // Sass
+        extensions.insert("less"); // Less
+        extensions.insert("styl"); // Stylus
 
         // Documentation and markup
-        extensions.insert("md");     // Markdown
+        extensions.insert("md"); // Markdown
         extensions.insert("markdown"); // Markdown
-        extensions.insert("rst");    // reStructuredText
-        extensions.insert("tex");    // LaTeX
-        extensions.insert("latex");  // LaTeX
-        extensions.insert("adoc");   // AsciiDoc
+        extensions.insert("rst"); // reStructuredText
+        extensions.insert("tex"); // LaTeX
+        extensions.insert("latex"); // LaTeX
+        extensions.insert("adoc"); // AsciiDoc
         extensions.insert("asciidoc"); // AsciiDoc
-        extensions.insert("org");    // Org mode
-        extensions.insert("pod");    // Perl POD
-        extensions.insert("rdoc");   // Ruby Doc
+        extensions.insert("org"); // Org mode
+        extensions.insert("pod"); // Perl POD
+        extensions.insert("rdoc"); // Ruby Doc
 
         // Shell scripts
-        extensions.insert("sh");     // Shell
-        extensions.insert("bash");   // Bash
-        extensions.insert("zsh");    // Zsh
-        extensions.insert("fish");   // Fish
-        extensions.insert("ksh");    // Korn Shell
-        extensions.insert("csh");    // C Shell
-        extensions.insert("tcsh");   // TC Shell
-        extensions.insert("ps1");    // PowerShell
-        extensions.insert("psm1");   // PowerShell Module
-        extensions.insert("bat");    // Batch
-        extensions.insert("cmd");    // Command
+        extensions.insert("sh"); // Shell
+        extensions.insert("bash"); // Bash
+        extensions.insert("zsh"); // Zsh
+        extensions.insert("fish"); // Fish
+        extensions.insert("ksh"); // Korn Shell
+        extensions.insert("csh"); // C Shell
+        extensions.insert("tcsh"); // TC Shell
+        extensions.insert("ps1"); // PowerShell
+        extensions.insert("psm1"); // PowerShell Module
+        extensions.insert("bat"); // Batch
+        extensions.insert("cmd"); // Command
 
         // Build and project files
         extensions.insert("makefile");
@@ -4716,27 +5005,27 @@ fn get_plaintext_extensions() -> &'static HashSet<&'static str> {
         extensions.insert("procfile");
 
         // Database and query languages
-        extensions.insert("sql");    // SQL
-        extensions.insert("psql");   // PostgreSQL
-        extensions.insert("mysql");  // MySQL
+        extensions.insert("sql"); // SQL
+        extensions.insert("psql"); // PostgreSQL
+        extensions.insert("mysql"); // MySQL
         extensions.insert("graphql"); // GraphQL
-        extensions.insert("gql");    // GraphQL
+        extensions.insert("gql"); // GraphQL
         extensions.insert("prisma"); // Prisma Schema
 
         // Data formats and protocols
-        extensions.insert("proto");  // Protocol Buffers
+        extensions.insert("proto"); // Protocol Buffers
         extensions.insert("thrift"); // Apache Thrift
-        extensions.insert("avdl");   // Avro IDL
-        extensions.insert("avsc");   // Avro Schema
+        extensions.insert("avdl"); // Avro IDL
+        extensions.insert("avsc"); // Avro Schema
 
         // Log and output files
-        extensions.insert("log");    // Log files
-        extensions.insert("out");    // Output files
-        extensions.insert("err");    // Error files
+        extensions.insert("log"); // Log files
+        extensions.insert("out"); // Output files
+        extensions.insert("err"); // Error files
 
         // Diff and patch files
-        extensions.insert("diff");   // Diff
-        extensions.insert("patch");  // Patch
+        extensions.insert("diff"); // Diff
+        extensions.insert("patch"); // Patch
 
         // License and readme files (often no extension)
         extensions.insert("license");
@@ -4794,24 +5083,39 @@ fn is_plaintext_file(path: &str) -> bool {
     let path = Path::new(path);
 
     // Get the file name for checking extensionless files
-    let file_name = path.file_name()
+    let file_name = path
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
 
     // Check for common extensionless text files
     // These are often found in project roots
     let extensionless_text_files = [
-        "README", "LICENSE", "CHANGELOG", "AUTHORS",
-        "CONTRIBUTORS", "COPYRIGHT", "NOTICE", "TODO",
-        "Makefile", "Dockerfile", "Containerfile",
-        "Vagrantfile", "Jenkinsfile", "Procfile",
-        "Gemfile", "Podfile", "Rakefile"
+        "README",
+        "LICENSE",
+        "CHANGELOG",
+        "AUTHORS",
+        "CONTRIBUTORS",
+        "COPYRIGHT",
+        "NOTICE",
+        "TODO",
+        "Makefile",
+        "Dockerfile",
+        "Containerfile",
+        "Vagrantfile",
+        "Jenkinsfile",
+        "Procfile",
+        "Gemfile",
+        "Podfile",
+        "Rakefile",
     ];
 
     // Check if it's a known extensionless text file (case-insensitive)
     let file_name_upper = file_name.to_uppercase();
-    if extensionless_text_files.iter()
-        .any(|&known| known.to_uppercase() == file_name_upper) {
+    if extensionless_text_files
+        .iter()
+        .any(|&known| known.to_uppercase() == file_name_upper)
+    {
         return true;
     }
 
@@ -5345,7 +5649,6 @@ pub fn display_paginated_search_results(
     tui_wide_adjustment: u16,
     tui_wide_direction_sign: bool,
 ) -> io::Result<String> {
-
     // Handle empty results early to avoid unnecessary processing
     if results.is_empty() {
         println!("No matches found");
@@ -5359,9 +5662,9 @@ pub fn display_paginated_search_results(
     // Apply the height adjustment based on direction
     // true = add rows (show more items), false = subtract rows (show fewer items)
     let tall_adjustment = if tui_tall_direction_sign {
-        tui_tall_adjustment as i16  // Positive adjustment - more rows
+        tui_tall_adjustment as i16 // Positive adjustment - more rows
     } else {
-        -(tui_tall_adjustment as i16)  // Negative adjustment - fewer rows
+        -(tui_tall_adjustment as i16) // Negative adjustment - fewer rows
     };
 
     // Calculate final items per page, ensuring minimum of 5 for usability
@@ -5374,9 +5677,9 @@ pub fn display_paginated_search_results(
 
     // Calculate the adjustment as signed (can be negative)
     let width_adjustment = if tui_wide_direction_sign {
-        tui_wide_adjustment as i16  // Positive adjustment - wider
+        tui_wide_adjustment as i16 // Positive adjustment - wider
     } else {
-        -(tui_wide_adjustment as i16)  // Negative adjustment - narrower
+        -(tui_wide_adjustment as i16) // Negative adjustment - narrower
     };
 
     // Apply adjustment to base
@@ -5407,31 +5710,22 @@ pub fn display_paginated_search_results(
         // We check the first result to determine the type since all results are the same type
         match &results[0] {
             UnifiedSearchResult::Grep(_) => {
-                display_grep_page(
-                    page_results,
-                    current_page + 1,
-                    total_pages,
-                    max_total_width,
-                )?;
+                display_grep_page(page_results, current_page + 1, total_pages, max_total_width)?;
             }
             UnifiedSearchResult::Fuzzy(_) => {
-                display_fuzzy_page(
-                    page_results,
-                    current_page + 1,
-                    total_pages,
-                    max_total_width
-                )?;
+                display_fuzzy_page(page_results, current_page + 1, total_pages, max_total_width)?;
             }
         }
 
         // Display pagination information and navigation instructions
-        println!("\nPage {}/{}, {} results, up w/j/<,  down x/k/>",
-                current_page + 1,
-                total_pages,
-                results.len(),
+        println!(
+            "\nPage {}/{}, {} results, up w/j/<,  down x/k/>",
+            current_page + 1,
+            total_pages,
+            results.len(),
         );
         print!("Enter choice: ");
-        io::stdout().flush()?;  // Ensure prompt is displayed before waiting for input
+        io::stdout().flush()?; // Ensure prompt is displayed before waiting for input
 
         // Read user input
         let mut input = String::new();
@@ -5442,21 +5736,18 @@ pub fn display_paginated_search_results(
         if input.is_empty() {
             // User pressed Enter without typing - continue without selection
             return Ok(String::new());
-
         } else if is_pagination_up_command(input) {
             // User wants to go to previous page
             if current_page > 0 {
                 current_page -= 1;
             }
             // If already at first page, just redisplay (no error message to avoid clutter)
-
         } else if is_pagination_down_command(input) {
             // User wants to go to next page
             if current_page < total_pages - 1 {
                 current_page += 1;
             }
             // If already at last page, just redisplay (no error message to avoid clutter)
-
         } else if let Ok(selection_num) = input.parse::<usize>() {
             // User entered a number - try to select that item
             let page_relative_selection = selection_num;
@@ -5470,7 +5761,10 @@ pub fn display_paginated_search_results(
                 return Ok(global_index.to_string());
             } else {
                 // Invalid selection number - show error and wait for acknowledgment
-                println!("\nInvalid selection. Please choose 1-{}", end_idx - start_idx);
+                println!(
+                    "\nInvalid selection. Please choose 1-{}",
+                    end_idx - start_idx
+                );
                 println!("Press Enter to continue...");
                 let mut _dummy = String::new();
                 io::stdin().read_line(&mut _dummy)?;
@@ -5502,13 +5796,16 @@ fn display_grep_page(
     page_results: &[UnifiedSearchResult],
     current_page: usize,
     total_pages: usize,
-    max_total_width: usize
+    max_total_width: usize,
 ) -> io::Result<()> {
-    println!("\nContent Search Results (Page {}/{}) (try: -g -r -c)", current_page, total_pages);
+    println!(
+        "\nContent Search Results (Page {}/{}) (try: -g -r -c)",
+        current_page, total_pages
+    );
 
     // Calculate column widths based on total terminal width
     // Fixed allocations: 3 for number, 7 for line (includes spacing)
-    const FIXED_WIDTH: usize = 10;  // 3 (number) + 7 (line with spaces)
+    const FIXED_WIDTH: usize = 10; // 3 (number) + 7 (line with spaces)
 
     // Calculate available width for file and content columns
     let available_width = max_total_width.saturating_sub(FIXED_WIDTH);
@@ -5528,14 +5825,14 @@ fn display_grep_page(
     }
 
     // Split available width: 60% for file, 40% for content
-    let file_width = (available_width * 6) / 10;  // 60% for file
-    let content_width = available_width - file_width;  // Remainder for content
+    let file_width = (available_width * 6) / 10; // 60% for file
+    let content_width = available_width - file_width; // Remainder for content
 
     // Display header with exact column widths
     // Format: [##_][File...][_Line_][Content...]
-    print!("{:<2} ", "#");  // 2 chars + 1 space = 3 total
+    print!("{:<2} ", "#"); // 2 chars + 1 space = 3 total
     print!("{:<width$}", "File", width = file_width);
-    print!(" {:<5} ", "Line");  // 1 + 5 + 1 = 7 total
+    print!(" {:<5} ", "Line"); // 1 + 5 + 1 = 7 total
     println!("{:<width$}", "Content", width = content_width);
 
     // Display separator line matching exact total width
@@ -5558,9 +5855,9 @@ fn display_grep_page(
             let display_content = truncate_with_ellipsis(trimmed_content, content_width);
 
             // Display the row with exact spacing to match header
-            print!("{:<2} ", row_num);  // 2 chars + 1 space
+            print!("{:<2} ", row_num); // 2 chars + 1 space
             print!("{:<width$}", display_file, width = file_width);
-            print!(" {} ", line_str);  // 1 + 5 + 1 spaces
+            print!(" {} ", line_str); // 1 + 5 + 1 spaces
             println!("{:<width$}", display_content, width = content_width);
         }
     }
@@ -5610,12 +5907,16 @@ fn display_grep_page_minimal(
 
     for (index, result) in page_results.iter().enumerate() {
         if let UnifiedSearchResult::Grep(grep_result) = result {
-            println!("{}. {}:{}",
-                     index + 1,
-                     truncate_with_ellipsis(&grep_result.file_name, file_width),
-                     grep_result.line_number);
-            println!("   {}",
-                     truncate_with_ellipsis(grep_result.line_content.trim(), content_width));
+            println!(
+                "{}. {}:{}",
+                index + 1,
+                truncate_with_ellipsis(&grep_result.file_name, file_width),
+                grep_result.line_number
+            );
+            println!(
+                "   {}",
+                truncate_with_ellipsis(grep_result.line_content.trim(), content_width)
+            );
         }
     }
 
@@ -5644,14 +5945,16 @@ fn display_fuzzy_page(
     page_results: &[UnifiedSearchResult],
     current_page: usize,
     total_pages: usize,
-    max_total_width: usize
+    max_total_width: usize,
 ) -> io::Result<()> {
-    println!("Fuzzy Search (Page {}/{}) (try: --grep --recursive --case-sensitive, -g -r -c)",
-             current_page, total_pages);
+    println!(
+        "Fuzzy Search (Page {}/{}) (try: --grep --recursive --case-sensitive, -g -r -c)",
+        current_page, total_pages
+    );
 
     // Calculate column widths based on total terminal width
     // Fixed allocations: 3 for number, 10 for distance (includes spacing)
-    const FIXED_WIDTH: usize = 13;  // 3 (number) + 10 (distance with spaces)
+    const FIXED_WIDTH: usize = 13; // 3 (number) + 10 (distance with spaces)
 
     // Calculate available width for name column
     let name_width = max_total_width.saturating_sub(FIXED_WIDTH);
@@ -5667,9 +5970,9 @@ fn display_fuzzy_page(
 
     // Display header with exact column widths
     // Format: [##_][Name...][_Distance_]
-    print!("{:<2} ", "#");  // 2 chars + 1 space = 3 total
+    print!("{:<2} ", "#"); // 2 chars + 1 space = 3 total
     print!("{:<width$}", "Name", width = name_width);
-    println!(" {:<9}", "Distance");  // 1 + 9 = 10 total
+    println!(" {:<9}", "Distance"); // 1 + 9 = 10 total
 
     // Display separator line matching exact total width
     // Use the minimum of max_total_width or actual used width (for very wide terminals)
@@ -5690,9 +5993,9 @@ fn display_fuzzy_page(
             let distance_str = format!("{:>9}", fuzzy_result.distance);
 
             // Display the row with exact spacing to match header
-            print!("{:<2} ", row_num);  // 2 chars + 1 space
+            print!("{:<2} ", row_num); // 2 chars + 1 space
             print!("{:<width$}", display_name, width = name_width);
-            println!(" {}", distance_str);  // 1 space + distance
+            println!(" {}", distance_str); // 1 space + distance
         }
     }
 
@@ -5714,10 +6017,12 @@ fn display_fuzzy_page_minimal(
     for (index, result) in page_results.iter().enumerate() {
         if let UnifiedSearchResult::Fuzzy(fuzzy_result) = result {
             // For minimal display, show each item on two lines
-            println!("{}. {} (dist: {})",
-                     index + 1,
-                     truncate_with_ellipsis(&fuzzy_result.item_name, 20),
-                     fuzzy_result.distance);
+            println!(
+                "{}. {} (dist: {})",
+                index + 1,
+                truncate_with_ellipsis(&fuzzy_result.item_name, 20),
+                fuzzy_result.distance
+            );
         }
     }
 
@@ -5901,14 +6206,13 @@ impl SearchConfig {
         self.case_sensitive = case_sensitive;
         self
     }
-
 }
 
 #[cfg(test)]
 mod tests_iterative_crawl {
     use super::*;
-    use std::path::Path;
     use std::collections::HashMap;
+    use std::path::Path;
 
     /// Creates a minimal NavigationState instance for testing
     fn create_test_navigation_state() -> NavigationState {
@@ -5935,14 +6239,17 @@ mod tests_iterative_crawl {
 
         let result = nav_state.collect_entries_iterative(
             &temp_dir,
-            Some(0),  // Only the directory itself
+            Some(0), // Only the directory itself
             None,
             None,
         );
 
         assert!(result.is_ok(), "Should successfully read temp directory");
         let entries = result.expect("Failed to get entries");
-        assert!(!entries.is_empty(), "Temp directory should have at least some entries");
+        assert!(
+            !entries.is_empty(),
+            "Temp directory should have at least some entries"
+        );
     }
 
     #[test]
@@ -5952,23 +6259,13 @@ mod tests_iterative_crawl {
         let temp_dir = std::env::temp_dir();
 
         // Depth 0 = only immediate children of temp dir
-        let result_depth_0 = nav_state.collect_entries_iterative(
-            &temp_dir,
-            Some(0),
-            None,
-            None,
-        );
+        let result_depth_0 = nav_state.collect_entries_iterative(&temp_dir, Some(0), None, None);
 
         assert!(result_depth_0.is_ok(), "Depth 0 should succeed");
         let entries_0 = result_depth_0.expect("Failed to get entries");
 
         // Depth 1 = temp dir children and their children
-        let result_depth_1 = nav_state.collect_entries_iterative(
-            &temp_dir,
-            Some(1),
-            None,
-            None,
-        );
+        let result_depth_1 = nav_state.collect_entries_iterative(&temp_dir, Some(1), None, None);
 
         assert!(result_depth_1.is_ok(), "Depth 1 should succeed");
         let entries_1 = result_depth_1.expect("Failed to get entries");
@@ -5990,7 +6287,7 @@ mod tests_iterative_crawl {
         let result = nav_state.collect_entries_iterative(
             &temp_dir,
             None,
-            Some(5),  // Maximum 5 entries
+            Some(5), // Maximum 5 entries
             None,
         );
 
@@ -6007,19 +6304,21 @@ mod tests_iterative_crawl {
     fn test_collect_entries_iterative_nonexistent_directory() {
         // Test handling of non-existent directory
         let nav_state = create_test_navigation_state();
-        let nonexistent_path = Path::new("/this/directory/definitely/does/not/exist/anywhere/12345");
+        let nonexistent_path =
+            Path::new("/this/directory/definitely/does/not/exist/anywhere/12345");
 
-        let result = nav_state.collect_entries_iterative(
-            nonexistent_path,
-            None,
-            None,
-            None,
-        );
+        let result = nav_state.collect_entries_iterative(nonexistent_path, None, None, None);
 
         // Should return Ok with empty vec since we skip unreadable directories
-        assert!(result.is_ok(), "Should return Ok even for non-existent directory");
+        assert!(
+            result.is_ok(),
+            "Should return Ok even for non-existent directory"
+        );
         let entries = result.expect("Failed to get entries");
-        assert!(entries.is_empty(), "Non-existent directory should return empty vec");
+        assert!(
+            entries.is_empty(),
+            "Non-existent directory should return empty vec"
+        );
     }
 
     #[test]
@@ -6033,7 +6332,7 @@ mod tests_iterative_crawl {
             &temp_dir,
             None,
             None,
-            Some(1),  // 1 MB limit
+            Some(1), // 1 MB limit
         );
 
         assert!(result.is_ok(), "Should succeed even with memory limit");
@@ -6048,9 +6347,9 @@ mod tests_iterative_crawl {
 
         let result = nav_state.collect_entries_iterative(
             &temp_dir,
-            Some(1),   // Depth limit
-            Some(10),  // Entry limit
-            Some(5),   // Memory limit (MB)
+            Some(1),  // Depth limit
+            Some(10), // Entry limit
+            Some(5),  // Memory limit (MB)
         );
 
         assert!(result.is_ok(), "Should succeed with combined limits");
@@ -6072,8 +6371,8 @@ mod tests_iterative_crawl {
 
         let result = nav_state.collect_entries_iterative(
             &temp_dir,
-            Some(0),  // Only immediate children
-            Some(5),  // Limit to a few entries
+            Some(0), // Only immediate children
+            Some(5), // Limit to a few entries
             None,
         );
 
@@ -6083,10 +6382,16 @@ mod tests_iterative_crawl {
         // Verify each entry has valid attributes
         for entry in entries.iter() {
             // Name should not be empty
-            assert!(!entry.file_system_item_name.is_empty(), "File name should not be empty");
+            assert!(
+                !entry.file_system_item_name.is_empty(),
+                "File name should not be empty"
+            );
 
             // Path should exist as a string representation
-            assert!(entry.file_system_item_path.to_str().is_some(), "Path should be valid UTF-8");
+            assert!(
+                entry.file_system_item_path.to_str().is_some(),
+                "Path should be valid UTF-8"
+            );
 
             // Last modified time should not be UNIX_EPOCH for real files
             // (though we handle UNIX_EPOCH as fallback)
@@ -6232,7 +6537,6 @@ impl NavigationState {
     /// // Display will use default sizes until user adjusts
     /// ```
     fn new() -> Self {
-
         // Detect if running on Android platform
         let is_android = detect_android();
 
@@ -6240,10 +6544,10 @@ impl NavigationState {
         // Android terminals typically need reduced width
         let (width_adjustment, width_direction) = if is_android {
             // Android: reduce width by 24 characters
-            (24, false)  // false represents negative direction
+            (24, false) // false represents negative direction
         } else {
             // Non-Android: no adjustment needed
-            (0, true)    // true represents positive direction (though 0 makes direction irrelevant)
+            (0, true) // true represents positive direction (though 0 makes direction irrelevant)
         };
 
         NavigationState {
@@ -6254,11 +6558,11 @@ impl NavigationState {
             selected_item_index: None,
             active_search_term: None,
             // Initialize TUI size adjustments to defaults (no adjustment)
-            tui_tall_adjustment: 0,      // No height adjustment
-            tui_tall_direction_sign: true, // Positive direction by default
-            tui_wide_adjustment: width_adjustment,       // No width adjustment
+            tui_tall_adjustment: 0,                   // No height adjustment
+            tui_tall_direction_sign: true,            // Positive direction by default
+            tui_wide_adjustment: width_adjustment,    // No width adjustment
             tui_wide_direction_sign: width_direction, // Positive direction by default
-            current_page_index: 0,        // Always start at page 0
+            current_page_index: 0,                    // Always start at page 0
         }
     }
 
@@ -6346,7 +6650,8 @@ impl NavigationState {
         raw_input: &str,
         current_dir_entries: &[FileSystemEntry],
         current_navigation_path: &Path,
-    ) -> Vec<UnifiedSearchResult> {  // Note: No longer returns tuple with bool
+    ) -> Vec<UnifiedSearchResult> {
+        // Note: No longer returns tuple with bool
 
         // Step 1: Parse the raw input for search term and flags
         let (search_term, recursive, grep, case_sensitive) = parse_input_flags(raw_input);
@@ -6361,7 +6666,7 @@ impl NavigationState {
             // Collect files recursively from navigation directory
             match self.collect_entries_iterative(
                 current_navigation_path,
-                Some(20),      // Maximum depth of 20 levels (prevents infinite loops, covers 99.9% of real use cases)
+                Some(20), // Maximum depth of 20 levels (prevents infinite loops, covers 99.9% of real use cases)
                 Some(100_000), // Maximum 100,000 entries (prevents UI freezing, reasonable for display/search)
                 Some(500),     // Maximum 500MB memory usage (safe for systems with 4GB+ RAM)
             ) {
@@ -6389,7 +6694,8 @@ impl NavigationState {
                     grep_results = Self::deduplicate_grep_results(grep_results);
 
                     // Now wrap deduplicated results in enum
-                    grep_results.into_iter()
+                    grep_results
+                        .into_iter()
                         .map(|r| UnifiedSearchResult::Grep(r))
                         .collect()
                 }
@@ -6403,7 +6709,8 @@ impl NavigationState {
 
             // Get fuzzy results and wrap each in the enum
             let fuzzy_results = self.fuzzy_search_entries(&config, &entries);
-            fuzzy_results.into_iter()
+            fuzzy_results
+                .into_iter()
                 .map(|r| UnifiedSearchResult::Fuzzy(r))
                 .collect()
         };
@@ -6566,12 +6873,8 @@ impl NavigationState {
     /// ```
     fn apply_filter<'a>(&self, entries: &'a [FileSystemEntry]) -> Vec<&'a FileSystemEntry> {
         match self.current_filter {
-            Some('d') => entries.iter()
-                .filter(|e| e.is_directory)
-                .collect(),
-            Some('f') => entries.iter()
-                .filter(|e| !e.is_directory)
-                .collect(),
+            Some('d') => entries.iter().filter(|e| e.is_directory).collect(),
+            Some('f') => entries.iter().filter(|e| !e.is_directory).collect(),
             _ => entries.iter().collect(), // No filtering
         }
     }
@@ -6643,8 +6946,8 @@ impl NavigationState {
 
         // Memory usage tracking
         // These are rough estimates based on typical file system entry sizes
-        const ENTRY_SIZE_ESTIMATE_BYTES: usize = 256;  // Approximate size of one FileSystemEntry in memory
-        const QUEUE_ITEM_SIZE_ESTIMATE_BYTES: usize = 128;  // Approximate size of one (PathBuf, usize) tuple
+        const ENTRY_SIZE_ESTIMATE_BYTES: usize = 256; // Approximate size of one FileSystemEntry in memory
+        const QUEUE_ITEM_SIZE_ESTIMATE_BYTES: usize = 128; // Approximate size of one (PathBuf, usize) tuple
         let mut estimated_memory_bytes: usize = 0;
 
         // Progress tracking for diagnostics
@@ -6656,7 +6959,8 @@ impl NavigationState {
             directories_processed += 1;
 
             // Update memory estimate by removing the dequeued item
-            estimated_memory_bytes = estimated_memory_bytes.saturating_sub(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
+            estimated_memory_bytes =
+                estimated_memory_bytes.saturating_sub(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
 
             // Check depth limit before processing this directory
             // If max_depth is 2, we process depths 0, 1, and 2 (three levels total)
@@ -6682,8 +6986,11 @@ impl NavigationState {
                 if estimated_memory_bytes > max_bytes {
                     // Stop traversal - approaching memory limit
                     // Note: This is an estimate, actual memory usage may vary
-                    eprintln!("Warning: Estimated memory usage ({} MB) exceeds limit ({} MB), stopping traversal",
-                             estimated_memory_bytes / (1024 * 1024), max_mem);
+                    eprintln!(
+                        "Warning: Estimated memory usage ({} MB) exceeds limit ({} MB), stopping traversal",
+                        estimated_memory_bytes / (1024 * 1024),
+                        max_mem
+                    );
                     break;
                 }
             }
@@ -6694,8 +7001,11 @@ impl NavigationState {
                 Err(e) => {
                     // Log the error but continue processing other directories
                     // This handles permission denied, symbolic link issues, etc.
-                    eprintln!("Warning: Cannot read directory '{}': {}",
-                             current_dir.display(), e);
+                    eprintln!(
+                        "Warning: Cannot read directory '{}': {}",
+                        current_dir.display(),
+                        e
+                    );
                     directories_skipped += 1;
                     continue;
                 }
@@ -6745,13 +7055,15 @@ impl NavigationState {
                     file_system_item_name: file_name,
                     file_system_item_path: path.clone(),
                     file_system_item_size_in_bytes: metadata.len(),
-                    file_system_item_last_modified_time: metadata.modified()
+                    file_system_item_last_modified_time: metadata
+                        .modified()
                         .unwrap_or(SystemTime::UNIX_EPOCH),
                     is_directory,
                 });
 
                 // Update memory estimate after adding entry
-                estimated_memory_bytes = estimated_memory_bytes.saturating_add(ENTRY_SIZE_ESTIMATE_BYTES);
+                estimated_memory_bytes =
+                    estimated_memory_bytes.saturating_add(ENTRY_SIZE_ESTIMATE_BYTES);
 
                 // Queue subdirectories for future processing (breadth-first)
                 if is_directory {
@@ -6770,7 +7082,7 @@ impl NavigationState {
                         // Check if subdirectory would exceed depth limit
                         // Subdirectories would be at depth current_depth + 1
                         let within_depth_limit = match max_depth {
-                            Some(max_d) => current_depth < max_d,  // current_depth + 1 <= max_d
+                            Some(max_d) => current_depth < max_d, // current_depth + 1 <= max_d
                             None => true,
                         };
 
@@ -6778,8 +7090,10 @@ impl NavigationState {
                         let within_memory_limit = match max_memory_mb {
                             Some(max_mem) => {
                                 let max_bytes = max_mem.saturating_mul(1024).saturating_mul(1024);
-                                estimated_memory_bytes.saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES) <= max_bytes
-                            },
+                                estimated_memory_bytes
+                                    .saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES)
+                                    <= max_bytes
+                            }
                             None => true,
                         };
 
@@ -6788,24 +7102,31 @@ impl NavigationState {
 
                     if should_queue_subdirectory {
                         directories_queue.push_back((path, current_depth + 1));
-                        estimated_memory_bytes = estimated_memory_bytes.saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
+                        estimated_memory_bytes =
+                            estimated_memory_bytes.saturating_add(QUEUE_ITEM_SIZE_ESTIMATE_BYTES);
                     }
                 }
             }
 
             // Provide progress feedback for very large traversals (every 1000 directories)
             if directories_processed % 1000 == 0 && directories_processed > 0 {
-                eprintln!("Progress: Processed {} directories, {} entries collected, {} directories queued",
-                         directories_processed,
-                         all_entries.len(),
-                         directories_queue.len());
+                eprintln!(
+                    "Progress: Processed {} directories, {} entries collected, {} directories queued",
+                    directories_processed,
+                    all_entries.len(),
+                    directories_queue.len()
+                );
             }
         }
 
         // Log final statistics if any directories were skipped
         if directories_skipped > 0 {
-            eprintln!("Traversal complete: {} directories processed, {} skipped, {} entries collected",
-                     directories_processed, directories_skipped, all_entries.len());
+            eprintln!(
+                "Traversal complete: {} directories processed, {} skipped, {} entries collected",
+                directories_processed,
+                directories_skipped,
+                all_entries.len()
+            );
         }
 
         Ok(all_entries)
@@ -7014,9 +7335,10 @@ impl NavigationState {
             // Step 2: Create truncated versions for fair comparison
             // We truncate to search term length to avoid penalizing longer names
             // Example: searching "doc" against "document" compares "doc" vs "doc"
-            let full_name_truncated: String = entry.file_system_item_name
+            let full_name_truncated: String = entry
+                .file_system_item_name
                 .to_lowercase()
-                .chars()          // Use chars() for proper UTF-8 handling
+                .chars() // Use chars() for proper UTF-8 handling
                 .take(search_len) // Take only as many characters as search term
                 .collect();
 
@@ -7059,8 +7381,8 @@ impl NavigationState {
                     // For equal distances, prefer shorter names
                     // This assumes shorter names are more likely what user wanted
                     a.item_name.len().cmp(&b.item_name.len())
-                },
-                other => other // Different distances - use distance ordering
+                }
+                other => other, // Different distances - use distance ordering
             }
         });
 
@@ -7230,9 +7552,7 @@ impl NavigationState {
                     let context = if line.chars().count() > 100 {
                         // Take first 97 characters and append ellipsis
                         // This handles multi-byte UTF-8 characters correctly
-                        let truncated: String = line.chars()
-                            .take(MAX_DISPLAY_CHARS)
-                            .collect();
+                        let truncated: String = line.chars().take(MAX_DISPLAY_CHARS).collect();
                         format!("{}...", truncated)
                     } else {
                         line.clone()
@@ -7242,8 +7562,8 @@ impl NavigationState {
                     results.push(GrepSearchResult {
                         file_name: entry.file_system_item_name.clone(),
                         file_path: entry.file_system_item_path.clone(),
-                        line_number: line_number,  // Direct field, not Option
-                        line_content: context,      // Direct field, not Option
+                        line_number: line_number, // Direct field, not Option
+                        line_content: context,    // Direct field, not Option
                         display_index: idx + 1,
                     });
                 }
@@ -7261,33 +7581,39 @@ impl NavigationState {
                 if self.last_sort_command == Some('n') {
                     // If already sorting by name, toggle direction
                     match self.current_sort_method {
-                        DirectorySortingMethodEnum::Name(ascending) => DirectorySortingMethodEnum::Name(!ascending),
+                        DirectorySortingMethodEnum::Name(ascending) => {
+                            DirectorySortingMethodEnum::Name(!ascending)
+                        }
                         _ => DirectorySortingMethodEnum::Name(true),
                     }
                 } else {
                     DirectorySortingMethodEnum::Name(true)
                 }
-            },
+            }
             's' => {
                 if self.last_sort_command == Some('s') {
                     match self.current_sort_method {
-                        DirectorySortingMethodEnum::Size(ascending) => DirectorySortingMethodEnum::Size(!ascending),
+                        DirectorySortingMethodEnum::Size(ascending) => {
+                            DirectorySortingMethodEnum::Size(!ascending)
+                        }
                         _ => DirectorySortingMethodEnum::Size(true),
                     }
                 } else {
                     DirectorySortingMethodEnum::Size(true)
                 }
-            },
+            }
             'm' => {
                 if self.last_sort_command == Some('m') {
                     match self.current_sort_method {
-                        DirectorySortingMethodEnum::Modified(ascending) => DirectorySortingMethodEnum::Modified(!ascending),
+                        DirectorySortingMethodEnum::Modified(ascending) => {
+                            DirectorySortingMethodEnum::Modified(!ascending)
+                        }
                         _ => DirectorySortingMethodEnum::Modified(true),
                     }
                 } else {
                     DirectorySortingMethodEnum::Modified(true)
                 }
-            },
+            }
             _ => return,
         };
 
@@ -7312,7 +7638,7 @@ impl NavigationState {
                     } else {
                         FileSystemItemType::File
                     },
-                }
+                },
             );
         }
     }
@@ -7395,15 +7721,17 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileS
     // Handle directory read errors with specific error types
     let read_dir_result = match fs::read_dir(directory_path_to_read) {
         Ok(dir) => dir,
-        Err(e) => {
-            match e.kind() {
-                io::ErrorKind::NotFound =>
-                    return Err(FileFantasticError::NotFound(directory_path_to_read.clone())),
-                io::ErrorKind::PermissionDenied =>
-                    return Err(FileFantasticError::PermissionDenied(directory_path_to_read.clone())),
-                _ => return Err(FileFantasticError::Io(e)),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => {
+                return Err(FileFantasticError::NotFound(directory_path_to_read.clone()));
             }
-        }
+            io::ErrorKind::PermissionDenied => {
+                return Err(FileFantasticError::PermissionDenied(
+                    directory_path_to_read.clone(),
+                ));
+            }
+            _ => return Err(FileFantasticError::Io(e)),
+        },
     };
 
     for directory_item_result in read_dir_result {
@@ -7412,8 +7740,11 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileS
             Ok(item) => item,
             Err(e) => {
                 // Log error but continue with other entries
-                eprintln!("Warning: Failed to read entry in {}: {}",
-                          directory_path_to_read.display(), e);
+                eprintln!(
+                    "Warning: Failed to read entry in {}: {}",
+                    directory_path_to_read.display(),
+                    e
+                );
                 continue;
             }
         };
@@ -7436,17 +7767,16 @@ fn read_directory_contents(directory_path_to_read: &PathBuf) -> Result<Vec<FileS
             Ok(time) => time,
             Err(_) => {
                 // When modification time is not available, use epoch as fallback
-                eprintln!("Warning: Cannot determine modification time for {}",
-                          item_path.display());
+                eprintln!(
+                    "Warning: Cannot determine modification time for {}",
+                    item_path.display()
+                );
                 SystemTime::UNIX_EPOCH
             }
         };
 
         directory_entries_list.push(FileSystemEntry {
-            file_system_item_name: directory_item
-                .file_name()
-                .to_string_lossy()
-                .to_string(),
+            file_system_item_name: directory_item.file_name().to_string_lossy().to_string(),
             file_system_item_path: item_path,
             file_system_item_size_in_bytes: item_metadata.len(),
             file_system_item_last_modified_time: modified_time,
@@ -7504,11 +7834,17 @@ mod tests_formatting {
 
         // Test current time format (HH:MM)
         let now_formatted = format_timestamp(now);
-        assert!(now_formatted.len() == 5, "Current time should be in HH:MM format");
+        assert!(
+            now_formatted.len() == 5,
+            "Current time should be in HH:MM format"
+        );
 
         // Test this year format (MM-DD HH:MM)
         let yesterday_formatted = format_timestamp(yesterday);
-        assert!(yesterday_formatted.len() == 11, "Recent dates should be in MM-DD HH:MM format");
+        assert!(
+            yesterday_formatted.len() == 11,
+            "Recent dates should be in MM-DD HH:MM format"
+        );
 
         // Test old date format (YYYY-MM-DD)
         let old_date = SystemTime::UNIX_EPOCH + Duration::from_secs(0);
@@ -7604,7 +7940,12 @@ fn truncate_filename_for_display(formatted_name: String, max_name_width: usize) 
     // Get suffix (end of the filename, including extension)
     let suffix: String = formatted_name
         .chars()
-        .skip(formatted_name.chars().count().saturating_sub(FILENAME_SUFFIX_LENGTH))
+        .skip(
+            formatted_name
+                .chars()
+                .count()
+                .saturating_sub(FILENAME_SUFFIX_LENGTH),
+        )
         .collect();
 
     // Combine prefix, ellipsis, and suffix
@@ -7639,7 +7980,7 @@ fn display_directory_contents(
     current_directory_path: &PathBuf,
     page_info: Option<(usize, usize)>,
     filter: Option<char>,
-    nav_state: &NavigationState,  // Add nav_state parameter
+    nav_state: &NavigationState, // Add nav_state parameter
 ) -> io::Result<()> {
     // Clear screen
     print!("\x1B[2J\x1B[1;1H");
@@ -7655,22 +7996,37 @@ fn display_directory_contents(
 
     let legend = format!(
         "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}",
-        YELLOW,           // Overall legend color
-        RED, YELLOW,      // RED q + YELLOW uit
-        RED, YELLOW,      // RED b + YELLOW ack
-        RED, YELLOW,      // RED t + YELLOW erm
-        RED, YELLOW,      // RED d + YELLOW ir
-        RED, YELLOW,      // RED f + YELLOW ile
-        RED, YELLOW,      // RED n + YELLOW ame
-        RED, YELLOW,      // RED s + YELLOW ize
-        RED, YELLOW,      // RED m + YELLOW od
-        RED, YELLOW,      // RED g + YELLOW et
-        RED, YELLOW,      // RED v + YELLOW ,
-        RED, YELLOW,      // RED y + YELLOW ,
-        RED, YELLOW,      // RED p + YELLOW ,
-        RED, YELLOW,      // RED str + YELLOW ...
-        RED, YELLOW,      // RED enter + YELLOW ...
-        RESET);
+        YELLOW, // Overall legend color
+        RED,
+        YELLOW, // RED q + YELLOW uit
+        RED,
+        YELLOW, // RED b + YELLOW ack
+        RED,
+        YELLOW, // RED t + YELLOW erm
+        RED,
+        YELLOW, // RED d + YELLOW ir
+        RED,
+        YELLOW, // RED f + YELLOW ile
+        RED,
+        YELLOW, // RED n + YELLOW ame
+        RED,
+        YELLOW, // RED s + YELLOW ize
+        RED,
+        YELLOW, // RED m + YELLOW od
+        RED,
+        YELLOW, // RED g + YELLOW et
+        RED,
+        YELLOW, // RED v + YELLOW ,
+        RED,
+        YELLOW, // RED y + YELLOW ,
+        RED,
+        YELLOW, // RED p + YELLOW ,
+        RED,
+        YELLOW, // RED str + YELLOW ...
+        RED,
+        YELLOW, // RED enter + YELLOW ...
+        RESET
+    );
 
     // Directory/file mode on path-display line
     let path_display = format!("{}", current_directory_path.display());
@@ -7679,7 +8035,10 @@ fn display_directory_contents(
     // Column headers with dynamic name width
     println!(
         "{:>4}  {:<width$} {:>5} {:>11}",
-        " # ", "Name", "Size", "Modified",
+        " # ",
+        "Name",
+        "Size",
+        "Modified",
         width = name_column_width
     );
 
@@ -7723,16 +8082,20 @@ fn display_directory_contents(
             nav_state.tui_tall_adjustment,
             nav_state.tui_tall_direction_sign,
             nav_state.tui_wide_adjustment,
-            nav_state.tui_wide_direction_sign
+            nav_state.tui_wide_direction_sign,
         );
 
         if total_pages > 1 {
-            println!("\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. Size: {} {} ---{}",
-                    YELLOW, current_page, total_pages, tall_display, wide_display, RESET);
+            println!(
+                "\x1b[1m{}--- Page {} of {}: up/down, j/k, </>, w/x, arrows, etc. Size: {} {} ---{}",
+                YELLOW, current_page, total_pages, tall_display, wide_display, RESET
+            );
         } else {
             // Show size info even when only one page
-            println!("\x1b[1m{}--- (Re)Size: {} {} ---{}",
-                    YELLOW, tall_display, wide_display, RESET);
+            println!(
+                "\x1b[1m{}--- (Re)Size: {} {} ---{}",
+                YELLOW, tall_display, wide_display, RESET
+            );
         }
     }
 
@@ -7744,7 +8107,8 @@ fn display_directory_contents(
 const FF_DATA_DIRECTORY_NAME: &str = "ff_data";
 
 /// Name of the configuration file that contains partner program paths
-const PARTNER_PROGRAMS_CONFIG_FILENAME: &str = "absolute_paths_to_local_partner_fileopening_executibles.txt";
+const PARTNER_PROGRAMS_CONFIG_FILENAME: &str =
+    "absolute_paths_to_local_partner_fileopening_executibles.txt";
 
 /// Reads the partner programs configuration file and returns valid executable paths
 ///
@@ -7823,17 +8187,18 @@ const PARTNER_PROGRAMS_CONFIG_FILENAME: &str = "absolute_paths_to_local_partner_
 fn read_partner_programs_file() -> Vec<PathBuf> {
     // Step 1: Get the executable directory
     let executable_directory = match std::env::current_exe() {
-        Ok(exe_path) => {
-            match exe_path.parent() {
-                Some(parent) => parent.to_path_buf(),
-                None => {
-                    eprintln!("Warning: Cannot determine executable directory for partner programs");
-                    return Vec::new();
-                }
+        Ok(exe_path) => match exe_path.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => {
+                eprintln!("Warning: Cannot determine executable directory for partner programs");
+                return Vec::new();
             }
         },
         Err(error) => {
-            eprintln!("Warning: Cannot locate executable for partner programs: {}", error);
+            eprintln!(
+                "Warning: Cannot locate executable for partner programs: {}",
+                error
+            );
             return Vec::new();
         }
     };
@@ -7845,20 +8210,26 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
     if !ff_data_directory_path.exists() {
         match fs::create_dir(&ff_data_directory_path) {
             Ok(_) => {
-                println!("Created File Fantastic data directory: {}",
-                        ff_data_directory_path.display());
-            },
+                println!(
+                    "Created File Fantastic data directory: {}",
+                    ff_data_directory_path.display()
+                );
+            }
             Err(error) => {
-                eprintln!("Warning: Could not create ff_data directory at {}: {}",
-                         ff_data_directory_path.display(),
-                         error);
+                eprintln!(
+                    "Warning: Could not create ff_data directory at {}: {}",
+                    ff_data_directory_path.display(),
+                    error
+                );
                 return Vec::new();
             }
         }
     } else if !ff_data_directory_path.is_dir() {
         // Path exists but is not a directory
-        eprintln!("Warning: ff_data path exists but is not a directory: {}",
-                 ff_data_directory_path.display());
+        eprintln!(
+            "Warning: ff_data path exists but is not a directory: {}",
+            ff_data_directory_path.display()
+        );
         return Vec::new();
     }
 
@@ -7888,14 +8259,18 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
 
         match fs::write(&config_file_path, initial_template_content) {
             Ok(_) => {
-                println!("Created partner programs configuration file: {}",
-                        config_file_path.display());
+                println!(
+                    "Created partner programs configuration file: {}",
+                    config_file_path.display()
+                );
                 println!("Edit this file to add your custom executables for file opening");
-            },
+            }
             Err(error) => {
-                eprintln!("Warning: Could not create partner programs configuration file at {}: {}",
-                         config_file_path.display(),
-                         error);
+                eprintln!(
+                    "Warning: Could not create partner programs configuration file at {}: {}",
+                    config_file_path.display(),
+                    error
+                );
             }
         }
         // Return empty vector since new file has no configured programs yet
@@ -7906,9 +8281,11 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
     let file_contents = match fs::read_to_string(&config_file_path) {
         Ok(contents) => contents,
         Err(error) => {
-            eprintln!("Warning: Could not read partner programs file at {}: {}",
-                     config_file_path.display(),
-                     error);
+            eprintln!(
+                "Warning: Could not read partner programs file at {}: {}",
+                config_file_path.display(),
+                error
+            );
             return Vec::new(); // Graceful degradation
         }
     };
@@ -7930,17 +8307,21 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
 
         // Validation 1: Check if path exists in filesystem
         if !program_path.exists() {
-            eprintln!("Warning: Partner program path does not exist (line {}): {}",
-                     line_index + 1,
-                     trimmed_line);
+            eprintln!(
+                "Warning: Partner program path does not exist (line {}): {}",
+                line_index + 1,
+                trimmed_line
+            );
             continue;
         }
 
         // Validation 2: Check if path points to a file (not directory)
         if !program_path.is_file() {
-            eprintln!("Warning: Partner program path is not a file (line {}): {}",
-                     line_index + 1,
-                     trimmed_line);
+            eprintln!(
+                "Warning: Partner program path is not a file (line {}): {}",
+                line_index + 1,
+                trimmed_line
+            );
             continue;
         }
 
@@ -7953,16 +8334,20 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
                     let permissions = metadata.permissions();
                     // Check if any execute bit is set (owner, group, or other)
                     if permissions.mode() & 0o111 == 0 {
-                        eprintln!("Warning: Partner program lacks execute permissions (line {}): {}",
-                                 line_index + 1,
-                                 trimmed_line);
+                        eprintln!(
+                            "Warning: Partner program lacks execute permissions (line {}): {}",
+                            line_index + 1,
+                            trimmed_line
+                        );
                         continue;
                     }
-                },
+                }
                 Err(error) => {
-                    eprintln!("Warning: Could not check permissions for partner program (line {}): {}",
-                             line_index + 1,
-                             error);
+                    eprintln!(
+                        "Warning: Could not check permissions for partner program (line {}): {}",
+                        line_index + 1,
+                        error
+                    );
                     continue;
                 }
             }
@@ -8018,7 +8403,8 @@ fn read_partner_programs_file() -> Vec<PathBuf> {
 /// - Returns something meaningful even for unusual path structures
 /// - Keeps the display compact and scannable for users
 fn extract_program_display_name(program_path: &PathBuf) -> String {
-    program_path.file_name()
+    program_path
+        .file_name()
         .and_then(|name| name.to_str())
         .map(|name| name.to_string())
         .unwrap_or_else(|| {
@@ -8108,18 +8494,21 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
     }
 
     if !program_path.is_file() {
-        return Err(FileFantasticError::InvalidName(
-            format!("Partner program is not a file: {}", program_path.display())
-        ));
+        return Err(FileFantasticError::InvalidName(format!(
+            "Partner program is not a file: {}",
+            program_path.display()
+        )));
     }
 
     // Launch using platform-specific terminal commands (reusing existing logic patterns)
     #[cfg(target_os = "macos")]
     {
         // Build command string for macOS Terminal.app
-        let command_string = format!("{} {}",
-                                    program_path.to_string_lossy(),
-                                    file_path.to_string_lossy());
+        let command_string = format!(
+            "{} {}",
+            program_path.to_string_lossy(),
+            file_path.to_string_lossy()
+        );
 
         std::process::Command::new("open")
             .args(["-a", "Terminal"])
@@ -8127,9 +8516,7 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             .spawn()
             .map_err(|e| {
                 eprintln!("Failed to open Terminal.app for partner program: {}", e);
-                FileFantasticError::EditorLaunchFailed(
-                    extract_program_display_name(program_path)
-                )
+                FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
             })?;
     }
 
@@ -8155,9 +8542,7 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
         let mut terminal_launched = false;
         for (terminal, args) in terminal_commands.iter() {
             let mut cmd = std::process::Command::new(terminal);
-            cmd.args(args)
-               .arg(program_path)
-               .arg(file_path);
+            cmd.args(args).arg(program_path).arg(file_path);
 
             if cmd.spawn().is_ok() {
                 terminal_launched = true;
@@ -8173,9 +8558,11 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
     #[cfg(target_os = "windows")]
     {
         // Build command string for Windows cmd.exe
-        let command_string = format!("{} {}",
-                                    program_path.to_string_lossy(),
-                                    file_path.to_string_lossy());
+        let command_string = format!(
+            "{} {}",
+            program_path.to_string_lossy(),
+            file_path.to_string_lossy()
+        );
 
         std::process::Command::new("cmd")
             .args(["/C", "start", "cmd", "/C"])
@@ -8183,15 +8570,15 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             .spawn()
             .map_err(|e| {
                 eprintln!("Failed to open cmd.exe for partner program: {}", e);
-                FileFantasticError::EditorLaunchFailed(
-                    extract_program_display_name(program_path)
-                )
+                FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
             })?;
     }
 
-    println!("Launched partner program: {} with {}",
-             extract_program_display_name(program_path),
-             file_path.file_name().unwrap_or_default().to_string_lossy());
+    println!(
+        "Launched partner program: {} with {}",
+        extract_program_display_name(program_path),
+        file_path.file_name().unwrap_or_default().to_string_lossy()
+    );
 
     Ok(())
 }
@@ -8232,9 +8619,10 @@ fn is_command_available(cmd: &str) -> bool {
 fn open_in_current_terminal(editor: &str, file_path: &PathBuf) -> Result<()> {
     // Check if the specified editor is available
     if !is_command_available(editor) {
-        return Err(FileFantasticError::EditorLaunchFailed(
-            format!("Editor '{}' is not available on this system", editor)
-        ));
+        return Err(FileFantasticError::EditorLaunchFailed(format!(
+            "Editor '{}' is not available on this system",
+            editor
+        )));
     }
 
     // Launch the editor in the current terminal (blocking call)
@@ -8250,9 +8638,10 @@ fn open_in_current_terminal(editor: &str, file_path: &PathBuf) -> Result<()> {
         println!("You have exited {}.", editor);
         Ok(())
     } else {
-        Err(FileFantasticError::EditorLaunchFailed(
-            format!("Editor '{}' exited with non-zero status", editor)
-        ))
+        Err(FileFantasticError::EditorLaunchFailed(format!(
+            "Editor '{}' exited with non-zero status",
+            editor
+        )))
     }
 }
 
@@ -8274,12 +8663,12 @@ fn open_in_current_terminal(editor: &str, file_path: &PathBuf) -> Result<()> {
 /// Creates a new tmux pane and opens the editor in it
 /// The pane closes automatically when the editor exits
 fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Result<()> {
-
     // Check if the specified editor is available
     if !is_command_available(editor) {
-        return Err(FileFantasticError::EditorLaunchFailed(
-            format!("Editor '{}' is not available on this system", editor)
-        ));
+        return Err(FileFantasticError::EditorLaunchFailed(format!(
+            "Editor '{}' is not available on this system",
+            editor
+        )));
     }
 
     // Build the command to run in the new split
@@ -8289,8 +8678,8 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
     let output = std::process::Command::new("tmux")
         .args([
             "split-window",
-            split_type,  // "-v" for vertical, "-h" for horizontal
-            &editor_command
+            split_type, // "-v" for vertical, "-h" for horizontal
+            &editor_command,
         ])
         .output()
         .map_err(|e| {
@@ -8299,15 +8688,21 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
         })?;
 
     if output.status.success() {
-        println!("Opened {} in tmux {} split",
-                 editor,
-                 if split_type == "-v" { "vertical" } else { "horizontal" });
+        println!(
+            "Opened {} in tmux {} split",
+            editor,
+            if split_type == "-v" {
+                "vertical"
+            } else {
+                "horizontal"
+            }
+        );
         Ok(())
     } else {
-        Err(FileFantasticError::EditorLaunchFailed(
-            format!("Failed to create tmux split: {}",
-                    String::from_utf8_lossy(&output.stderr))
-        ))
+        Err(FileFantasticError::EditorLaunchFailed(format!(
+            "Failed to create tmux split: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
     }
 }
 
@@ -8331,10 +8726,14 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
 /// * "code -h -rc" -> Some(("code", "-h -rc")) // Combined flags preserved
 fn parse_special_flags(input: &str) -> Option<(String, String)> {
     let flags = [
-        "-h", "--headless",
-        "-vsplit", "--vertical-split-tmux",
-        "-hsplit", "--horizontal-split-tmux",
-        "-rc", "--rows-and-columns"
+        "-h",
+        "--headless",
+        "-vsplit",
+        "--vertical-split-tmux",
+        "-hsplit",
+        "--horizontal-split-tmux",
+        "-rc",
+        "--rows-and-columns",
     ];
 
     // Check if input contains any special flags
@@ -8400,7 +8799,7 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
     let csv_path_str = csv_path.to_str().ok_or_else(|| {
         FileFantasticError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "Invalid file path - contains non-UTF8 characters"
+            "Invalid file path - contains non-UTF8 characters",
         ))
     })?;
 
@@ -8415,7 +8814,10 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
             println!();
 
             // Prompt user before opening
-            println!("{}You will open the analysis file. Press Enter to continue...{}", YELLOW, RESET);
+            println!(
+                "{}You will open the analysis file. Press Enter to continue...{}",
+                YELLOW, RESET
+            );
             let mut buf = String::new();
             io::stdin().read_line(&mut buf).map_err(|e| {
                 eprintln!("Failed to read input: {}", e);
@@ -8430,7 +8832,7 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
             println!("{}Error: {}{}", RED, error_msg, RESET);
             Err(FileFantasticError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                error_msg
+                error_msg,
             )))
         }
     }
@@ -8516,7 +8918,6 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
 /// Result: Opens with system default application
 /// ```
 fn open_file(file_path: &PathBuf) -> Result<()> {
-
     // Read partner programs configuration (gracefully handles all errors)
     let partner_programs = read_partner_programs_file();
 
@@ -8536,9 +8937,11 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             if index > 0 {
                 numbered_options.push(' ');
             }
-            numbered_options.push_str(&format!("{}. {}",
-                                              index + 1,
-                                              extract_program_display_name(program_path)));
+            numbered_options.push_str(&format!(
+                "{}. {}",
+                index + 1,
+                extract_program_display_name(program_path)
+            ));
         }
 
         format!(
@@ -8565,8 +8968,10 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     if let Some((editor, flags)) = parse_special_flags(user_input) {
         // User must provide an editor with these flags
         if editor.is_empty() {
-            println!("{}Error: You must specify an editor with the {} flag (e.g., 'vim {}'){}",
-                        RED, flags, flags, RESET);
+            println!(
+                "{}Error: You must specify an editor with the {} flag (e.g., 'vim {}'){}",
+                RED, flags, flags, RESET
+            );
             println!("Press Enter to continue...");
             let mut buf = String::new();
             io::stdin().read_line(&mut buf).map_err(|e| {
@@ -8588,8 +8993,10 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     }
                     Err(e) => {
                         // Analysis failed, let user try again
-                        println!("{}Analysis failed: {}. Press Enter to try again...{}",
-                                    RED, e, RESET);
+                        println!(
+                            "{}Analysis failed: {}. Press Enter to try again...{}",
+                            RED, e, RESET
+                        );
                         let mut buf = String::new();
                         io::stdin().read_line(&mut buf).map_err(|e| {
                             eprintln!("Failed to read input: {}", e);
@@ -8625,15 +9032,15 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 // Open in current terminal (headless mode)
                 println!("Opening file in current terminal with {}...", editor);
                 open_in_current_terminal(&editor, &file_to_open)
-            },
+            }
             "-vsplit" => {
                 // Open in vertical tmux split
                 open_in_tmux_split(&editor, &file_to_open, "-v")
-            },
+            }
             "-hsplit" => {
                 // Open in horizontal tmux split
                 open_in_tmux_split(&editor, &file_to_open, "-h")
-            },
+            }
             "" if !editor.is_empty() => {
                 // Just -rc flag or no special terminal flag, open normally
                 // Continue to the regular editor opening logic below
@@ -8647,9 +9054,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         .arg(&file_to_open)
                         .spawn()
                         .map_err(|e| {
-                            FileFantasticError::EditorLaunchFailed(
-                                format!("{}: {}", editor, e)
-                            )
+                            FileFantasticError::EditorLaunchFailed(format!("{}: {}", editor, e))
                         })?;
                     Ok(())
                 } else {
@@ -8660,20 +9065,26 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         {
                             std::process::Command::new("open")
                                 .args(["-a", "Terminal"])
-                                .arg(format!("{} {}; exit", editor, file_to_open.to_string_lossy()))
+                                .arg(format!(
+                                    "{} {}; exit",
+                                    editor,
+                                    file_to_open.to_string_lossy()
+                                ))
                                 .spawn()
                                 .map_err(|e| {
-                                    FileFantasticError::EditorLaunchFailed(
-                                        format!("{}: {}", editor, e)
-                                    )
+                                    FileFantasticError::EditorLaunchFailed(format!(
+                                        "{}: {}",
+                                        editor, e
+                                    ))
                                 })
                                 .map(|_| ())
                         }
                         #[cfg(target_os = "linux")]
                         {
                             // Check if we're in Termux environment first
-                            if std::env::var("TERMUX_VERSION").is_ok() ||
-                               std::path::Path::new("/data/data/com.termux").exists() {
+                            if std::env::var("TERMUX_VERSION").is_ok()
+                                || std::path::Path::new("/data/data/com.termux").exists()
+                            {
                                 // In Termux, try to open directly without spawning new terminal
                                 // since Termux doesn't have traditional terminal emulators
                                 std::process::Command::new("termux-open")
@@ -8686,9 +9097,10 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                             .spawn()
                                     })
                                     .map_err(|e| {
-                                        FileFantasticError::EditorLaunchFailed(
-                                            format!("Termux launch failed for {}: {}", editor, e)
-                                        )
+                                        FileFantasticError::EditorLaunchFailed(format!(
+                                            "Termux launch failed for {}: {}",
+                                            editor, e
+                                        ))
                                     })
                                     .map(|_| ())
                             } else {
@@ -8720,7 +9132,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                     Ok(())
                                 } else {
                                     Err(FileFantasticError::EditorLaunchFailed(
-                                        "No terminal emulator found".to_string()
+                                        "No terminal emulator found".to_string(),
                                     ))
                                 }
                             }
@@ -8729,17 +9141,26 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         {
                             std::process::Command::new("cmd")
                                 .args(["/C", "start", "cmd", "/C"])
-                                .arg(format!("{} {} && pause", editor, file_to_open.to_string_lossy()))
+                                .arg(format!(
+                                    "{} {} && pause",
+                                    editor,
+                                    file_to_open.to_string_lossy()
+                                ))
                                 .spawn()
                                 .map_err(|e| {
-                                    FileFantasticError::EditorLaunchFailed(
-                                        format!("{}: {}", editor, e)
-                                    )
+                                    FileFantasticError::EditorLaunchFailed(format!(
+                                        "{}: {}",
+                                        editor, e
+                                    ))
                                 })
                                 .map(|_| ())
                         }
                         // Fallback for any other platform not covered by cfg directives
-                        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                        #[cfg(not(any(
+                            target_os = "macos",
+                            target_os = "linux",
+                            target_os = "windows"
+                        )))]
                         {
                             // Try to launch editor directly as last resort
                             std::process::Command::new(&editor)
@@ -8756,12 +9177,13 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 
                     terminal_result
                 }
-            },
+            }
             _ => {
                 // This shouldn't happen
-                Err(FileFantasticError::EditorLaunchFailed(
-                    format!("Unknown flag: {}", primary_flag)
-                ))
+                Err(FileFantasticError::EditorLaunchFailed(format!(
+                    "Unknown flag: {}",
+                    primary_flag
+                )))
             }
         };
 
@@ -8770,7 +9192,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             Ok(_) => return Ok(()),
             Err(e) => {
                 // Display error and re-prompt
-                println!("{}Error: {}{}",RED, e, RESET);
+                println!("{}Error: {}{}", RED, e, RESET);
                 println!("Press Enter to continue...");
                 let mut buf = String::new();
                 io::stdin().read_line(&mut buf).map_err(|e| {
@@ -8781,7 +9203,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             }
         }
     }
-
 
     // Handle empty input - use system default (existing functionality)
     if user_input.is_empty() {
@@ -8823,14 +9244,20 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     if let Ok(program_number) = user_input.parse::<usize>() {
         if program_number > 0 && program_number <= partner_programs.len() {
             let selected_program = &partner_programs[program_number - 1];
-            println!("Launching partner program: {}", extract_program_display_name(selected_program));
+            println!(
+                "Launching partner program: {}",
+                extract_program_display_name(selected_program)
+            );
 
             // Launch partner program in terminal with proper error handling
             match launch_partner_program_in_terminal(selected_program, file_path) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     // Follow File Fantastic's error handling pattern
-                    println!("Error launching partner program: {}. \nPress Enter to continue", e);
+                    println!(
+                        "Error launching partner program: {}. \nPress Enter to continue",
+                        e
+                    );
                     let mut buf = String::new();
                     io::stdin().read_line(&mut buf).map_err(|e| {
                         eprintln!("Failed to read input: {}", e);
@@ -8844,8 +9271,10 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             }
         } else if !partner_programs.is_empty() {
             // Invalid partner program number
-            println!("Invalid partner program number. Valid range: 1-{}. \nPress Enter to continue",
-                    partner_programs.len());
+            println!(
+                "Invalid partner program number. Valid range: 1-{}. \nPress Enter to continue",
+                partner_programs.len()
+            );
             let mut buf = String::new();
             io::stdin().read_line(&mut buf).map_err(|e| {
                 eprintln!("Failed to read input: {}", e);
@@ -8864,16 +9293,16 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 
     if gui_editors.contains(&editor.to_lowercase().as_str()) {
         // Launch GUI editors directly (existing functionality)
-        match std::process::Command::new(editor)
-            .arg(file_path)
-            .spawn()
-        {
+        match std::process::Command::new(editor).arg(file_path).spawn() {
             Ok(_) => return Ok(()),
             Err(e) => {
                 // Follow existing error handling pattern
                 eprintln!("Error launching {}: {}", editor, e);
                 let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
-                println!("Falling back to system default due to: {}. \nPress Enter to continue", error);
+                println!(
+                    "Falling back to system default due to: {}. \nPress Enter to continue",
+                    error
+                );
                 let mut buf = String::new();
                 io::stdin().read_line(&mut buf).map_err(|e| {
                     eprintln!("Failed to read input: {}", e);
@@ -8923,7 +9352,9 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 
             if !success {
                 // Follow existing error handling pattern
-                println!("No terminal available. Falling back to system default... \nPress Enter to continue");
+                println!(
+                    "No terminal available. Falling back to system default... \nPress Enter to continue"
+                );
                 let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
                 eprintln!("Error: {}", error);
                 let mut buf = String::new();
@@ -8938,7 +9369,11 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         {
             std::process::Command::new("cmd")
                 .args(["/C", "start", "cmd", "/C"])
-                .arg(format!("{} {} && pause", editor, file_path.to_string_lossy()))
+                .arg(format!(
+                    "{} {} && pause",
+                    editor,
+                    file_path.to_string_lossy()
+                ))
                 .spawn()
                 .map_err(|e| {
                     eprintln!("Failed to open cmd.exe for editor: {}", e);
@@ -9101,8 +9536,12 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
     let n = t_chars.len();
 
     // Handle empty string cases
-    if m == 0 { return n; }
-    if n == 0 { return m; }
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
 
     // Create two work vectors
     let mut v0: Vec<usize> = (0..=n).collect();
@@ -9119,9 +9558,7 @@ fn levenshtein_distance(s: &str, t: &str) -> usize {
             let insertion_cost = v1[j] + 1;
             let substitution_cost = v0[j] + if s_chars[i] == t_chars[j] { 0 } else { 1 };
 
-            v1[j + 1] = deletion_cost
-                .min(insertion_cost)
-                .min(substitution_cost);
+            v1[j + 1] = deletion_cost.min(insertion_cost).min(substitution_cost);
         }
 
         // Swap vectors for next iteration
@@ -9186,7 +9623,10 @@ fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
             match absolute_path.parent() {
                 Some(parent) => {
                     // Print notice about using parent directory
-                    println!("Note: Using parent directory of file: {}", absolute_path.display());
+                    println!(
+                        "Note: Using parent directory of file: {}",
+                        absolute_path.display()
+                    );
                     println!("Directory: {}", parent.display());
                     println!("Press Enter to continue...");
                     let mut input = String::new();
@@ -9196,18 +9636,25 @@ fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
                     })?;
 
                     Ok(PathBuf::from(parent))
-                },
+                }
                 None => {
                     // This should rarely happen (e.g., with root files on Windows)
-                    eprintln!("Cannot determine parent directory of '{}'", absolute_path.display());
-                    Err(FileFantasticError::InvalidName(absolute_path.display().to_string()))
+                    eprintln!(
+                        "Cannot determine parent directory of '{}'",
+                        absolute_path.display()
+                    );
+                    Err(FileFantasticError::InvalidName(
+                        absolute_path.display().to_string(),
+                    ))
                 }
             }
         }
     } else {
         // Path doesn't exist, notify user and fall back to current directory
-        eprintln!("Warning: Path '{}' does not exist. Starting in current directory.",
-                 absolute_path.display());
+        eprintln!(
+            "Warning: Path '{}' does not exist. Starting in current directory.",
+            absolute_path.display()
+        );
         std::env::current_dir().map_err(|e| {
             eprintln!("Failed to get current directory: {}", e);
             FileFantasticError::Io(e)
@@ -9218,25 +9665,30 @@ fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
 /// Checks if input is a "previous page" command
 /// Supports multiple key options: j, <, [
 fn is_pagination_up_command(input: &str) -> bool {
-    matches!(input, "w" | "j" | "<" | "[" | "up" | "prev" | "," | "+" | "\x1b[A")
+    matches!(
+        input,
+        "w" | "j" | "<" | "[" | "up" | "prev" | "," | "+" | "\x1b[A"
+    )
 }
 
 /// Checks if input is a "next page" command
 /// Supports multiple key options: k, >, ]
 fn is_pagination_down_command(input: &str) -> bool {
-    matches!(input, "x" | "k" | ">" | "]" | "down" | "next" | "." | "-" |"\x1b[B")
+    matches!(
+        input,
+        "x" | "k" | ">" | "]" | "down" | "next" | "." | "-" | "\x1b[B"
+    )
 }
-
 
 #[cfg(test)]
 mod archive_tests_2 {
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
     use std::env;
+    use std::fs;
     use std::io::{Read, Write};
-    use std::time::{SystemTime, UNIX_EPOCH, Duration};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     // Static counter to ensure unique test directories
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -9265,8 +9717,9 @@ mod archive_tests_2 {
         ));
 
         // Create the directory
-        fs::create_dir_all(&temp_dir)
-            .unwrap_or_else(|e| panic!("Failed to create temp dir at {}: {}", temp_dir.display(), e));
+        fs::create_dir_all(&temp_dir).unwrap_or_else(|e| {
+            panic!("Failed to create temp dir at {}: {}", temp_dir.display(), e)
+        });
 
         temp_dir
     }
@@ -9290,22 +9743,44 @@ mod archive_tests_2 {
         let test_dir = create_temp_test_dir();
 
         // Ensure test directory exists
-        assert!(test_dir.exists(), "Test directory should exist at: {}", test_dir.display());
+        assert!(
+            test_dir.exists(),
+            "Test directory should exist at: {}",
+            test_dir.display()
+        );
 
         let test_file = test_dir.join("test_document.txt");
-        fs::write(&test_file, b"Test content for archiving")
-            .unwrap_or_else(|e| panic!("Failed to create test file at {}: {}", test_file.display(), e));
+        fs::write(&test_file, b"Test content for archiving").unwrap_or_else(|e| {
+            panic!(
+                "Failed to create test file at {}: {}",
+                test_file.display(),
+                e
+            )
+        });
 
         // Verify source file was created
-        assert!(test_file.exists(), "Test file should exist at: {}", test_file.display());
+        assert!(
+            test_file.exists(),
+            "Test file should exist at: {}",
+            test_file.display()
+        );
 
         // Create archive subdirectory
         let archive_dir = test_dir.join("archive");
-        fs::create_dir_all(&archive_dir)
-            .unwrap_or_else(|e| panic!("Failed to create archive dir at {}: {}", archive_dir.display(), e));
+        fs::create_dir_all(&archive_dir).unwrap_or_else(|e| {
+            panic!(
+                "Failed to create archive dir at {}: {}",
+                archive_dir.display(),
+                e
+            )
+        });
 
         // Verify archive directory was created
-        assert!(archive_dir.exists(), "Archive directory should exist at: {}", archive_dir.display());
+        assert!(
+            archive_dir.exists(),
+            "Archive directory should exist at: {}",
+            archive_dir.display()
+        );
         assert!(archive_dir.is_dir(), "Archive path should be a directory");
 
         // Test: Copy file with timestamp using the archive timestamp function
@@ -9318,26 +9793,45 @@ mod archive_tests_2 {
         let archived_file = archive_dir.join(format!("test_document_{}.txt", timestamp));
 
         // Debug: Print paths before copy
-        println!("Source file: {} (exists: {})", test_file.display(), test_file.exists());
-        println!("Archive dir: {} (exists: {})", archive_dir.display(), archive_dir.exists());
+        println!(
+            "Source file: {} (exists: {})",
+            test_file.display(),
+            test_file.exists()
+        );
+        println!(
+            "Archive dir: {} (exists: {})",
+            archive_dir.display(),
+            archive_dir.exists()
+        );
         println!("Destination: {}", archived_file.display());
 
         // Ensure parent directory of destination exists
         if let Some(parent) = archived_file.parent() {
-            assert!(parent.exists(), "Parent directory of destination should exist: {}", parent.display());
+            assert!(
+                parent.exists(),
+                "Parent directory of destination should exist: {}",
+                parent.display()
+            );
         }
 
         let result = fs::copy(&test_file, &archived_file);
 
-        assert!(result.is_ok(), "Failed to copy file: {:?}\nFrom: {}\nTo: {}",
-            result, test_file.display(), archived_file.display());
-        assert!(archived_file.exists(), "Archived file should exist at: {}", archived_file.display());
+        assert!(
+            result.is_ok(),
+            "Failed to copy file: {:?}\nFrom: {}\nTo: {}",
+            result,
+            test_file.display(),
+            archived_file.display()
+        );
+        assert!(
+            archived_file.exists(),
+            "Archived file should exist at: {}",
+            archived_file.display()
+        );
 
         // Verify content matches
-        let original_content = fs::read(&test_file)
-            .expect("Failed to read original");
-        let archived_content = fs::read(&archived_file)
-            .expect("Failed to read archive");
+        let original_content = fs::read(&test_file).expect("Failed to read original");
+        let archived_content = fs::read(&archived_file).expect("Failed to read archive");
         assert_eq!(original_content, archived_content, "Content should match");
 
         // Cleanup
@@ -9350,28 +9844,53 @@ mod archive_tests_2 {
         let test_dir = create_temp_test_dir();
 
         // Ensure test directory exists
-        assert!(test_dir.exists(), "Test directory should exist at: {}", test_dir.display());
+        assert!(
+            test_dir.exists(),
+            "Test directory should exist at: {}",
+            test_dir.display()
+        );
 
         let test_file = test_dir.join("report.pdf");
-        fs::write(&test_file, b"PDF content")
-            .unwrap_or_else(|e| panic!("Failed to create test file at {}: {}", test_file.display(), e));
+        fs::write(&test_file, b"PDF content").unwrap_or_else(|e| {
+            panic!(
+                "Failed to create test file at {}: {}",
+                test_file.display(),
+                e
+            )
+        });
 
         // Double-check file was created
-        assert!(test_file.exists(), "Test file should exist at: {}", test_file.display());
+        assert!(
+            test_file.exists(),
+            "Test file should exist at: {}",
+            test_file.display()
+        );
         assert!(test_file.is_file(), "Test file should be a file");
 
         // Read back to verify write succeeded
-        let content = fs::read(&test_file)
-            .unwrap_or_else(|e| panic!("Failed to read test file: {}", e));
-        assert_eq!(content, b"PDF content", "File content should match what was written");
+        let content =
+            fs::read(&test_file).unwrap_or_else(|e| panic!("Failed to read test file: {}", e));
+        assert_eq!(
+            content, b"PDF content",
+            "File content should match what was written"
+        );
 
         // Create archive subdirectory
         let archive_dir = test_dir.join("archive");
-        fs::create_dir_all(&archive_dir)
-            .unwrap_or_else(|e| panic!("Failed to create archive dir at {}: {}", archive_dir.display(), e));
+        fs::create_dir_all(&archive_dir).unwrap_or_else(|e| {
+            panic!(
+                "Failed to create archive dir at {}: {}",
+                archive_dir.display(),
+                e
+            )
+        });
 
         // Verify archive directory was created
-        assert!(archive_dir.exists(), "Archive directory should exist at: {}", archive_dir.display());
+        assert!(
+            archive_dir.exists(),
+            "Archive directory should exist at: {}",
+            archive_dir.display()
+        );
         assert!(archive_dir.is_dir(), "Archive path should be a directory");
 
         // Test: Manually create file with prefix using the correct archive timestamp
@@ -9390,14 +9909,18 @@ mod archive_tests_2 {
         let archived_file = archive_dir.join(&archived_name);
 
         // Debug: Print all paths and their status before copy
-        println!("Source file: {} (exists: {}, is_file: {})",
+        println!(
+            "Source file: {} (exists: {}, is_file: {})",
             test_file.display(),
             test_file.exists(),
-            test_file.is_file());
-        println!("Archive dir: {} (exists: {}, is_dir: {})",
+            test_file.is_file()
+        );
+        println!(
+            "Archive dir: {} (exists: {}, is_dir: {})",
             archive_dir.display(),
             archive_dir.exists(),
-            archive_dir.is_dir());
+            archive_dir.is_dir()
+        );
         println!("Destination filename: {}", archived_name);
         println!("Destination path: {}", archived_file.display());
 
@@ -9413,25 +9936,41 @@ mod archive_tests_2 {
 
         // Copy the file to the archive location
         let result = fs::copy(&test_file, &archived_file);
-        assert!(result.is_ok(), "Failed to copy file with prefix: {:?}\nSource: {}\nDest: {}",
-            result, test_file.display(), archived_file.display());
+        assert!(
+            result.is_ok(),
+            "Failed to copy file with prefix: {:?}\nSource: {}\nDest: {}",
+            result,
+            test_file.display(),
+            archived_file.display()
+        );
 
         // Verify the file exists and has correct prefix
-        assert!(archived_file.exists(), "Archived file should exist at: {}", archived_file.display());
+        assert!(
+            archived_file.exists(),
+            "Archived file should exist at: {}",
+            archived_file.display()
+        );
 
-        let filename = archived_file.file_name()
+        let filename = archived_file
+            .file_name()
             .expect("Should have filename")
             .to_string_lossy();
-        assert!(filename.starts_with(prefix), "Filename '{}' should start with prefix '{}'", filename, prefix);
+        assert!(
+            filename.starts_with(prefix),
+            "Filename '{}' should start with prefix '{}'",
+            filename,
+            prefix
+        );
 
         // Verify the timestamp format is correct (YY_MM_DD_HH_MM_SS)
-        assert!(filename.contains('_'), "Filename should contain underscores from timestamp");
+        assert!(
+            filename.contains('_'),
+            "Filename should contain underscores from timestamp"
+        );
 
         // Verify content integrity
-        let original_content = fs::read(&test_file)
-            .expect("Failed to read original");
-        let archived_content = fs::read(&archived_file)
-            .expect("Failed to read archive");
+        let original_content = fs::read(&test_file).expect("Failed to read original");
+        let archived_content = fs::read(&archived_file).expect("Failed to read archive");
         assert_eq!(original_content, archived_content, "Content should match");
 
         // Cleanup
@@ -9453,7 +9992,10 @@ mod archive_tests_2 {
 
         // Test: Creating again should not fail (idempotent operation)
         let result_again = fs::create_dir_all(&archive_dir);
-        assert!(result_again.is_ok(), "Should succeed when directory already exists");
+        assert!(
+            result_again.is_ok(),
+            "Should succeed when directory already exists"
+        );
 
         // Cleanup
         cleanup_test_dir(&test_dir);
@@ -9491,20 +10033,26 @@ mod archive_tests_2 {
         // Test: Create simple archive using the documented format
         let mut source = File::open(&test_file).expect("Failed to open source");
         let mut contents = Vec::new();
-        source.read_to_end(&mut contents).expect("Failed to read source");
+        source
+            .read_to_end(&mut contents)
+            .expect("Failed to read source");
 
         let mut archive = File::create(&archive_file).expect("Failed to create archive");
         let filename = "data.json";
         let filename_bytes = filename.as_bytes();
 
         // Write archive format: [filename_length:u32][filename][file_size:u64][file_contents]
-        archive.write_all(&(filename_bytes.len() as u32).to_le_bytes())
+        archive
+            .write_all(&(filename_bytes.len() as u32).to_le_bytes())
             .expect("Failed to write name length");
-        archive.write_all(filename_bytes)
+        archive
+            .write_all(filename_bytes)
             .expect("Failed to write filename");
-        archive.write_all(&(contents.len() as u64).to_le_bytes())
+        archive
+            .write_all(&(contents.len() as u64).to_le_bytes())
             .expect("Failed to write content length");
-        archive.write_all(&contents)
+        archive
+            .write_all(&contents)
             .expect("Failed to write contents");
 
         // Verify archive was created and has expected size
@@ -9515,7 +10063,10 @@ mod archive_tests_2 {
 
         // Expected size: 4 (name length) + 9 (filename) + 8 (content length) + content
         let expected_size = 4 + filename_bytes.len() + 8 + contents.len();
-        assert_eq!(archive_size as usize, expected_size, "Archive size should match expected");
+        assert_eq!(
+            archive_size as usize, expected_size,
+            "Archive size should match expected"
+        );
 
         // Cleanup
         cleanup_test_dir(&test_dir);
@@ -9529,7 +10080,11 @@ mod archive_tests_2 {
 
         // Verify format: YY_MM_DD_HH_MM_SS
         let parts: Vec<&str> = timestamp.split('_').collect();
-        assert_eq!(parts.len(), 6, "Timestamp should have 6 parts separated by underscores");
+        assert_eq!(
+            parts.len(),
+            6,
+            "Timestamp should have 6 parts separated by underscores"
+        );
 
         // Verify each part is numeric and has correct length
         assert_eq!(parts[0].len(), 2, "Year should be 2 digits");
@@ -9541,8 +10096,11 @@ mod archive_tests_2 {
 
         // Verify all parts are numeric
         for part in parts {
-            assert!(part.chars().all(|c| c.is_ascii_digit()),
-                "Timestamp part '{}' should only contain digits", part);
+            assert!(
+                part.chars().all(|c| c.is_ascii_digit()),
+                "Timestamp part '{}' should only contain digits",
+                part
+            );
         }
     }
 
@@ -9555,8 +10113,11 @@ mod archive_tests_2 {
         let invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '];
 
         for invalid_char in &invalid_chars {
-            assert!(!timestamp.contains(*invalid_char),
-                "Timestamp should not contain invalid character '{}'", invalid_char);
+            assert!(
+                !timestamp.contains(*invalid_char),
+                "Timestamp should not contain invalid character '{}'",
+                invalid_char
+            );
         }
     }
 }
@@ -9633,8 +10194,10 @@ pub fn file_fantastic() -> Result<()> {
             Err(e) => {
                 match e {
                     FileFantasticError::PermissionDenied(_) => {
-                        eprintln!("Permission denied: Cannot read directory {}",
-                                 current_directory_path.display());
+                        eprintln!(
+                            "Permission denied: Cannot read directory {}",
+                            current_directory_path.display()
+                        );
                         println!("Press Enter to go back to previous directory or 'q' to quit...");
 
                         let mut input = String::new();
@@ -9652,13 +10215,13 @@ pub fn file_fantastic() -> Result<()> {
                             Some(parent) => {
                                 current_directory_path = parent.to_path_buf();
                                 continue;
-                            },
+                            }
                             None => {
                                 eprintln!("Cannot navigate further up. Exiting.");
                                 return Ok(());
                             }
                         }
-                    },
+                    }
                     FileFantasticError::NotFound(_) => {
                         eprintln!("Directory not found: {}", current_directory_path.display());
 
@@ -9667,7 +10230,7 @@ pub fn file_fantastic() -> Result<()> {
                             Some(parent) => {
                                 current_directory_path = parent.to_path_buf();
                                 continue;
-                            },
+                            }
                             None => {
                                 // Last resort: use current working directory
                                 eprintln!("Falling back to current working directory");
@@ -9675,7 +10238,7 @@ pub fn file_fantastic() -> Result<()> {
                                     Ok(cwd) => {
                                         current_directory_path = cwd;
                                         continue;
-                                    },
+                                    }
                                     Err(io_err) => {
                                         eprintln!("Cannot determine current directory: {}", io_err);
                                         return Err(FileFantasticError::Io(io_err));
@@ -9683,7 +10246,7 @@ pub fn file_fantastic() -> Result<()> {
                                 }
                             }
                         }
-                    },
+                    }
                     // Other errors are critical
                     _ => {
                         eprintln!("Error reading directory: {}", e);
@@ -9700,7 +10263,8 @@ pub fn file_fantastic() -> Result<()> {
         let filtered_entries = nav_state.apply_filter(&all_entries);
 
         // Convert from Vec<&FileSystemEntry> to Vec<FileSystemEntry> for pagination
-        let directory_entries: Vec<FileSystemEntry> = filtered_entries.iter()
+        let directory_entries: Vec<FileSystemEntry> = filtered_entries
+            .iter()
             .map(|&entry| FileSystemEntry {
                 file_system_item_name: entry.file_system_item_name.clone(),
                 file_system_item_path: entry.file_system_item_path.clone(),
@@ -9730,7 +10294,7 @@ pub fn file_fantastic() -> Result<()> {
                 nav_state.current_filter,
                 &nav_state, // Pass nav_state for TUI size calculations
             ) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error displaying directory contents: {}", e);
                     eprintln!("Press Enter to try again or 'q' to quit...");
@@ -9751,7 +10315,7 @@ pub fn file_fantastic() -> Result<()> {
             // print!("\n>> "); // for extra space, maybe easier to see
             print!(">> "); // saves space
             match io::stdout().flush() {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Failed to flush stdout: {}", e);
                     // Non-critical error, continue
@@ -9760,7 +10324,7 @@ pub fn file_fantastic() -> Result<()> {
 
             let mut user_input = String::new();
             match io::stdin().read_line(&mut user_input) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error reading input: {}", e);
                     continue; // Try again
@@ -9801,7 +10365,7 @@ pub fn file_fantastic() -> Result<()> {
                             break; // Break inner loop to read new directory
                         } else {
                             match handle_file_open(&entry.file_system_item_path) {
-                                Ok(_) => {},
+                                Ok(_) => {}
                                 Err(e) => {
                                     eprintln!("Error opening file: {}", e);
                                     println!("Press Enter to continue...");
@@ -9827,7 +10391,7 @@ pub fn file_fantastic() -> Result<()> {
                             // Reset navigation state to clean defaults (clear filters, pagination, etc.)
                             nav_state.reset_to_clean_state();
                             break; // Break inner loop to refresh directory
-                        },
+                        }
                         NavigationAction::AdjustTuiSize(adjustment_action) => {
                             // Apply the adjustment to the navigation state
                             apply_tui_adjustment(&mut nav_state, &adjustment_action);
@@ -9837,40 +10401,45 @@ pub fn file_fantastic() -> Result<()> {
                                 nav_state.tui_tall_adjustment,
                                 nav_state.tui_tall_direction_sign,
                                 nav_state.tui_wide_adjustment,
-                                nav_state.tui_wide_direction_sign
+                                nav_state.tui_wide_direction_sign,
                             );
 
                             // Provide clear feedback about what changed
-                            let dimension_name = if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
-                                "Height"
-                            } else {
-                                "Width"
-                            };
+                            let dimension_name =
+                                if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
+                                    "Height"
+                                } else {
+                                    "Width"
+                                };
 
-                            let change_description = if adjustment_action.adjustment_direction_true_is_positive_false_is_negative {
+                            let change_description = if adjustment_action
+                                .adjustment_direction_true_is_positive_false_is_negative
+                            {
                                 "increased"
                             } else {
                                 "decreased"
                             };
 
-                            println!("{} {} by {}. Current settings: {} {}",
-                                    dimension_name,
-                                    change_description,
-                                    adjustment_action.adjustment_magnitude,
-                                    tall_display,
-                                    wide_display);
+                            println!(
+                                "{} {} by {}. Current settings: {} {}",
+                                dimension_name,
+                                change_description,
+                                adjustment_action.adjustment_magnitude,
+                                tall_display,
+                                wide_display
+                            );
 
                             // Brief pause so user can see the feedback
                             std::thread::sleep(std::time::Duration::from_millis(500));
 
                             // Break inner loop to refresh display with new settings
                             break;
-                        },
+                        }
                         NavigationAction::Filter(filter_char) => {
                             nav_state.set_filter(filter_char);
                             nav_state.current_page_index = 0; // Reset to first page after filter change
                             break; // Break inner loop to apply filter
-                        },
+                        }
                         NavigationAction::Sort(command) => {
                             nav_state.toggle_sort(command);
                             nav_state.current_page_index = 0; // Reset to first page after sort change
@@ -9879,7 +10448,7 @@ pub fn file_fantastic() -> Result<()> {
                         NavigationAction::ChangeDirectory(new_path) => {
                             current_directory_path = new_path;
                             nav_state.current_page_index = 0; // Reset to first page in new directory
-                            nav_state.selected_item_index = None;  // clears selection upon new directroy
+                            nav_state.selected_item_index = None; // clears selection upon new directroy
                             break; // Break inner loop to read new directory
                         }
                         NavigationAction::ParentDirectory => {
@@ -9887,24 +10456,22 @@ pub fn file_fantastic() -> Result<()> {
                                 Some(parent) => {
                                     current_directory_path = parent.to_path_buf();
                                     nav_state.current_page_index = 0; // Reset to first page
-                                    nav_state.selected_item_index = None;  // clears fields
+                                    nav_state.selected_item_index = None; // clears fields
                                     break; // Break inner loop to read new directory
-                                },
+                                }
                                 None => {
                                     println!("Already at root directory");
                                 }
                             }
                         }
-                        NavigationAction::OpenFile(ref path) => {
-                            match handle_file_open(path) {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    eprintln!("Error opening file: {}", e);
-                                    println!("Press Enter to continue...");
-                                    let _ = io::stdin().read_line(&mut String::new());
-                                }
+                        NavigationAction::OpenFile(ref path) => match handle_file_open(path) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("Error opening file: {}", e);
+                                println!("Press Enter to continue...");
+                                let _ = io::stdin().read_line(&mut String::new());
                             }
-                        }
+                        },
 
                         // give path blurb
                         NavigationAction::Quit => {
@@ -9912,20 +10479,23 @@ pub fn file_fantastic() -> Result<()> {
                             println!("\nTo continue from this location, run:");
                             println!("cd {}", current_directory_path.display());
                             return Ok(());
-                        },
+                        }
 
                         NavigationAction::OpenNewTerminal => {
                             println!("For tmux: Try vsplit | hsplit   Toggle: ctrl+b -> o");
                             match open_new_terminal(&current_directory_path) {
                                 Ok(_) => {
                                     println!("Opening new terminal... Press Enter to continue");
-                                },
+                                }
                                 Err(e) => {
-                                    println!("Error opening new terminal: {}. Press Enter to continue", e);
+                                    println!(
+                                        "Error opening new terminal: {}. Press Enter to continue",
+                                        e
+                                    );
                                 }
                             }
                             let _ = io::stdin().read_line(&mut String::new());
-                        },
+                        }
 
                         NavigationAction::VsplitTmux => {
                             // This command should simply create a new vertical pane with your default shell.
@@ -9934,12 +10504,13 @@ pub fn file_fantastic() -> Result<()> {
                                 .args([
                                     "split-window",
                                     "-v", // "-v" for vertical or "-h" for horizontal
-                                          // "vi editor_test.txt", // opens editor and closes split after
-                                          // "top", // opens 'top' system monitor, 'q' to close
-                                    "-c", &current_directory_path.to_string_lossy(),
+                                    // "vi editor_test.txt", // opens editor and closes split after
+                                    // "top", // opens 'top' system monitor, 'q' to close
+                                    "-c",
+                                    &current_directory_path.to_string_lossy(),
                                 ])
                                 .output()?;
-                        },
+                        }
 
                         NavigationAction::HsplitTmux => {
                             // This command should create a new horizontal pane with your default shell.
@@ -9948,12 +10519,13 @@ pub fn file_fantastic() -> Result<()> {
                                 .args([
                                     "split-window",
                                     "-h", // "-v" for vertical or "-h" for horizontal
-                                          // "vi editor_test.txt", // opens editor and closes split after
-                                          // "top", // opens 'top' system monitor, 'q' to close
-                                    "-c", &current_directory_path.to_string_lossy(),
+                                    // "vi editor_test.txt", // opens editor and closes split after
+                                    // "top", // opens 'top' system monitor, 'q' to close
+                                    "-c",
+                                    &current_directory_path.to_string_lossy(),
                                 ])
                                 .output()?;
-                        },
+                        }
 
                         NavigationAction::ArchiveModeShortcut => {
                             match state_manager.interactive_archive_selection(
@@ -9964,10 +10536,9 @@ pub fn file_fantastic() -> Result<()> {
                                 Ok(_) => println!("Archive operation completed."),
                                 Err(e) => println!("Error during archive operation: {}", e),
                             }
-                        },
+                        }
                         // NEW: Handle Get-Send-Mode
                         NavigationAction::GetSendMode => {
-
                             // Enter Get-Send-Mode loop
                             loop {
                                 match state_manager.interactive_get_send_mode()? {
@@ -9977,43 +10548,66 @@ pub fn file_fantastic() -> Result<()> {
 
                                         match state_manager.interactive_add_file_to_stack(
                                             &nav_state,
-                                            page_entries,// &all_entries, // Pass ALL page entries for pagination
+                                            page_entries, // &all_entries, // Pass ALL page entries for pagination
                                             &current_directory_path, // Pass current directory path
                                         ) {
                                             Ok(_) => println!("File stack operation completed."),
                                             Err(e) => println!("Error: {}", e),
                                         }
-                                    },
+                                    }
                                     GetSendModeAction::GetFileFromStack => {
                                         match state_manager.interactive_get_file_from_stack() {
                                             Ok(Some(source_file_path)) => {
-                                                println!("Retrieved file: {}", source_file_path.display());
-                                                println!("Copying to current directory: {}", current_directory_path.display());
+                                                println!(
+                                                    "Retrieved file: {}",
+                                                    source_file_path.display()
+                                                );
+                                                println!(
+                                                    "Copying to current directory: {}",
+                                                    current_directory_path.display()
+                                                );
 
                                                 // Copy the file to current directory with archive handling
-                                                match copy_file_with_archive_handling(&source_file_path, &current_directory_path) {
+                                                match copy_file_with_archive_handling(
+                                                    &source_file_path,
+                                                    &current_directory_path,
+                                                ) {
                                                     Ok(final_destination_path) => {
-                                                        println!("✓ Copy operation completed successfully!");
-                                                        println!("Final location: {}", final_destination_path.display());
-                                                    },
+                                                        println!(
+                                                            "✓ Copy operation completed successfully!"
+                                                        );
+                                                        println!(
+                                                            "Final location: {}",
+                                                            final_destination_path.display()
+                                                        );
+                                                    }
                                                     Err(e) => {
                                                         eprintln!("✗ Copy operation failed: {}", e);
-                                                        println!("The file remains in the stack for retry if needed.");
+                                                        println!(
+                                                            "The file remains in the stack for retry if needed."
+                                                        );
 
                                                         // Re-add the file to the stack since copy failed
-                                                        if let Err(re_add_error) = state_manager.add_file_to_stack(source_file_path) {
-                                                            eprintln!("Warning: Could not re-add file to stack: {}", re_add_error);
+                                                        if let Err(re_add_error) = state_manager
+                                                            .add_file_to_stack(source_file_path)
+                                                        {
+                                                            eprintln!(
+                                                                "Warning: Could not re-add file to stack: {}",
+                                                                re_add_error
+                                                            );
                                                         }
                                                     }
                                                 }
 
                                                 println!("Press Enter to continue...");
                                                 let _ = io::stdin().read_line(&mut String::new());
-                                            },
+                                            }
                                             Ok(None) => println!("No file selected."),
-                                            Err(e) => println!("Error getting file from stack: {}", e),
+                                            Err(e) => {
+                                                println!("Error getting file from stack: {}", e)
+                                            }
                                         }
-                                    },
+                                    }
                                     /*
                                     pending future functions to used saved dir-stack items
                                     */
@@ -10024,11 +10618,21 @@ pub fn file_fantastic() -> Result<()> {
                                     //     }
                                     // },
                                     GetSendModeAction::SavePocketDimension => {
-                                        print!("Enter nickname for this location (or Enter for auto): ");
-                                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                                        print!(
+                                            "Enter nickname for this location (or Enter for auto): "
+                                        );
+                                        io::stdout()
+                                            .flush()
+                                            .map_err(|e| FileFantasticError::Io(e))?;
                                         let mut nickname = String::new();
-                                        io::stdin().read_line(&mut nickname).map_err(|e| FileFantasticError::Io(e))?;
-                                        let nickname = if nickname.trim().is_empty() { None } else { Some(nickname.trim().to_string()) };
+                                        io::stdin()
+                                            .read_line(&mut nickname)
+                                            .map_err(|e| FileFantasticError::Io(e))?;
+                                        let nickname = if nickname.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(nickname.trim().to_string())
+                                        };
 
                                         match state_manager.save_pocket_dimension(
                                             current_directory_path.clone(),
@@ -10038,70 +10642,113 @@ pub fn file_fantastic() -> Result<()> {
                                             nav_state.active_search_term.clone(),
                                             nickname,
                                         ) {
-                                            Ok(saved_name) => println!("Saved as pocket dimension: {}", saved_name),
-                                            Err(e) => println!("Error saving pocket dimension: {}", e),
+                                            Ok(saved_name) => println!(
+                                                "Saved as pocket dimension: {}",
+                                                saved_name
+                                            ),
+                                            Err(e) => {
+                                                println!("Error saving pocket dimension: {}", e)
+                                            }
                                         }
-                                    },
+                                    }
                                     GetSendModeAction::GoToPocketDimension => {
                                         match state_manager.interactive_select_pocket_dimension() {
                                             Ok(Some(nickname)) => {
-                                                match state_manager.restore_pocket_dimension(&nickname) {
+                                                match state_manager
+                                                    .restore_pocket_dimension(&nickname)
+                                                {
                                                     Ok(saved_state) => {
                                                         // Restore the complete navigation state including all preferences
-                                                        current_directory_path = saved_state.current_directory_path;
-                                                        nav_state.current_sort_method = saved_state.current_sort_method;
-                                                        nav_state.current_filter = saved_state.current_filter;
-                                                        nav_state.selected_item_index = saved_state.selected_item_index;
-                                                        nav_state.active_search_term = saved_state.active_search_term;
+                                                        current_directory_path =
+                                                            saved_state.current_directory_path;
+                                                        nav_state.current_sort_method =
+                                                            saved_state.current_sort_method;
+                                                        nav_state.current_filter =
+                                                            saved_state.current_filter;
+                                                        nav_state.selected_item_index =
+                                                            saved_state.selected_item_index;
+                                                        nav_state.active_search_term =
+                                                            saved_state.active_search_term;
 
                                                         // Restore TUI size adjustment settings
                                                         // These settings allow each pocket dimension to have its own optimal display configuration
-                                                        nav_state.tui_tall_adjustment = saved_state.tui_tall_adjustment;
-                                                        nav_state.tui_tall_direction_sign = saved_state.tui_tall_direction_sign;
-                                                        nav_state.tui_wide_adjustment = saved_state.tui_wide_adjustment;
-                                                        nav_state.tui_wide_direction_sign = saved_state.tui_wide_direction_sign;
+                                                        nav_state.tui_tall_adjustment =
+                                                            saved_state.tui_tall_adjustment;
+                                                        nav_state.tui_tall_direction_sign =
+                                                            saved_state.tui_tall_direction_sign;
+                                                        nav_state.tui_wide_adjustment =
+                                                            saved_state.tui_wide_adjustment;
+                                                        nav_state.tui_wide_direction_sign =
+                                                            saved_state.tui_wide_direction_sign;
 
                                                         // Restore pagination state
-                                                        nav_state.current_page_index = saved_state.current_page_number;
+                                                        nav_state.current_page_index =
+                                                            saved_state.current_page_number;
 
                                                         // Build a human-readable size adjustment string for display
-                                                        let tall_adjustment_display = if saved_state.tui_tall_adjustment == 0 {
-                                                            String::from("default")
-                                                        } else {
-                                                            format!("tall{}{}",
-                                                                    if saved_state.tui_tall_direction_sign { "+" } else { "-" },
-                                                                    saved_state.tui_tall_adjustment)
-                                                        };
+                                                        let tall_adjustment_display =
+                                                            if saved_state.tui_tall_adjustment == 0
+                                                            {
+                                                                String::from("default")
+                                                            } else {
+                                                                format!(
+                                                                    "tall{}{}",
+                                                                    if saved_state
+                                                                        .tui_tall_direction_sign
+                                                                    {
+                                                                        "+"
+                                                                    } else {
+                                                                        "-"
+                                                                    },
+                                                                    saved_state.tui_tall_adjustment
+                                                                )
+                                                            };
 
-                                                        let wide_adjustment_display = if saved_state.tui_wide_adjustment == 0 {
-                                                            String::from("default")
-                                                        } else {
-                                                            format!("wide{}{}",
-                                                                    if saved_state.tui_wide_direction_sign { "+" } else { "-" },
-                                                                    saved_state.tui_wide_adjustment)
-                                                        };
+                                                        let wide_adjustment_display =
+                                                            if saved_state.tui_wide_adjustment == 0
+                                                            {
+                                                                String::from("default")
+                                                            } else {
+                                                                format!(
+                                                                    "wide{}{}",
+                                                                    if saved_state
+                                                                        .tui_wide_direction_sign
+                                                                    {
+                                                                        "+"
+                                                                    } else {
+                                                                        "-"
+                                                                    },
+                                                                    saved_state.tui_wide_adjustment
+                                                                )
+                                                            };
 
                                                         // Inform user of successful restoration with details
-                                                        println!("Jumped to pocket dimension: {} (page {}, size: {} {})",
-                                                                nickname,
-                                                                saved_state.current_page_number + 1,
-                                                                tall_adjustment_display,
-                                                                wide_adjustment_display);
+                                                        println!(
+                                                            "Jumped to pocket dimension: {} (page {}, size: {} {})",
+                                                            nickname,
+                                                            saved_state.current_page_number + 1,
+                                                            tall_adjustment_display,
+                                                            wide_adjustment_display
+                                                        );
 
                                                         break; // Exit Get-Send-Mode and refresh directory with restored settings
-                                                    },
+                                                    }
                                                     Err(e) => {
                                                         // Handle restoration errors gracefully
-                                                        println!("Error restoring pocket dimension: {}", e);
+                                                        println!(
+                                                            "Error restoring pocket dimension: {}",
+                                                            e
+                                                        );
                                                         println!("Press Enter to continue...");
-                                                        let _ = io::stdin().read_line(&mut String::new());
+                                                        let _ = io::stdin()
+                                                            .read_line(&mut String::new());
                                                     }
                                                 }
-                                            },
+                                            }
                                             Ok(None) => {
                                                 // User cancelled selection
                                                 println!("No pocket dimension selected.");
-                                            },
+                                            }
                                             Err(e) => {
                                                 // Handle selection errors
                                                 println!("Error selecting pocket dimension: {}", e);
@@ -10109,21 +10756,27 @@ pub fn file_fantastic() -> Result<()> {
                                                 let _ = io::stdin().read_line(&mut String::new());
                                             }
                                         }
-                                    },
+                                    }
                                     GetSendModeAction::ViewStacks => {
                                         println!("\n=== Current Status ===");
                                         println!("{}", state_manager.get_stack_summary());
 
                                         if !state_manager.file_path_stack.is_empty() {
                                             println!("\nFile Stack:");
-                                            for (i, file) in state_manager.file_path_stack.iter().enumerate() {
+                                            for (i, file) in
+                                                state_manager.file_path_stack.iter().enumerate()
+                                            {
                                                 println!("  {}. {}", i + 1, file.display());
                                             }
                                         }
 
                                         if !state_manager.directory_path_stack.is_empty() {
                                             println!("\nDirectory Stack:");
-                                            for (i, dir) in state_manager.directory_path_stack.iter().enumerate() {
+                                            for (i, dir) in state_manager
+                                                .directory_path_stack
+                                                .iter()
+                                                .enumerate()
+                                            {
                                                 println!("  {}. {}", i + 1, dir.display());
                                             }
                                         }
@@ -10131,14 +10784,21 @@ pub fn file_fantastic() -> Result<()> {
                                         if !state_manager.pocket_dimensions.is_empty() {
                                             println!("\nPocket Dimensions:");
                                             let dimensions = state_manager.list_pocket_dimensions();
-                                            for (i, (nickname, state)) in dimensions.iter().enumerate() {
-                                                println!("  {}. {} - {}", i + 1, nickname, state.description);
+                                            for (i, (nickname, state)) in
+                                                dimensions.iter().enumerate()
+                                            {
+                                                println!(
+                                                    "  {}. {} - {}",
+                                                    i + 1,
+                                                    nickname,
+                                                    state.description
+                                                );
                                             }
                                         }
 
                                         println!("\nPress Enter to continue...");
                                         let _ = io::stdin().read_line(&mut String::new());
-                                    },
+                                    }
                                     GetSendModeAction::ArchiveSelection => {
                                         match state_manager.interactive_archive_selection(
                                             &nav_state,
@@ -10146,32 +10806,38 @@ pub fn file_fantastic() -> Result<()> {
                                             &current_directory_path,
                                         ) {
                                             Ok(_) => println!("Archive operation completed."),
-                                            Err(e) => println!("Error during archive operation: {}", e),
+                                            Err(e) => {
+                                                println!("Error during archive operation: {}", e)
+                                            }
                                         }
-                                    },
+                                    }
                                     GetSendModeAction::ClearAll => {
                                         print!("Clear all stacks and pocket dimensions? (y/N): ");
-                                        io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+                                        io::stdout()
+                                            .flush()
+                                            .map_err(|e| FileFantasticError::Io(e))?;
                                         let mut response = String::new();
-                                        io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+                                        io::stdin()
+                                            .read_line(&mut response)
+                                            .map_err(|e| FileFantasticError::Io(e))?;
 
                                         if response.trim().eq_ignore_ascii_case("y") {
                                             state_manager.clear_all();
                                             println!("All stacks and pocket dimensions cleared.");
                                         }
-                                    },
+                                    }
                                     GetSendModeAction::ReturnToBrowser => break,
                                 }
                             }
                             // After exiting Get-Send-Mode, break to refresh directory
                             break;
-                        },
+                        }
                         NavigationAction::Invalid => {
-                            println!("Not an item number. Please press Enter to continue...");  // TODO
+                            println!("Not an item number. Please press Enter to continue..."); // TODO
                             let _ = io::stdin().read_line(&mut String::new());
                         }
                     }
-                },
+                }
                 Err(e) => {
                     eprintln!("Error processing input: {}", e);
                     println!("Press Enter to continue...");
