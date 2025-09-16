@@ -428,3 +428,157 @@ fn parse_special_flags(input: &str) -> Option<(String, String)> {
         // } else {
         //     ""
         // };
+
+
+
+    /// Interactive interface to add a file to the file stack
+    ///
+    /// # Purpose
+    /// Provides a simple interactive interface for adding files to the file stack.
+    /// Shows the current directory listing and prompts user to select a file by number.
+    /// Works with the current page view only, utilizing existing navigation state.
+    ///
+    /// # Arguments
+    /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    /// * `current_directory_entries` - Current directory entries to display for selection (current page only)
+    /// * `current_directory_path` - Current directory path for display context
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error with context
+    ///
+    /// # User Interface Workflow
+    ///
+    /// ## Step 1: Display Current View
+    /// - Show current directory contents with numbered items (same as main navigation)
+    /// - This respects current filter and pagination state
+    ///
+    /// ## Step 2: Selection Prompt
+    /// - User selects item by number (same interface as navigation)
+    /// - Can cancel with 'b' for back
+    ///
+    /// ## Step 3: Validation
+    /// - Verify selected item exists in lookup table
+    /// - Ensure selected item is a file (not a directory)
+    ///
+    /// ## Step 4: Add to Stack
+    /// - Add file path to the file stack
+    /// - Display confirmation with updated stack count
+    ///
+    /// # Example Interaction
+    /// ```text
+    /// Current Directory: /home/user/documents
+    ///
+    /// Num  Name                    Size     Modified
+    /// ------------------------------------------------
+    ///  1)  folder1/               -        14:30
+    ///  2)  document.txt           1.2 KB   15:45
+    ///  3)  image.png              500 KB   16:20
+    ///
+    /// === Add File to Stack ===
+    /// Select file to add to stack
+    /// Enter file number (or 'b' to back/cancel): 2
+    ///
+    /// ✓ Added 'document.txt' to file stack. Total files: 1
+    /// ```
+    ///
+    /// # Error Handling
+    /// - Validates numbered selections against navigation lookup table
+    /// - Ensures selected items are files, not directories
+    /// - Provides clear error messages for invalid selections
+    /// - Handles cancellation gracefully
+    /// - Manages IO errors during user interaction
+    pub fn interactive_add_file_tostack(
+        &mut self,
+        nav_state: &NavigationState,
+        current_directory_entries: &[FileSystemEntry],
+        current_directory_path: &PathBuf,
+    ) -> Result<()> {
+        // WORKFLOW STEP 1: Display current directory contents
+        // This shows the current page with existing filters and numbering
+        display_directory_contents(
+            current_directory_entries,
+            current_directory_path,
+            None, // Pagination info handled by main navigation
+            nav_state.current_filter,
+            nav_state,
+        )
+        .map_err(|e| FileFantasticError::Io(e))?;
+
+        // WORKFLOW STEP 2: Prompt for file selection
+        println!("\n=== Add File to Stack ===");
+        println!("Select file to add to stack");
+        print!("Enter file number (or 'b' to back/cancel): ");
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        // Read user input
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        let input = input.trim();
+
+        // Handle cancellation request
+        if input.eq_ignore_ascii_case("b") {
+            println!("Back/Cancelled.");
+            return Ok(());
+        }
+
+        // WORKFLOW STEP 3: Validate and process the user's selection
+        if let Ok(number) = input.parse::<usize>() {
+            // Use navigation state's lookup to find the selected item
+            if let Some(item_info) = nav_state.lookup_item(number) {
+                // Check if selected item is a file (not a directory)
+                if item_info.item_type == FileSystemItemType::Directory {
+                    // User selected a directory - show error and return
+                    let item_name = item_info
+                        .item_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    eprintln!(
+                        "\n✗ Error: '{}' is a directory. Please select a file.",
+                        item_name
+                    );
+                } else {
+                    // WORKFLOW STEP 4: It's a file - add to stack
+
+                    // Extract file name for display
+                    let file_name = item_info
+                        .item_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+
+                    // Add the file to the stack
+                    match self.add_file_to_stack(item_info.item_path.clone()) {
+                        Ok(()) => {
+                            // Success - show confirmation with stack count
+                            println!(
+                                "\n✓ Added '{}' to file stack. Total files: {}",
+                                file_name,
+                                self.file_path_stack.len()
+                            );
+                        }
+                        Err(e) => {
+                            // Failed to add to stack - show error
+                            eprintln!("\n✗ Failed to add file to stack: {}", e);
+                        }
+                    }
+                }
+            } else {
+                // Invalid item number - not in lookup table
+                println!("Error: Invalid item number {}. Please try again.", number);
+            }
+        } else {
+            // Input was not a valid number
+            println!("Error: Please enter a valid number or 'b' to cancel.");
+        }
+
+        // Wait for user acknowledgment before returning to main interface
+        println!("\nPress Enter to continue...");
+        let _ = io::stdin().read_line(&mut String::new());
+
+        Ok(())
+    }

@@ -1655,61 +1655,61 @@ impl NavigationStateManager {
     }
 
     /*pending use of saved directories*/
-    // /// Adds a directory path to the directory stack after validation
-    // ///
-    // /// # Purpose
-    // /// Safely adds a directory path to the directory collection stack after
-    // /// verifying that the path exists and actually points to a directory.
-    // ///
-    // /// # Arguments
-    // /// * `dir_path` - PathBuf pointing to the directory to add
-    // ///
-    // /// # Returns
-    // /// * `Result<()>` - Success or error with validation details
-    // ///
-    // /// # Validation Process
-    // /// 1. Checks that the path exists on the filesystem
-    // /// 2. Verifies that the path points to a directory (not a file)
-    // /// 3. Adds to stack only if both conditions are met
-    // ///
-    // /// # Error Conditions
-    // /// - Path does not exist (NotFound)
-    // /// - Path exists but is not a directory (InvalidName)
-    // ///
-    // /// # Stack Behavior
-    // /// Directories are added to the end of the stack (LIFO - Last In, First Out).
-    // /// This allows users to work with the most recently added directories first.
-    // ///
-    // /// # Usage Context
-    // /// Used for collecting destination directories for operations like:
-    // /// - Copy/move operations
-    // /// - Quick navigation bookmarks
-    // /// - Batch processing targets
-    // ///
-    // /// # Example
-    // /// ```rust
-    // /// let dir_path = PathBuf::from("/home/user/projects");
-    // /// match state_manager.add_directory_to_stack(dir_path) {
-    // ///     Ok(_) => println!("Directory added to stack"),
-    // ///     Err(e) => println!("Failed to add directory: {}", e),
-    // /// }
-    // /// ```
-    // pub fn add_directory_to_stack(&mut self, dir_path: PathBuf) -> Result<()> {
-    //     // Validate that the path exists
-    //     if !dir_path.exists() {
-    //         return Err(FileFantasticError::NotFound(dir_path));
-    //     }
+    /// Adds a directory path to the directory stack after validation
+    ///
+    /// # Purpose
+    /// Safely adds a directory path to the directory collection stack after
+    /// verifying that the path exists and actually points to a directory.
+    ///
+    /// # Arguments
+    /// * `dir_path` - PathBuf pointing to the directory to add
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error with validation details
+    ///
+    /// # Validation Process
+    /// 1. Checks that the path exists on the filesystem
+    /// 2. Verifies that the path points to a directory (not a file)
+    /// 3. Adds to stack only if both conditions are met
+    ///
+    /// # Error Conditions
+    /// - Path does not exist (NotFound)
+    /// - Path exists but is not a directory (InvalidName)
+    ///
+    /// # Stack Behavior
+    /// Directories are added to the end of the stack (LIFO - Last In, First Out).
+    /// This allows users to work with the most recently added directories first.
+    ///
+    /// # Usage Context
+    /// Used for collecting destination directories for operations like:
+    /// - Copy/move operations
+    /// - Quick navigation bookmarks
+    /// - Batch processing targets
+    ///
+    /// # Example
+    /// ```rust
+    /// let dir_path = PathBuf::from("/home/user/projects");
+    /// match state_manager.add_directory_to_stack(dir_path) {
+    ///     Ok(_) => println!("Directory added to stack"),
+    ///     Err(e) => println!("Failed to add directory: {}", e),
+    /// }
+    /// ```
+    pub fn add_directory_to_stack(&mut self, dir_path: PathBuf) -> Result<()> {
+        // Validate that the path exists
+        if !dir_path.exists() {
+            return Err(FileFantasticError::NotFound(dir_path));
+        }
 
-    //     // Validate that the path is actually a directory
-    //     if dir_path.is_dir() {
-    //         self.directory_path_stack.push(dir_path);
-    //         Ok(())
-    //     } else {
-    //         Err(FileFantasticError::InvalidName(
-    //             "Path is not a directory".to_string()
-    //         ))
-    //     }
-    // }
+        // Validate that the path is actually a directory
+        if dir_path.is_dir() {
+            self.directory_path_stack.push(dir_path);
+            Ok(())
+        } else {
+            Err(FileFantasticError::InvalidName(
+                "Path is not a directory".to_string(),
+            ))
+        }
+    }
 
     /// Gets and removes the most recent file from the file stack
     ///
@@ -2237,12 +2237,165 @@ impl NavigationStateManager {
         Ok(())
     }
 
-    /// Interactive interface to add a file to the file stack
+    // /// Interactive interface to add a file to the file stack
+    // ///
+    // /// # Purpose
+    // /// Provides a simple interactive interface for adding files to the file stack.
+    // /// Shows the current directory listing and prompts user to select a file by number.
+    // /// Works with the current page view only, utilizing existing navigation state.
+    // ///
+    // /// # Arguments
+    // /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    // /// * `current_directory_entries` - Current directory entries to display for selection (current page only)
+    // /// * `current_directory_path` - Current directory path for display context
+    // ///
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // ///
+    // /// # User Interface Workflow
+    // ///
+    // /// ## Step 1: Display Current View
+    // /// - Show current directory contents with numbered items (same as main navigation)
+    // /// - This respects current filter and pagination state
+    // ///
+    // /// ## Step 2: Selection Prompt
+    // /// - User selects item by number (same interface as navigation)
+    // /// - Can cancel with 'b' for back
+    // ///
+    // /// ## Step 3: Validation
+    // /// - Verify selected item exists in lookup table
+    // /// - Ensure selected item is a file (not a directory)
+    // ///
+    // /// ## Step 4: Add to Stack
+    // /// - Add file path to the file stack
+    // /// - Display confirmation with updated stack count
+    // ///
+    // /// # Example Interaction
+    // /// ```text
+    // /// Current Directory: /home/user/documents
+    // ///
+    // /// Num  Name                    Size     Modified
+    // /// ------------------------------------------------
+    // ///  1)  folder1/               -        14:30
+    // ///  2)  document.txt           1.2 KB   15:45
+    // ///  3)  image.png              500 KB   16:20
+    // ///
+    // /// === Add File to Stack ===
+    // /// Select file to add to stack
+    // /// Enter file number (or 'b' to back/cancel): 2
+    // ///
+    // /// ✓ Added 'document.txt' to file stack. Total files: 1
+    // /// ```
+    // ///
+    // /// # Error Handling
+    // /// - Validates numbered selections against navigation lookup table
+    // /// - Ensures selected items are files, not directories
+    // /// - Provides clear error messages for invalid selections
+    // /// - Handles cancellation gracefully
+    // /// - Manages IO errors during user interaction
+    // pub fn interactive_add_file_tostack(
+    //     &mut self,
+    //     nav_state: &NavigationState,
+    //     current_directory_entries: &[FileSystemEntry],
+    //     current_directory_path: &PathBuf,
+    // ) -> Result<()> {
+    //     // WORKFLOW STEP 1: Display current directory contents
+    //     // This shows the current page with existing filters and numbering
+    //     display_directory_contents(
+    //         current_directory_entries,
+    //         current_directory_path,
+    //         None, // Pagination info handled by main navigation
+    //         nav_state.current_filter,
+    //         nav_state,
+    //     )
+    //     .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // WORKFLOW STEP 2: Prompt for file selection
+    //     println!("\n=== Add File to Stack ===");
+    //     println!("Select file to add to stack");
+    //     print!("Enter file number (or 'b' to back/cancel): ");
+    //     io::stdout()
+    //         .flush()
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Read user input
+    //     let mut input = String::new();
+    //     io::stdin()
+    //         .read_line(&mut input)
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+    //     let input = input.trim();
+
+    //     // Handle cancellation request
+    //     if input.eq_ignore_ascii_case("b") {
+    //         println!("Back/Cancelled.");
+    //         return Ok(());
+    //     }
+
+    //     // WORKFLOW STEP 3: Validate and process the user's selection
+    //     if let Ok(number) = input.parse::<usize>() {
+    //         // Use navigation state's lookup to find the selected item
+    //         if let Some(item_info) = nav_state.lookup_item(number) {
+    //             // Check if selected item is a file (not a directory)
+    //             if item_info.item_type == FileSystemItemType::Directory {
+    //                 // User selected a directory - show error and return
+    //                 let item_name = item_info
+    //                     .item_path
+    //                     .file_name()
+    //                     .unwrap_or_default()
+    //                     .to_string_lossy();
+    //                 eprintln!(
+    //                     "\n✗ Error: '{}' is a directory. Please select a file.",
+    //                     item_name
+    //                 );
+    //             } else {
+    //                 // WORKFLOW STEP 4: It's a file - add to stack
+
+    //                 // Extract file name for display
+    //                 let file_name = item_info
+    //                     .item_path
+    //                     .file_name()
+    //                     .unwrap_or_default()
+    //                     .to_string_lossy();
+
+    //                 // Add the file to the stack
+    //                 match self.add_file_to_stack(item_info.item_path.clone()) {
+    //                     Ok(()) => {
+    //                         // Success - show confirmation with stack count
+    //                         println!(
+    //                             "\n✓ Added '{}' to file stack. Total files: {}",
+    //                             file_name,
+    //                             self.file_path_stack.len()
+    //                         );
+    //                     }
+    //                     Err(e) => {
+    //                         // Failed to add to stack - show error
+    //                         eprintln!("\n✗ Failed to add file to stack: {}", e);
+    //                     }
+    //                 }
+    //             }
+    //         } else {
+    //             // Invalid item number - not in lookup table
+    //             println!("Error: Invalid item number {}. Please try again.", number);
+    //         }
+    //     } else {
+    //         // Input was not a valid number
+    //         println!("Error: Please enter a valid number or 'b' to cancel.");
+    //     }
+
+    //     // Wait for user acknowledgment before returning to main interface
+    //     println!("\nPress Enter to continue...");
+    //     let _ = io::stdin().read_line(&mut String::new());
+
+    //     Ok(())
+    // }
+
+    /// Interactive interface to add any item (file or directory) to the appropriate stack
     ///
     /// # Purpose
-    /// Provides a simple interactive interface for adding files to the file stack.
-    /// Shows the current directory listing and prompts user to select a file by number.
-    /// Works with the current page view only, utilizing existing navigation state.
+    /// Provides a universal interactive interface for adding items to their respective stacks.
+    /// Automatically determines whether the selected item is a file or directory and routes
+    /// it to the appropriate stack (file_path_stack or directory_path_stack).
+    /// This wrapper eliminates the need for users to pre-determine the item type.
     ///
     /// # Arguments
     /// * `nav_state` - Current navigation state with lookup table for numbered selection
@@ -2252,23 +2405,28 @@ impl NavigationStateManager {
     /// # Returns
     /// * `Result<()>` - Success or error with context
     ///
+    /// # Stack Routing Logic
+    /// - Files → Added to `file_path_stack`
+    /// - Directories → Added to `directory_path_stack`
+    /// - Each type maintains its own separate stack
+    ///
     /// # User Interface Workflow
     ///
     /// ## Step 1: Display Current View
-    /// - Show current directory contents with numbered items (same as main navigation)
-    /// - This respects current filter and pagination state
+    /// - Show current directory contents with numbered items
+    /// - Respects current filter and pagination state
     ///
     /// ## Step 2: Selection Prompt
-    /// - User selects item by number (same interface as navigation)
+    /// - User selects any item by number (file or directory)
     /// - Can cancel with 'b' for back
     ///
-    /// ## Step 3: Validation
-    /// - Verify selected item exists in lookup table
-    /// - Ensure selected item is a file (not a directory)
+    /// ## Step 3: Type Detection
+    /// - System automatically determines if item is file or directory
+    /// - No user input needed for type specification
     ///
-    /// ## Step 4: Add to Stack
-    /// - Add file path to the file stack
-    /// - Display confirmation with updated stack count
+    /// ## Step 4: Add to Appropriate Stack
+    /// - Routes to correct stack based on detected type
+    /// - Displays type-specific confirmation with stack count
     ///
     /// # Example Interaction
     /// ```text
@@ -2278,29 +2436,35 @@ impl NavigationStateManager {
     /// ------------------------------------------------
     ///  1)  folder1/               -        14:30
     ///  2)  document.txt           1.2 KB   15:45
-    ///  3)  image.png              500 KB   16:20
+    ///  3)  images/                -        16:00
+    ///  4)  report.pdf             500 KB   16:20
     ///
-    /// === Add File to Stack ===
-    /// Select file to add to stack
-    /// Enter file number (or 'b' to back/cancel): 2
+    /// === Add Item to Stack ===
+    /// Select item to add to stack (file or directory)
+    /// Enter item number (or 'b' to back/cancel): 1
     ///
-    /// ✓ Added 'document.txt' to file stack. Total files: 1
+    /// ✓ Added directory 'folder1/' to directory stack. Total directories: 1
+    ///
+    /// [Another example]
+    /// Enter item number (or 'b' to back/cancel): 2
+    ///
+    /// ✓ Added file 'document.txt' to file stack. Total files: 3
     /// ```
     ///
     /// # Error Handling
     /// - Validates numbered selections against navigation lookup table
-    /// - Ensures selected items are files, not directories
     /// - Provides clear error messages for invalid selections
     /// - Handles cancellation gracefully
+    /// - Shows appropriate stack type in confirmation messages
     /// - Manages IO errors during user interaction
-    pub fn interactive_add_file_to_stack(
+    pub fn interactive_add_item_to_stack(
         &mut self,
         nav_state: &NavigationState,
         current_directory_entries: &[FileSystemEntry],
         current_directory_path: &PathBuf,
     ) -> Result<()> {
-        // WORKFLOW STEP 1: Display current directory contents
-        // This shows the current page with existing filters and numbering
+        // STEP 1: Display current directory contents
+        // Reuse existing display function to show numbered items
         display_directory_contents(
             current_directory_entries,
             current_directory_path,
@@ -2310,10 +2474,10 @@ impl NavigationStateManager {
         )
         .map_err(|e| FileFantasticError::Io(e))?;
 
-        // WORKFLOW STEP 2: Prompt for file selection
-        println!("\n=== Add File to Stack ===");
-        println!("Select file to add to stack");
-        print!("Enter file number (or 'b' to back/cancel): ");
+        // STEP 2: Prompt for item selection (generic - not file-specific)
+        println!("\n=== Add Item to Stack ===");
+        println!("Select item to add to stack (file or directory)");
+        print!("Enter item number (or 'b' to back/cancel): ");
         io::stdout()
             .flush()
             .map_err(|e| FileFantasticError::Io(e))?;
@@ -2331,45 +2495,51 @@ impl NavigationStateManager {
             return Ok(());
         }
 
-        // WORKFLOW STEP 3: Validate and process the user's selection
+        // STEP 3: Process the user's selection and determine type
         if let Ok(number) = input.parse::<usize>() {
             // Use navigation state's lookup to find the selected item
             if let Some(item_info) = nav_state.lookup_item(number) {
-                // Check if selected item is a file (not a directory)
-                if item_info.item_type == FileSystemItemType::Directory {
-                    // User selected a directory - show error and return
-                    let item_name = item_info
-                        .item_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    eprintln!(
-                        "\n✗ Error: '{}' is a directory. Please select a file.",
-                        item_name
-                    );
-                } else {
-                    // WORKFLOW STEP 4: It's a file - add to stack
+                // Extract item name for display purposes
+                let item_name = item_info
+                    .item_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
 
-                    // Extract file name for display
-                    let file_name = item_info
-                        .item_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-
-                    // Add the file to the stack
-                    match self.add_file_to_stack(item_info.item_path.clone()) {
-                        Ok(()) => {
-                            // Success - show confirmation with stack count
-                            println!(
-                                "\n✓ Added '{}' to file stack. Total files: {}",
-                                file_name,
-                                self.file_path_stack.len()
-                            );
+                // STEP 4: Route to appropriate stack based on item type
+                match item_info.item_type {
+                    FileSystemItemType::Directory => {
+                        // It's a directory - add to directory stack
+                        match self.add_directory_to_stack(item_info.item_path.clone()) {
+                            Ok(()) => {
+                                // Success - show directory-specific confirmation
+                                println!(
+                                    "\n✓ Added directory '{}/' to directory stack. Total directories: {}",
+                                    item_name,
+                                    self.directory_path_stack.len()
+                                );
+                            }
+                            Err(e) => {
+                                // Failed to add directory to stack
+                                eprintln!("\n✗ Failed to add directory to stack: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            // Failed to add to stack - show error
-                            eprintln!("\n✗ Failed to add file to stack: {}", e);
+                    }
+                    FileSystemItemType::File => {
+                        // It's a file - add to file stack
+                        match self.add_file_to_stack(item_info.item_path.clone()) {
+                            Ok(()) => {
+                                // Success - show file-specific confirmation
+                                println!(
+                                    "\n✓ Added file '{}' to file stack. Total files: {}",
+                                    item_name,
+                                    self.file_path_stack.len()
+                                );
+                            }
+                            Err(e) => {
+                                // Failed to add file to stack
+                                eprintln!("\n✗ Failed to add file to stack: {}", e);
+                            }
                         }
                     }
                 }
@@ -2564,6 +2734,72 @@ impl NavigationStateManager {
     //     if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
     //         self.add_directory_to_stack(current_directory.clone())?;
     //         println!("Added to directory stack. Total directories: {}", self.directory_path_stack.len());
+    //     } else {
+    //         println!("Cancelled.");
+    //     }
+
+    //     Ok(())
+    // }
+
+    // /// Interactive interface to save a specific directory to the directory stack
+    // ///
+    // /// # Purpose
+    // /// Provides an interactive confirmation interface for adding a specific directory
+    // /// to the directory stack. Typically used for adding the current working directory
+    // /// without needing to select from a list.
+    // ///
+    // /// # Arguments
+    // /// * `directory_path` - The directory path to potentially add (not necessarily current)
+    // ///
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // ///
+    // /// # User Interface Flow
+    // /// 1. Display the directory path to be added
+    // /// 2. Ask for user confirmation
+    // /// 3. Add to stack if user confirms (default is yes)
+    // /// 4. Display confirmation with stack size
+    // ///
+    // /// # Note on Parameter Name Change
+    // /// Changed from `current_directory` to `directory_path` to better reflect that
+    // /// this can be ANY directory path, not just the current one.
+    // ///
+    // /// # Example Usage
+    // /// ```rust
+    // /// // Add current working directory
+    // /// state_manager.interactive_save_directory_to_stack(&current_dir)?;
+    // ///
+    // /// // Add a specific directory
+    // /// let project_dir = PathBuf::from("/home/user/projects");
+    // /// state_manager.interactive_save_directory_to_stack(&project_dir)?;
+    // /// ```
+    // pub fn interactive_save_directory_to_stack(&mut self, directory_path: &PathBuf) -> Result<()> {
+    //     println!("\n=== Add Directory to Stack ===");
+    //     println!("Directory: {}", directory_path.display());
+
+    //     print!("Add this directory to stack? (Y/n): ");
+    //     io::stdout()
+    //         .flush()
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     let mut response = String::new();
+    //     io::stdin()
+    //         .read_line(&mut response)
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Default to 'yes' if user just presses enter or explicitly says yes
+    //     if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //         match self.add_directory_to_stack(directory_path.clone()) {
+    //             Ok(()) => {
+    //                 println!(
+    //                     "✓ Added to directory stack. Total directories: {}",
+    //                     self.directory_path_stack.len()
+    //                 );
+    //             }
+    //             Err(e) => {
+    //                 eprintln!("✗ Failed to add directory to stack: {}", e);
+    //             }
+    //         }
     //     } else {
     //         println!("Cancelled.");
     //     }
@@ -11216,10 +11452,17 @@ pub fn file_fantastic() -> Result<()> {
                             loop {
                                 match state_manager.interactive_get_send_mode()? {
                                     GetSendModeAction::AddFileToStack => {
+                                        /*
+                                        TODO Plan A:
+                                        get 'item' from stack ...
+                                        a wrapper that picks if item is a file or a directory...
+                                        interactive_add_item_a_file_or_dir_to_stack()
+
+                                        */
                                         // Get currently selected file if any
                                         // let selected_file_path = nav_state.get_selected_item_path();
 
-                                        match state_manager.interactive_add_file_to_stack(
+                                        match state_manager.interactive_add_item_to_stack(
                                             &nav_state,
                                             page_entries, // &all_entries, // Pass ALL page entries for pagination
                                             &current_directory_path, // Pass current directory path
