@@ -10100,6 +10100,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "linux",
+            target_os = "android",
             target_os = "windows",
             target_os = "freebsd",
             target_os = "openbsd",
@@ -10241,6 +10242,29 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 return open_file(file_path); // Ask again
             }
         }
+        #[cfg(target_os = "android")]
+        {
+            // Android/Termux environment - try termux-open first, fallback to vi
+            let termux_result = std::process::Command::new("termux-open")
+                .arg(file_path)
+                .spawn();
+
+            if termux_result.is_err() {
+                // Fallback: termux-open not available or failed, use vi (always available)
+                std::process::Command::new("vi")
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open file on Android system: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+            } else {
+                termux_result.map_err(|e| {
+                    eprintln!("Failed to open file with termux-open on Android: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
+            }
+        }
         #[cfg(any(
             target_os = "freebsd",
             target_os = "openbsd",
@@ -10314,6 +10338,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "linux",
+            target_os = "android",
             target_os = "windows",
             target_os = "freebsd",
             target_os = "openbsd",
