@@ -1164,32 +1164,6 @@ fn create_directory_zip_archive(
 /// }
 /// ```
 fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> Result<bool> {
-    // #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-    // {
-    //     // Use zip command on Unix-like systems (including Android/Termux)
-    //     let output = std::process::Command::new("zip")
-    //         .arg("-r") // Recursive
-    //         .arg(zip_path)
-    //         .arg(source_path)
-    //         .output()
-    //         .map_err(|e| {
-    //             eprintln!("Failed to execute zip command: {}", e);
-    //             eprintln!("Make sure 'zip' is installed on your system");
-    //             // On Android/Termux, provide specific installation hint
-    //             if cfg!(target_os = "android") {
-    //                 eprintln!("On Termux, install zip with: pkg install zip");
-    //             }
-    //             FileFantasticError::Io(e)
-    //         })?;
-
-    //     if output.status.success() {
-    //         Ok(true)
-    //     } else {
-    //         let error_msg = String::from_utf8_lossy(&output.stderr);
-    //         eprintln!("Zip command failed: {}", error_msg);
-    //         Ok(false)
-    //     }
-    // }
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -10244,26 +10218,14 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
         #[cfg(target_os = "android")]
         {
-            // Android/Termux environment - try termux-open first, fallback to vi
-            let termux_result = std::process::Command::new("termux-open")
+            // Android/Termux environment - vi needs to run in foreground with terminal control
+            std::process::Command::new("vi")
                 .arg(file_path)
-                .spawn();
-
-            if termux_result.is_err() {
-                // Fallback: termux-open not available or failed, use vi (always available)
-                std::process::Command::new("vi")
-                    .arg(file_path)
-                    .spawn()
-                    .map_err(|e| {
-                        eprintln!("Failed to open file on Android system: {}", e);
-                        FileFantasticError::Io(e)
-                    })?;
-            } else {
-                termux_result.map_err(|e| {
-                    eprintln!("Failed to open file with termux-open on Android: {}", e);
+                .status() // <-- Blocks and waits, gives terminal control to vi
+                .map_err(|e| {
+                    eprintln!("Failed to open file with vi on Android: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-            }
         }
         #[cfg(any(
             target_os = "freebsd",
