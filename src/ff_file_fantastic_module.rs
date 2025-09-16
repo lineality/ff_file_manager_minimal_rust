@@ -8804,7 +8804,7 @@ fn open_in_current_terminal(editor: &str, file_path: &PathBuf) -> Result<()> {
 /// # Arguments
 /// * `editor` - The editor command to use
 /// * `file_path` - Path to the file to open
-/// * `split_type` - Either "-v" for vertical or "-h" for horizontal split
+/// * `split_type` - Either "-vsplit" for vertical or "-hsplit" for horizontal split
 ///
 /// # Returns
 /// * `Result<()>` - Success or error
@@ -8825,36 +8825,37 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
         )));
     }
 
+    // Explicitly translate our split type flags to tmux split-window arguments
+    let (tmux_split_arg, split_direction) = match split_type {
+        "-vsplit" | "--vertical-split-tmux" => ("-v", "vertical"),
+        "-hsplit" | "--horizontal-split-tmux" => ("-h", "horizontal"),
+        _ => {
+            return Err(FileFantasticError::EditorLaunchFailed(format!(
+                "Invalid split type '{}'. Expected '-vsplit' or '-hsplit'",
+                split_type
+            )));
+        }
+    };
+
     // Build the command to run in the new split
     let editor_command = format!("{} {}", editor, file_path.to_string_lossy());
 
     // Create the tmux split with the editor
     let output = std::process::Command::new("tmux")
-        .args([
-            "split-window",
-            split_type, // "-v" for vertical, "-h" for horizontal
-            &editor_command,
-        ])
+        .args(["split-window", tmux_split_arg, &editor_command])
         .output()
         .map_err(|e| {
-            eprintln!("Failed to create tmux split: {}", e);
+            eprintln!("Failed to create tmux {} split: {}", split_direction, e);
             FileFantasticError::Io(e)
         })?;
 
     if output.status.success() {
-        println!(
-            "Opened {} in tmux {} split",
-            editor,
-            if split_type == "-v" {
-                "vertical"
-            } else {
-                "horizontal"
-            }
-        );
+        println!("Opened {} in tmux {} split", editor, split_direction);
         Ok(())
     } else {
         Err(FileFantasticError::EditorLaunchFailed(format!(
-            "Failed to create tmux split: {}",
+            "Failed to create tmux {} split: {}",
+            split_direction,
             String::from_utf8_lossy(&output.stderr)
         )))
     }
@@ -8862,54 +8863,193 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
 
 /// Parses special flags from user input for headless mode, tmux splits, and CSV analysis
 ///
+/// This function identifies special flags in the input string and normalizes them to their
+/// verbose forms. Terse flags are expanded to their full verbose equivalents for consistency
+/// and clarity in downstream processing.
+///
 /// # Arguments
-/// * `input` - The user input string
+/// * `input` - The user input string containing an editor command and optional flags
 ///
 /// # Returns
-/// * `Option<(String, String)>` - Some((editor, flag)) if a special flag is found, None otherwise
+/// * `Option<(String, String)>` - Some((editor, flags)) if special flags are found, None otherwise
+///   - `editor`: The editor command without the special flags
+///   - `flags`: Space-separated string of normalized (verbose) flags
 ///
 /// # Supported Flags
-/// * `-h` or `--headless` - Open in current terminal
-/// * `-vsplit` or `--vertical-split-tmux` - Open in vertical tmux split
-/// * `-hsplit` or `--horizontal-split-tmux` - Open in horizontal tmux split
-/// * `-rc` or `--rows-and-columns` - Analyze CSV file before opening (CSV files only)
+/// * `-h` or `--headless` - Open in current terminal (normalized to `--headless`)
+/// * `-vsplit` or `--vertical-split-tmux` - Open in vertical tmux split (normalized to `--vertical-split-tmux`)
+/// * `-hsplit` or `--horizontal-split-tmux` - Open in horizontal tmux split (normalized to `--horizontal-split-tmux`)
+/// * `-rc` or `--rows-and-columns` - Analyze CSV file before opening (normalized to `--rows-and-columns`)
 ///
 /// # Examples
-/// * "vim -h" -> Some(("vim", "-h"))
-/// * "nano -rc" -> Some(("nano", "-rc"))
-/// * "code -h -rc" -> Some(("code", "-h -rc")) // Combined flags preserved
+/// * "vim -h" -> Some(("vim", "--headless"))
+/// * "nano -rc" -> Some(("nano", "--rows-and-columns"))
+/// * "code -h -rc" -> Some(("code", "--headless --rows-and-columns"))
+/// * "vim --headless" -> Some(("vim", "--headless"))
+/// * "emacs" -> None
 fn parse_special_flags(input: &str) -> Option<(String, String)> {
-    let flags = [
-        "-h",
-        "--headless",
-        "-vsplit",
-        "--vertical-split-tmux",
-        "-hsplit",
-        "--horizontal-split-tmux",
-        "-rc",
-        "--rows-and-columns",
+    // Define the mapping from terse flags to verbose flags
+    // Using a slice of tuples for easy lookup and conversion
+    let flag_mappings: &[(&str, &str)] = &[
+        ("-h", "--headless"),
+        ("--headless", "--headless"),
+        ("-vsplit", "--vertical-split-tmux"),
+        ("--vertical-split-tmux", "--vertical-split-tmux"),
+        ("-hsplit", "--horizontal-split-tmux"),
+        ("--horizontal-split-tmux", "--horizontal-split-tmux"),
+        ("-rc", "--rows-and-columns"),
+        ("--rows-and-columns", "--rows-and-columns"),
     ];
 
-    // Check if input contains any special flags
-    let mut found_flags = Vec::new();
-    let mut editor_parts = Vec::new();
+    // Create a set of all valid flags (both terse and verbose) for quick lookup
+    let valid_flags: Vec<&str> = flag_mappings.iter().map(|(flag, _)| *flag).collect();
 
+    // Parse the input into individual whitespace-separated parts
     let parts: Vec<&str> = input.split_whitespace().collect();
 
+    // Separate editor parts from flag parts and normalize flags
+    let mut found_normalized_flags = Vec::new();
+    let mut editor_parts = Vec::new();
+
     for part in &parts {
-        if flags.contains(&part.as_ref()) {
-            found_flags.push(part.to_string());
+        // Check if this part is a recognized flag
+        if valid_flags.contains(&part.as_ref()) {
+            // Find the corresponding verbose flag
+            let verbose_flag = flag_mappings
+                .iter()
+                .find(|(terse, _)| terse == part)
+                .map(|(_, verbose)| *verbose);
+
+            // Add the verbose flag to our collection if found
+            if let Some(verbose) = verbose_flag {
+                found_normalized_flags.push(verbose.to_string());
+            }
         } else {
+            // This part is not a flag, so it's part of the editor command
             editor_parts.push(part.to_string());
         }
     }
 
-    if !found_flags.is_empty() {
+    // Return the result based on whether we found any special flags
+    if !found_normalized_flags.is_empty() {
+        // Construct the editor string from non-flag parts
         let editor = editor_parts.join(" ");
-        let flags_str = found_flags.join(" ");
+        // Construct the flags string from normalized flags
+        let flags_str = found_normalized_flags.join(" ");
         Some((editor, flags_str))
     } else {
+        // No special flags were found
         None
+    }
+}
+
+#[cfg(test)]
+mod flags_tests {
+    use super::*;
+
+    #[test]
+    fn test_terse_flag_normalization() {
+        // Test that terse flags are converted to verbose forms
+        assert_eq!(
+            parse_special_flags("vim -h"),
+            Some(("vim".to_string(), "--headless".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("nano -rc"),
+            Some(("nano".to_string(), "--rows-and-columns".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("emacs -vsplit"),
+            Some(("emacs".to_string(), "--vertical-split-tmux".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("code -hsplit"),
+            Some(("code".to_string(), "--horizontal-split-tmux".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_verbose_flags_unchanged() {
+        // Test that verbose flags remain unchanged
+        assert_eq!(
+            parse_special_flags("vim --headless"),
+            Some(("vim".to_string(), "--headless".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("nano --rows-and-columns"),
+            Some(("nano".to_string(), "--rows-and-columns".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("emacs --vertical-split-tmux"),
+            Some(("emacs".to_string(), "--vertical-split-tmux".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("code --horizontal-split-tmux"),
+            Some(("code".to_string(), "--horizontal-split-tmux".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_multiple_flags() {
+        // Test combinations of multiple flags
+        assert_eq!(
+            parse_special_flags("vim -h -rc"),
+            Some((
+                "vim".to_string(),
+                "--headless --rows-and-columns".to_string()
+            ))
+        );
+
+        assert_eq!(
+            parse_special_flags("nano --headless -vsplit"),
+            Some((
+                "nano".to_string(),
+                "--headless --vertical-split-tmux".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_no_special_flags() {
+        // Test that None is returned when no special flags are present
+        assert_eq!(parse_special_flags("vim"), None);
+        assert_eq!(parse_special_flags("nano file.txt"), None);
+        assert_eq!(parse_special_flags("code --some-other-flag"), None);
+    }
+
+    #[test]
+    fn test_complex_editor_command() {
+        // Test with editor commands that have multiple parts
+        assert_eq!(
+            parse_special_flags("/usr/bin/vim -h"),
+            Some(("/usr/bin/vim".to_string(), "--headless".to_string()))
+        );
+
+        assert_eq!(
+            parse_special_flags("env TERM=xterm vim -rc"),
+            Some((
+                "env TERM=xterm vim".to_string(),
+                "--rows-and-columns".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_empty_input() {
+        // Test edge case with empty input
+        assert_eq!(parse_special_flags(""), None);
+    }
+
+    #[test]
+    fn test_whitespace_only() {
+        // Test edge case with only whitespace
+        assert_eq!(parse_special_flags("   "), None);
     }
 }
 
@@ -9135,6 +9275,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             return open_file(file_path); // Re-prompt
         }
 
+        println!("TESTTEST flags {:?}", flags); // For debugging
+
         // Check if -rc flag is present and file is CSV
         let mut file_to_open = file_path.clone();
         if flags.contains("-rc") || flags.contains("--rows-and-columns") {
@@ -9165,35 +9307,38 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             }
         }
 
-        // Now handle the other flags with the appropriate file
+        // Parse the flags string into individual flags
+        let flag_list: Vec<&str> = flags.split_whitespace().collect();
+
         // Extract the primary action flag (for headless/tmux)
-        let primary_flag = if flags.contains("-h") || flags.contains("--headless") {
-            "-h"
-        } else if flags.contains("-vsplit") || flags.contains("--vertical-split-tmux") {
+        let primary_flag = if flag_list.contains(&"--headless") {
+            "--headless" // Changed to avoid confusion
+        } else if flag_list.contains(&"-vsplit") || flag_list.contains(&"--vertical-split-tmux") {
             "-vsplit"
-        } else if flags.contains("-hsplit") || flags.contains("--horizontal-split-tmux") {
+        } else if flag_list.contains(&"-hsplit") || flag_list.contains(&"--horizontal-split-tmux") {
             "-hsplit"
-        } else if flags.contains("-rc") || flags.contains("--rows-and-columns") {
-            // If only -rc flag, open normally (no special terminal mode)
+        } else if flag_list.contains(&"-rc") || flag_list.contains(&"--rows-and-columns") {
             ""
         } else {
             ""
         };
 
+        println!("TESTTEST primary_flag {:?}", primary_flag); // For debugging
+
         // Handle the different flag types
         let result = match primary_flag {
-            "-h" => {
+            "--headless" => {
                 // Open in current terminal (headless mode)
                 println!("Opening file in current terminal with {}...", editor);
                 open_in_current_terminal(&editor, &file_to_open)
             }
             "-vsplit" => {
                 // Open in vertical tmux split
-                open_in_tmux_split(&editor, &file_to_open, "-v")
+                open_in_tmux_split(&editor, &file_to_open, "-vsplit")
             }
             "-hsplit" => {
                 // Open in horizontal tmux split
-                open_in_tmux_split(&editor, &file_to_open, "-h")
+                open_in_tmux_split(&editor, &file_to_open, "-hsplit")
             }
             "" if !editor.is_empty() => {
                 // Just -rc flag or no special terminal flag, open normally
@@ -9720,7 +9865,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 fn handle_file_open(path: &PathBuf) -> Result<()> {
     match open_file(path) {
         Ok(_) => {
-            println!("Opening file... \n\nPress Enter to continue");
+            println!("\nPress Enter to continue");
             let mut buf = String::new();
             io::stdin().read_line(&mut buf).map_err(|e| {
                 eprintln!("Failed to read input: {}", e);

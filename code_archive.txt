@@ -296,3 +296,135 @@ pub fn display_extended_search_results(
 
 //     Ok(archive_directory_path)
 // }
+
+
+// /// Opens a file in a tmux split pane
+// ///
+// /// # Arguments
+// /// * `editor` - The editor command to use
+// /// * `file_path` - Path to the file to open
+// /// * `split_type` - Either "-v" for vertical or "-h" for horizontal split
+// ///
+// /// # Returns
+// /// * `Result<()>` - Success or error
+// ///
+// /// # Prerequisites
+// /// - tmux must be installed and available
+// /// - Must be running inside a tmux session
+// ///
+// /// # Behavior
+// /// Creates a new tmux pane and opens the editor in it
+// /// The pane closes automatically when the editor exits
+// fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Result<()> {
+//     // Check if the specified editor is available
+//     if !is_command_available(editor) {
+//         return Err(FileFantasticError::EditorLaunchFailed(format!(
+//             "Editor '{}' is not available on this system",
+//             editor
+//         )));
+//     }
+
+//     // Build the command to run in the new split
+//     let editor_command = format!("{} {}", editor, file_path.to_string_lossy());
+
+//     // Create the tmux split with the editor
+//     let output = std::process::Command::new("tmux")
+//         .args([
+//             "split-window",
+//             split_type, // "-v" for vertical, "-h" for horizontal
+//             &editor_command,
+//         ])
+//         .output()
+//         .map_err(|e| {
+//             eprintln!("Failed to create tmux split: {}", e);
+//             FileFantasticError::Io(e)
+//         })?;
+
+//     if output.status.success() {
+//         println!(
+//             "Opened {} in tmux {} split",
+//             editor,
+//             if split_type == "-v" {
+//                 "vertical"
+//             } else {
+//                 "horizontal"
+//             }
+//         );
+//         Ok(())
+//     } else {
+//         Err(FileFantasticError::EditorLaunchFailed(format!(
+//             "Failed to create tmux split: {}",
+//             String::from_utf8_lossy(&output.stderr)
+//         )))
+//     }
+// }
+
+
+
+/// Parses special flags from user input for headless mode, tmux splits, and CSV analysis
+///
+/// # Arguments
+/// * `input` - The user input string
+///
+/// # Returns
+/// * `Option<(String, String)>` - Some((editor, flag)) if a special flag is found, None otherwise
+///
+/// # Supported Flags
+/// * `-h` or `--headless` - Open in current terminal
+/// * `-vsplit` or `--vertical-split-tmux` - Open in vertical tmux split
+/// * `-hsplit` or `--horizontal-split-tmux` - Open in horizontal tmux split
+/// * `-rc` or `--rows-and-columns` - Analyze CSV file before opening (CSV files only)
+///
+/// # Examples
+/// * "vim -h" -> Some(("vim", "-h"))
+/// * "nano -rc" -> Some(("nano", "-rc"))
+/// * "code -h -rc" -> Some(("code", "-h -rc")) // Combined flags preserved
+fn parse_special_flags(input: &str) -> Option<(String, String)> {
+    let flags = [
+        "-h",
+        "--headless",
+        "-vsplit",
+        "--vertical-split-tmux",
+        "-hsplit",
+        "--horizontal-split-tmux",
+        "-rc",
+        "--rows-and-columns",
+    ];
+
+    // Check if input contains any special flags
+    let mut found_flags = Vec::new();
+    let mut editor_parts = Vec::new();
+
+    let parts: Vec<&str> = input.split_whitespace().collect();
+
+    for part in &parts {
+        if flags.contains(&part.as_ref()) {
+            found_flags.push(part.to_string());
+        } else {
+            editor_parts.push(part.to_string());
+        }
+    }
+
+    if !found_flags.is_empty() {
+        let editor = editor_parts.join(" ");
+        let flags_str = found_flags.join(" ");
+        Some((editor, flags_str))
+    } else {
+        None
+    }
+}
+
+        // // Now handle the other flags with the appropriate file
+        // // Extract the primary action flag (for headless/tmux)
+        // let primary_flag = if flags.contains("-h") || flags.contains("--headless") {
+        //     "--headless"
+        // } else if flags.contains("-vsplit") || flags.contains("--vertical-split-tmux") {
+        //     "-vsplit"
+        // } else if flags.contains("-hsplit") || flags.contains("--horizontal-split-tmux") {
+        //     "-hsplit"
+        // } else if flags.contains("-rc") || flags.contains("--rows-and-columns") {
+        //     // If only -rc flag, open normally (no special terminal mode)
+        //     ""
+        // } else {
+        //     ""
+        // };
