@@ -9844,7 +9844,41 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         }
                         #[cfg(target_os = "linux")]
                         {
-                            // Check if we're in Termux environment first
+                            // Try different terminal emulators for desktop Linux
+                            let terminal_commands = [
+                                ("gnome-terminal", vec!["--", &editor]),
+                                ("ptyxis", vec!["--", &editor]),
+                                ("konsole", vec!["--e", &editor]),
+                                ("xfce4-terminal", vec!["--command", &editor]),
+                                ("terminator", vec!["-e", &editor]),
+                                ("tilix", vec!["-e", &editor]),
+                                ("kitty", vec!["-e", &editor]),
+                                ("alacritty", vec!["-e", &editor]),
+                                ("xterm", vec!["-e", &editor]),
+                            ];
+
+                            let mut success = false;
+                            for (terminal, args) in terminal_commands.iter() {
+                                let mut cmd = std::process::Command::new(terminal);
+                                cmd.args(args).arg(&file_to_open);
+
+                                if cmd.spawn().is_ok() {
+                                    success = true;
+                                    break;
+                                }
+                            }
+
+                            if success {
+                                Ok(())
+                            } else {
+                                Err(FileFantasticError::EditorLaunchFailed(
+                                    "No terminal emulator found".to_string(),
+                                ))
+                            }
+                        }
+                        #[cfg(target_os = "android")]
+                        {
+                            // Check if we're in Termux environment
                             if std::env::var("TERMUX_VERSION").is_ok()
                                 || std::path::Path::new("/data/data/com.termux").exists()
                             {
@@ -9861,43 +9895,24 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                     })
                                     .map_err(|e| {
                                         FileFantasticError::EditorLaunchFailed(format!(
-                                            "Termux launch failed for {}: {}",
+                                            "Termux/Android launch failed for {}: {}",
                                             editor, e
                                         ))
                                     })
                                     .map(|_| ())
                             } else {
-                                // Try different terminal emulators for desktop Linux
-                                let terminal_commands = [
-                                    ("gnome-terminal", vec!["--", &editor]),
-                                    ("ptyxis", vec!["--", &editor]),
-                                    ("konsole", vec!["--e", &editor]),
-                                    ("xfce4-terminal", vec!["--command", &editor]),
-                                    ("terminator", vec!["-e", &editor]),
-                                    ("tilix", vec!["-e", &editor]),
-                                    ("kitty", vec!["-e", &editor]),
-                                    ("alacritty", vec!["-e", &editor]),
-                                    ("xterm", vec!["-e", &editor]),
-                                ];
-
-                                let mut success = false;
-                                for (terminal, args) in terminal_commands.iter() {
-                                    let mut cmd = std::process::Command::new(terminal);
-                                    cmd.args(args).arg(&file_to_open);
-
-                                    if cmd.spawn().is_ok() {
-                                        success = true;
-                                        break;
-                                    }
-                                }
-
-                                if success {
-                                    Ok(())
-                                } else {
-                                    Err(FileFantasticError::EditorLaunchFailed(
-                                        "No terminal emulator found".to_string(),
-                                    ))
-                                }
+                                // Non-Termux Android environment
+                                // Try to launch editor directly
+                                std::process::Command::new(&editor)
+                                    .arg(&file_to_open)
+                                    .spawn()
+                                    .map_err(|e| {
+                                        FileFantasticError::EditorLaunchFailed(format!(
+                                            "Android launch failed for {}: {}",
+                                            editor, e
+                                        ))
+                                    })
+                                    .map(|_| ())
                             }
                         }
                         #[cfg(any(
@@ -9939,6 +9954,41 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                 ))
                             }
                         }
+                        #[cfg(target_os = "redox")]
+                        {
+                            // Redox OS uses orbital as its windowing system
+                            // and has its own terminal emulator
+                            let terminal_result = std::process::Command::new("orbital")
+                                .arg("terminal")
+                                .arg("-e")
+                                .arg(&editor)
+                                .arg(&file_to_open)
+                                .spawn();
+
+                            if terminal_result.is_err() {
+                                // Fallback: try to launch the editor directly
+                                // Some Redox programs might work without a terminal wrapper
+                                std::process::Command::new(&editor)
+                                    .arg(&file_to_open)
+                                    .spawn()
+                                    .map_err(|e| {
+                                        FileFantasticError::EditorLaunchFailed(format!(
+                                            "Failed to launch {} on Redox OS: {}",
+                                            editor, e
+                                        ))
+                                    })
+                                    .map(|_| ())
+                            } else {
+                                terminal_result
+                                    .map_err(|e| {
+                                        FileFantasticError::EditorLaunchFailed(format!(
+                                            "Failed to open terminal on Redox OS for {}: {}",
+                                            editor, e
+                                        ))
+                                    })
+                                    .map(|_| ())
+                            }
+                        }
                         #[cfg(target_os = "windows")]
                         {
                             std::process::Command::new("cmd")
@@ -9961,11 +10011,13 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         #[cfg(not(any(
                             target_os = "macos",
                             target_os = "linux",
+                            target_os = "android",
                             target_os = "windows",
                             target_os = "freebsd",
                             target_os = "openbsd",
                             target_os = "netbsd",
                             target_os = "dragonfly",
+                            target_os = "redox",
                         )))]
                         {
                             // Try to launch editor directly as last resort
@@ -10036,7 +10088,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd",
-            target_os = "dragonfly"
+            target_os = "dragonfly",
         ))]
         {
             // BSD systems typically use xdg-open if available, otherwise try direct opening
@@ -10060,6 +10112,27 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 })?;
             }
         }
+        #[cfg(target_os = "redox")]
+        {
+            // Redox OS uses 'open' command for default file associations
+            // Similar to macOS but it's a different implementation
+            std::process::Command::new("open")
+                .arg(file_path)
+                .spawn()
+                .or_else(|_| {
+                    // Fallback: try 'orbital-open' if available
+                    std::process::Command::new("orbital-open")
+                        .arg(file_path)
+                        .spawn()
+                })
+                .map_err(|e| {
+                    eprintln!(
+                        "Failed to open file with default application on Redox OS: {}",
+                        e
+                    );
+                    FileFantasticError::Io(e)
+                })?;
+        }
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
@@ -10079,7 +10152,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd",
-            target_os = "dragonfly"
+            target_os = "dragonfly",
+            target_os = "redox",
         )))]
         {
             // Fallback for unsupported platforms
@@ -10218,6 +10292,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
         #[cfg(target_os = "android")]
         {
+            // Note: this compiles but does nothing.
             // Android/Termux environment - vi needs to run in foreground with terminal control
             std::process::Command::new("vi")
                 .arg(file_path)
@@ -10282,6 +10357,35 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 }
             }
         }
+        #[cfg(target_os = "redox")]
+        {
+            // Redox OS: try to open editor in Orbital's terminal
+            let result = std::process::Command::new("orbital")
+                .arg("terminal")
+                .arg("-e")
+                .arg(format!("{} {}", editor, file_path.to_string_lossy()))
+                .spawn();
+
+            if result.is_err() {
+                // Fallback: try to run the editor directly
+                // Some Redox editors might not need a terminal wrapper
+                std::process::Command::new(editor)
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open editor on Redox OS: {}", e);
+                        FileFantasticError::EditorLaunchFailed(editor.to_string())
+                    })?;
+            } else {
+                result.map_err(|e| {
+                    eprintln!(
+                        "Failed to open Orbital terminal for editor on Redox OS: {}",
+                        e
+                    );
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
@@ -10305,7 +10409,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd",
-            target_os = "dragonfly"
+            target_os = "dragonfly",
+            target_os = "redox",
         )))]
         {
             // Fallback for unsupported platforms - try direct execution
