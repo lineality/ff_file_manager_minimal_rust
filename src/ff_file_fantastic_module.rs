@@ -9275,8 +9275,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             return open_file(file_path); // Re-prompt
         }
 
-        println!("TESTTEST flags {:?}", flags); // For debugging
-
         // Check if -rc flag is present and file is CSV
         let mut file_to_open = file_path.clone();
         if flags.contains("-rc") || flags.contains("--rows-and-columns") {
@@ -9322,8 +9320,6 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         } else {
             ""
         };
-
-        println!("TESTTEST primary_flag {:?}", primary_flag); // For debugging
 
         // Handle the different flag types
         let result = match primary_flag {
