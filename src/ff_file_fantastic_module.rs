@@ -9112,6 +9112,45 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                                 }
                             }
                         }
+                        #[cfg(any(
+                            target_os = "freebsd",
+                            target_os = "openbsd",
+                            target_os = "netbsd",
+                            target_os = "dragonfly"
+                        ))]
+                        {
+                            // BSD systems typically use similar terminal emulators to Linux
+                            let terminal_commands = [
+                                ("xterm", vec!["-e", &editor]),
+                                ("rxvt", vec!["-e", &editor]),
+                                ("urxvt", vec!["-e", &editor]),
+                                ("konsole", vec!["--e", &editor]),
+                                ("gnome-terminal", vec!["--", &editor]),
+                                ("xfce4-terminal", vec!["--command", &editor]),
+                                ("kitty", vec!["-e", &editor]),
+                                ("alacritty", vec!["-e", &editor]),
+                                ("sakura", vec!["-e", &editor]),
+                            ];
+
+                            let mut success = false;
+                            for (terminal, args) in terminal_commands.iter() {
+                                let mut cmd = std::process::Command::new(terminal);
+                                cmd.args(args).arg(&file_to_open);
+
+                                if cmd.spawn().is_ok() {
+                                    success = true;
+                                    break;
+                                }
+                            }
+
+                            if success {
+                                Ok(())
+                            } else {
+                                Err(FileFantasticError::EditorLaunchFailed(
+                                    "No terminal emulator found on BSD system".to_string(),
+                                ))
+                            }
+                        }
                         #[cfg(target_os = "windows")]
                         {
                             std::process::Command::new("cmd")
@@ -9134,7 +9173,11 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         #[cfg(not(any(
                             target_os = "macos",
                             target_os = "linux",
-                            target_os = "windows"
+                            target_os = "windows",
+                            target_os = "freebsd",
+                            target_os = "openbsd",
+                            target_os = "netbsd",
+                            target_os = "dragonfly",
                         )))]
                         {
                             // Try to launch editor directly as last resort
