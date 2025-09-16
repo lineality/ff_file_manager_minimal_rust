@@ -423,16 +423,33 @@ Error Handling section starts
 /// ```
 #[derive(Debug)]
 pub enum FileFantasticError {
-    /// Standard IO errors with the original error preserved
+    /// I/O operation error with underlying system error
+    ///
+    /// # Usage
+    /// Wraps standard I/O errors from file operations
+    /// Example: Permission denied, disk full, etc.
     Io(io::Error),
 
-    /// File or directory not found with the path that was attempted
+    /// Path or file not found
+    ///
+    /// # Usage
+    /// When a specified path doesn't exist in the file system
+    /// Contains the path that was not found for context
     NotFound(PathBuf),
 
     /// Permission denied when accessing a file or directory
+    /// Operation not permitted
+    ///
+    /// # Usage
+    /// When an operation is blocked by permissions or system policies
+    /// More specific than a general I/O error
     PermissionDenied(PathBuf),
 
-    /// Invalid file or directory name that cannot be processed
+    /// Invalid file or directory name
+    ///
+    /// # Usage
+    /// When a file/directory name contains invalid characters
+    /// or doesn't meet system requirements
     InvalidName(String),
 
     /// No suitable terminal found for the current platform
@@ -450,6 +467,27 @@ pub enum FileFantasticError {
     /// Levenshtein distance calculation failed due to string length constraints
     /// Contains the problematic filename and the length that exceeded limits
     LevenshteinError { filename: String, length: usize },
+
+    /// Path or file already exists (operation would overwrite)
+    ///
+    /// # Usage
+    /// When an operation would overwrite an existing file or directory
+    /// and overwriting is not desired or safe. Common in copy operations
+    /// where we want to prevent accidental data loss.
+    ///
+    /// # Example
+    /// ```rust
+    /// if destination_path.exists() {
+    ///     return Err(FileFantasticError::AlreadyExists(destination_path));
+    /// }
+    /// ```
+    AlreadyExists(PathBuf),
+    // /// Custom error with message
+    // ///
+    // /// # Usage
+    // /// For application-specific errors that don't fit other categories
+    // /// Provides flexibility for unique error conditions
+    // Custom(String),
 }
 
 impl std::fmt::Display for FileFantasticError {
@@ -476,6 +514,14 @@ impl std::fmt::Display for FileFantasticError {
                 },
                 length
             ),
+            Self::AlreadyExists(path) => {
+                // Enhanced error message with suggestion
+                write!(
+                    f,
+                    "Already exists: {}. Consider renaming or removing the existing item first.",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -484,7 +530,16 @@ impl std::error::Error for FileFantasticError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(err) => Some(err),
-            _ => None,
+            Self::NotFound(_) => None,
+            Self::PermissionDenied(_) => None,
+            Self::InvalidName(_) => None,
+            Self::AlreadyExists(_) => None,
+            Self::NoTerminalFound => None,
+            Self::MetadataError(_) => None,
+            Self::EditorLaunchFailed(_) => None,
+            Self::UnsupportedPlatform => None,
+            Self::LevenshteinError { .. } => None,
+            // _ => None,
         }
     }
 }
@@ -505,6 +560,274 @@ impl From<io::Error> for FileFantasticError {
             _ => Self::Io(err),
         }
     }
+}
+
+// end of error section
+
+/// Represents the type of file system item retrieved from stack
+///
+/// # Purpose
+/// Used to distinguish between files and directories when retrieving
+/// items from stacks, enabling appropriate handling for each type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackItemType {
+    /// A regular file
+    File,
+    /// A directory
+    Directory,
+}
+
+/// Copies a file from stack to destination with proper handling
+///
+/// # Purpose
+/// Helper function that handles file copying from a stack-retrieved path
+/// to a destination directory, with archive handling and error management.
+///
+/// # Arguments
+/// * `source_file_path` - The source file path from stack
+/// * `destination_directory` - The destination directory path
+///
+/// # Returns
+/// * `Result<PathBuf>` - The final destination path after copying
+///
+/// # Features
+/// - Handles archive files appropriately
+/// - Provides clear progress messages
+/// - Returns the final destination path for confirmation
+///
+/// # Error Handling
+/// - Validates source file exists
+/// - Validates destination directory exists
+/// - Handles permission errors
+/// - Manages disk space issues
+pub fn copy_file_from_stack(
+    source_file_path: &PathBuf,
+    destination_directory: &PathBuf,
+) -> Result<PathBuf> {
+    // Validate source exists and is a file
+    if !source_file_path.exists() {
+        return Err(FileFantasticError::NotFound(source_file_path.clone()));
+    }
+
+    if !source_file_path.is_file() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "{} is not a file",
+            source_file_path.display()
+        )));
+    }
+
+    // Validate destination directory exists
+    if !destination_directory.exists() {
+        return Err(FileFantasticError::NotFound(destination_directory.clone()));
+    }
+
+    if !destination_directory.is_dir() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "{} is not a directory",
+            destination_directory.display()
+        )));
+    }
+
+    println!("Copying file: {}", source_file_path.display());
+    println!("To directory: {}", destination_directory.display());
+
+    // Use existing copy_file_with_archive_handling function
+    // This function already handles archives and returns the final path
+    copy_file_with_archive_handling(source_file_path, destination_directory)
+}
+
+/// Recursively copies a directory from stack to destination
+///
+/// # Purpose
+/// Helper function that handles recursive directory copying from a stack-retrieved
+/// path to a destination directory. Creates a new subdirectory in the destination.
+///
+/// # Arguments
+/// * `source_directory_path` - The source directory path from stack
+/// * `destination_directory` - The destination directory where copy will be placed
+///
+/// # Returns
+/// * `Result<PathBuf>` - The final destination directory path after copying
+///
+/// # Behavior
+/// - Creates a new directory with the same name in the destination
+/// - Recursively copies all contents (files and subdirectories)
+/// - Preserves directory structure
+/// - Shows progress for large operations
+///
+/// # Safety Notes
+/// - This function should only be called after user confirmations
+/// - The confirmations are handled in `get_directory_from_stack_helper`
+/// - This performs the actual copy operation
+///
+/// # Error Handling
+/// - Validates source directory exists
+/// - Handles permission errors
+/// - Manages disk space issues
+/// - Reports on partial failures during recursive copy
+pub fn copy_directory_from_stack(
+    source_directory_path: &PathBuf,
+    destination_directory: &PathBuf,
+) -> Result<PathBuf> {
+    // Validate source exists and is a directory
+    if !source_directory_path.exists() {
+        return Err(FileFantasticError::NotFound(source_directory_path.clone()));
+    }
+
+    if !source_directory_path.is_dir() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "{} is not a directory",
+            source_directory_path.display()
+        )));
+    }
+
+    // Validate destination directory exists
+    if !destination_directory.exists() {
+        return Err(FileFantasticError::NotFound(destination_directory.clone()));
+    }
+
+    if !destination_directory.is_dir() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "{} is not a directory",
+            destination_directory.display()
+        )));
+    }
+
+    // Get the source directory name for the destination
+    let dir_name = source_directory_path.file_name().ok_or_else(|| {
+        FileFantasticError::InvalidName("Could not extract directory name".to_string())
+    })?;
+
+    // Create the full destination path
+    let final_destination = destination_directory.join(dir_name);
+
+    // Check if destination already exists
+    if final_destination.exists() {
+        return Err(FileFantasticError::AlreadyExists(final_destination));
+    }
+
+    println!("Starting recursive directory copy...");
+    println!("From: {}/", source_directory_path.display());
+    println!("To: {}/", final_destination.display());
+
+    // Perform recursive copy
+    recursive_copy_directory(source_directory_path, &final_destination)?;
+
+    println!("✓ Directory copy completed successfully!");
+    Ok(final_destination)
+}
+
+/// Internal function to recursively copy directory contents
+///
+/// # Purpose
+/// Performs the actual recursive copy operation for directories.
+/// This is separated from the main function for clarity and reusability.
+///
+/// # Arguments
+/// * `source` - Source directory path
+/// * `destination` - Destination directory path (will be created)
+///
+/// # Returns
+/// * `Result<()>` - Success or error with details
+///
+/// # Implementation Details
+/// - Creates destination directory
+/// - Iterates through all entries
+/// - Recursively handles subdirectories
+/// - Copies files individually
+/// - Maintains permissions where possible
+fn recursive_copy_directory(source: &PathBuf, destination: &PathBuf) -> Result<()> {
+    // Create the destination directory
+    std::fs::create_dir_all(destination).map_err(|e| FileFantasticError::Io(e))?;
+
+    // Read source directory entries
+    let entries = std::fs::read_dir(source).map_err(|e| FileFantasticError::Io(e))?;
+
+    let mut copied_count = 0;
+    let mut error_count = 0;
+
+    // Process each entry
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Warning: Could not read entry: {}", e);
+                error_count += 1;
+                continue;
+            }
+        };
+
+        let entry_path = entry.path();
+        let entry_name = entry.file_name();
+        let dest_path = destination.join(&entry_name);
+
+        // Check if entry is a directory or file
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => {
+                // Recursively copy subdirectory
+                if let Err(e) = recursive_copy_directory(&entry_path, &dest_path) {
+                    eprintln!(
+                        "Warning: Failed to copy directory {}: {}",
+                        entry_path.display(),
+                        e
+                    );
+                    error_count += 1;
+                } else {
+                    copied_count += 1;
+                }
+            }
+            Ok(_) => {
+                // Copy file
+                match std::fs::copy(&entry_path, &dest_path) {
+                    Ok(_) => {
+                        copied_count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to copy file {}: {}",
+                            entry_path.display(),
+                            e
+                        );
+                        error_count += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not determine type for {}: {}",
+                    entry_path.display(),
+                    e
+                );
+                error_count += 1;
+            }
+        }
+    }
+
+    // Report results
+    println!("  Copied {} items", copied_count);
+    if error_count > 0 {
+        eprintln!("  ⚠️  {} items failed to copy", error_count);
+        // Don't fail the entire operation for partial errors
+    }
+
+    Ok(())
+}
+
+/// Result of retrieving an item from stack with type information
+///
+/// # Purpose
+/// Bundles together the item type and path for stack retrieval operations,
+/// allowing the caller to handle files and directories appropriately.
+///
+/// # Fields
+/// * `item_type` - Whether the item is a file or directory
+/// * `path` - The path to the item
+#[derive(Debug, Clone)]
+pub struct StackRetrievalResult {
+    /// The type of the retrieved item
+    pub item_type: StackItemType,
+    /// The path to the retrieved item
+    pub path: PathBuf,
 }
 
 /// Calculates the actual name column width based on user adjustments
@@ -1711,37 +2034,6 @@ impl NavigationStateManager {
         }
     }
 
-    /// Gets and removes the most recent file from the file stack
-    ///
-    /// # Purpose
-    /// Removes and returns the most recently added file from the file stack,
-    /// implementing LIFO (Last In, First Out) behavior.
-    ///
-    /// # Returns
-    /// * `Option<PathBuf>` - The most recent file path, or None if stack is empty
-    ///
-    /// # Stack Behavior
-    /// - Removes the last element added to the stack
-    /// - Returns None if the stack is empty
-    /// - Modifies the stack by removing the returned element
-    ///
-    /// # Usage Context
-    /// Used when performing operations on collected files:
-    /// - Processing files in reverse order of collection
-    /// - Undoing file additions
-    /// - Batch operations where order matters
-    ///
-    /// # Example
-    /// ```rust
-    /// match state_manager.pop_file_from_stack() {
-    ///     Some(file_path) => println!("Processing: {}", file_path.display()),
-    ///     None => println!("No files in stack"),
-    /// }
-    /// ```
-    pub fn pop_file_from_stack(&mut self) -> Option<PathBuf> {
-        self.file_path_stack.pop()
-    }
-
     /// Clears all stacks and pocket dimensions
     ///
     /// # Purpose
@@ -2559,50 +2851,168 @@ impl NavigationStateManager {
         Ok(())
     }
 
-    /// Q&A interface to select and return file from stack
+    /// Interactive interface to get any item (file or directory) from the appropriate stack
     ///
     /// # Purpose
-    /// Provides an interactive interface for selecting a file from the file stack,
-    /// displaying all available files and allowing selection by number.
-    /// This uses the same numbered selection paradigm as the rest of the application.
+    /// Provides a universal interactive interface for retrieving items from their respective stacks.
+    /// Returns both the item type and path, allowing the caller to handle each appropriately.
+    /// For directories, this includes safety confirmations before returning the path for copying.
+    ///
+    /// # Returns
+    /// * `Result<Option<StackRetrievalResult>>` - Item type and path if selected, None if canceled, or error
+    ///
+    /// # Return Value Structure
+    /// The return value includes:
+    /// - `item_type`: Indicates whether it's a File or Directory
+    /// - `path`: The path to the selected item
+    ///
+    /// This allows the caller to:
+    /// - Use appropriate copy mechanisms (simple file copy vs recursive directory copy)
+    /// - Display type-specific messages
+    /// - Apply different validation or processing logic
+    ///
+    /// # Stack Selection Logic
+    /// - User first chooses between file stack or directory stack
+    /// - Then selects specific item from chosen stack
+    /// - Returns type information along with path
+    ///
+    /// # Safety Features
+    /// - Directory operations require double confirmation
+    /// - Clear messaging about operation types
+    /// - Type information prevents accidental mishandling
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// match state_manager.interactive_get_item_from_stack() {
+    ///     Ok(Some(result)) => {
+    ///         match result.item_type {
+    ///             StackItemType::File => {
+    ///                 // Handle file copy
+    ///                 copy_file_with_archive_handling(&result.path, &destination)?;
+    ///             }
+    ///             StackItemType::Directory => {
+    ///                 // Handle directory copy (recursive)
+    ///                 copy_directory_recursively(&result.path, &destination)?;
+    ///             }
+    ///         }
+    ///     }
+    ///     Ok(None) => println!("No item selected"),
+    ///     Err(e) => eprintln!("Error: {}", e),
+    /// }
+    /// ```
+    pub fn interactive_get_item_from_stack(&mut self) -> Result<Option<StackRetrievalResult>> {
+        // Check if both stacks are empty
+        if self.file_path_stack.is_empty() && self.directory_path_stack.is_empty() {
+            println!("Both file and directory stacks are empty.");
+            return Ok(None);
+        }
+
+        println!("\n=== Get Item from Stack ===");
+        println!("Select stack type:");
+
+        // Show available options based on stack contents
+        let mut has_files = false;
+        let mut has_directories = false;
+
+        if !self.file_path_stack.is_empty() {
+            println!("1) File stack ({} items)", self.file_path_stack.len());
+            has_files = true;
+        }
+
+        if !self.directory_path_stack.is_empty() {
+            println!(
+                "2) Directory stack ({} items)",
+                self.directory_path_stack.len()
+            );
+            has_directories = true;
+        }
+
+        // Prompt for stack type selection
+        print!("Enter choice (");
+        if has_files && has_directories {
+            print!("1/2");
+        } else if has_files {
+            print!("1");
+        } else {
+            print!("2");
+        }
+        print!(", or 'c' to cancel): ");
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        // Read user's stack type choice
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        let input = input.trim();
+
+        // Handle cancellation
+        if input.eq_ignore_ascii_case("c") {
+            println!("Cancelled.");
+            return Ok(None);
+        }
+
+        // Route to appropriate stack based on user choice
+        match input {
+            "1" if has_files => {
+                // User chose file stack
+                match self.get_file_from_stack_helper() {
+                    Ok(Some(path)) => Ok(Some(StackRetrievalResult {
+                        item_type: StackItemType::File,
+                        path,
+                    })),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
+            "2" if has_directories => {
+                // User chose directory stack
+                match self.get_directory_from_stack_helper() {
+                    Ok(Some(path)) => Ok(Some(StackRetrievalResult {
+                        item_type: StackItemType::Directory,
+                        path,
+                    })),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
+            _ => {
+                println!("Error: Invalid choice. Please enter a valid option.");
+                Ok(None)
+            }
+        }
+    }
+
+    /// Helper function to select and retrieve a file from the file stack
+    ///
+    /// # Purpose
+    /// Internal helper that handles the file-specific retrieval logic.
+    /// This is essentially the existing `interactive_get_file_from_stack` function
+    /// but renamed to clarify its role as a helper in the new architecture.
     ///
     /// # Returns
     /// * `Result<Option<PathBuf>>` - Selected file path, None if canceled, or error
     ///
-    /// # User Interface Flow
-    /// 1. Check if file stack is empty
-    /// 2. Display all files in the stack with numbers (most recent first)
-    /// 3. Allow user to select by number or default to most recent
-    /// 4. Remove and return the selected file
-    /// 5. Display confirmation of selection
+    /// # Behavior
+    /// - Displays all files in the stack (most recent first)
+    /// - Allows selection by number or default to most recent
+    /// - Returns the file path without removing it from stack
+    /// - No destructive operations performed
     ///
-    /// # Selection Options
-    /// - Enter number: Select specific file by index
-    /// - Enter (empty): Select most recent file (top of stack)
-    /// - 'c': Cancel operation
-    /// - Invalid number: Display error and return None
-    ///
-    /// # Display Format
-    /// Files are displayed in reverse order (most recent first) with 1-based indexing
-    /// to match user expectations and maintain consistency with main interface.
-    ///
-    /// # Example Interaction
-    /// ```text
-    /// === File Stack ===
-    /// 1. document.txt
-    /// 2. image.png
-    /// 3. script.sh
-    /// Select file number (Enter for most recent, 'c' to cancel): 2
-    /// Retrieved: image.png
-    /// ```
-    pub fn interactive_get_file_from_stack(&mut self) -> Result<Option<PathBuf>> {
-        // Check if stack is empty
+    /// # Note
+    /// This function maintains the exact same behavior as the original
+    /// `interactive_get_file_from_stack` for consistency.
+    fn get_file_from_stack_helper(&mut self) -> Result<Option<PathBuf>> {
+        // Check if stack is empty (redundant check for safety)
         if self.file_path_stack.is_empty() {
             println!("File stack is empty.");
             return Ok(None);
         }
 
         println!("\n=== File Stack ===");
+
         // Display files in reverse order (most recent first) for user-friendly numbering
         for (i, file) in self.file_path_stack.iter().enumerate().rev() {
             println!(
@@ -2629,32 +3039,16 @@ impl NavigationStateManager {
             return Ok(None);
         }
 
-        // Default to most recent (pop from end) if no input
+        // Default to most recent if no input
         if input.is_empty() {
-            if let Some(file) = self.pop_file_from_stack() {
+            if let Some(file) = self.file_path_stack.last() {
                 println!(
                     "Retrieved: {}",
                     file.file_name().unwrap_or_default().to_string_lossy()
                 );
-                return Ok(Some(file));
+                return Ok(Some(file.clone()));
             }
         }
-
-        // // // Version to pop-remove item
-        // // Try to parse as index and validate
-        // if let Ok(index) = input.parse::<usize>() {
-        //     if index > 0 && index <= self.file_path_stack.len() {
-        //         // Convert to actual vector index (1-based display to 0-based storage)
-        //         let actual_index = self.file_path_stack.len() - index;
-        //         let file = self.file_path_stack.remove(actual_index);
-        //         println!("Retrieved: {}", file.file_name().unwrap_or_default().to_string_lossy());
-        //         return Ok(Some(file));
-        //     } else {
-        //         println!("Error: Invalid file number {}. Valid range: 1-{}", index, self.file_path_stack.len());
-        //     }
-        // } else {
-        //     println!("Error: Please enter a valid number, press Enter for most recent, or 'c' to cancel.");
-        // }
 
         // Try to parse as index and validate
         if let Ok(index) = input.parse::<usize>() {
@@ -2668,7 +3062,7 @@ impl NavigationStateManager {
                         "Retrieved: {}",
                         file.file_name().unwrap_or_default().to_string_lossy()
                     );
-                    return Ok(Some(file.clone())); // Clone to return ownership
+                    return Ok(Some(file.clone()));
                 } else {
                     println!("Error: Index out of bounds");
                 }
@@ -2686,6 +3080,166 @@ impl NavigationStateManager {
         }
 
         Ok(None)
+    }
+
+    /// Helper function to select a directory from stack and initiate recursive copy
+    ///
+    /// # Purpose
+    /// Internal helper that handles directory-specific retrieval and copy operations.
+    /// Implements double confirmation for safety when performing recursive directory copies.
+    /// This function does NOT delete the original - it creates a copy.
+    ///
+    /// # Returns
+    /// * `Result<Option<PathBuf>>` - Selected directory path if confirmed, None if canceled
+    ///
+    /// # Safety Features
+    /// - Double confirmation required before any operation
+    /// - Clear warnings about recursive nature of operation
+    /// - Explicit messaging that this is a COPY, not a move
+    /// - Multiple cancellation points
+    ///
+    /// # User Flow
+    /// 1. Display available directories in stack
+    /// 2. User selects directory by number
+    /// 3. First confirmation: "Are you sure you want to recursively copy?"
+    /// 4. Second confirmation: "Are you REALLY sure?"
+    /// 5. Return directory path for copy operation if both confirmed
+    ///
+    /// # Important Notes
+    /// - This function returns the path but does NOT perform the actual copy
+    /// - The calling code is responsible for executing the copy operation
+    /// - Original directory remains unchanged in its location
+    ///
+    /// # Example Interaction
+    /// ```text
+    /// === Directory Stack ===
+    /// 1. /home/user/projects/webapp/
+    /// 2. /home/user/documents/reports/
+    /// Select directory number (Enter for most recent, 'c' to cancel): 1
+    ///
+    /// Selected directory: /home/user/projects/webapp/
+    /// |o|  This will RECURSIVELY COPY the entire directory and all its contents.
+    /// >*<  The original directory will NOT be deleted or moved.
+    ///
+    /// Are you sure you want to recursively copy this directory? (y/N): y
+    ///
+    /// |o|  SECOND CONFIRMATION REQUIRED
+    /// Are you REALLY sure you want to copy '/home/user/projects/webapp/'? (y/N): y
+    ///
+    /// ✓ Directory copy confirmed: /home/user/projects/webapp/
+    /// ```
+    fn get_directory_from_stack_helper(&mut self) -> Result<Option<PathBuf>> {
+        // Check if stack is empty (redundant check for safety)
+        if self.directory_path_stack.is_empty() {
+            println!("Directory stack is empty.");
+            return Ok(None);
+        }
+
+        println!("\n=== Directory Stack ===");
+
+        // Display directories in reverse order (most recent first)
+        for (i, dir) in self.directory_path_stack.iter().enumerate().rev() {
+            println!(
+                "{}. {}/",
+                self.directory_path_stack.len() - i,
+                dir.display()
+            );
+        }
+
+        print!("Select directory number (Enter for most recent, 'c' to cancel): ");
+        io::stdout()
+            .flush()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| FileFantasticError::Io(e))?;
+        let input = input.trim();
+
+        // Handle cancellation
+        if input.eq_ignore_ascii_case("c") {
+            println!("Cancelled.");
+            return Ok(None);
+        }
+
+        // Determine which directory was selected
+        let selected_directory: Option<PathBuf> = if input.is_empty() {
+            // Default to most recent (last in stack)
+            self.directory_path_stack.last().cloned()
+        } else if let Ok(index) = input.parse::<usize>() {
+            // Validate index and get directory
+            if index > 0 && index <= self.directory_path_stack.len() {
+                // Convert to actual vector index
+                let actual_index = self.directory_path_stack.len() - index;
+                self.directory_path_stack.get(actual_index).cloned()
+            } else {
+                println!(
+                    "Error: Invalid directory number {}. Valid range: 1-{}",
+                    index,
+                    self.directory_path_stack.len()
+                );
+                return Ok(None);
+            }
+        } else {
+            println!(
+                "Error: Please enter a valid number, press Enter for most recent, or 'c' to cancel."
+            );
+            return Ok(None);
+        };
+
+        // Process selected directory with safety confirmations
+        if let Some(dir_path) = selected_directory {
+            println!("\nSelected directory: {}/", dir_path.display());
+            println!("|o|  This will RECURSIVELY COPY the entire directory and all its contents.");
+            println!(">*<  The original directory will NOT be deleted or moved.");
+
+            // FIRST CONFIRMATION
+            print!("\nAre you sure you want to recursively copy this directory? (y/N): ");
+            io::stdout()
+                .flush()
+                .map_err(|e| FileFantasticError::Io(e))?;
+
+            let mut first_confirmation = String::new();
+            io::stdin()
+                .read_line(&mut first_confirmation)
+                .map_err(|e| FileFantasticError::Io(e))?;
+
+            // Check first confirmation (default to NO for safety)
+            if !first_confirmation.trim().eq_ignore_ascii_case("y") {
+                println!("Operation cancelled.");
+                return Ok(None);
+            }
+
+            // SECOND CONFIRMATION - Extra safety for recursive operations
+            println!("\n|oo|  SECOND CONFIRMATION REQUIRED");
+            print!(
+                "Are you SUPER REALLY sure you want to copy '{}'? (y/N): ",
+                dir_path.display()
+            );
+            io::stdout()
+                .flush()
+                .map_err(|e| FileFantasticError::Io(e))?;
+
+            let mut second_confirmation = String::new();
+            io::stdin()
+                .read_line(&mut second_confirmation)
+                .map_err(|e| FileFantasticError::Io(e))?;
+
+            // Check second confirmation (default to NO for safety)
+            if !second_confirmation.trim().eq_ignore_ascii_case("y") {
+                println!("Operation cancelled at second confirmation.");
+                return Ok(None);
+            }
+
+            // Both confirmations passed - return the directory path
+            println!("\n✓ Directory copy confirmed: {}/", dir_path.display());
+            Ok(Some(dir_path))
+        } else {
+            // Should not reach here, but handle as error case
+            println!("Error: Could not retrieve selected directory.");
+            Ok(None)
+        }
     }
 
     /*
@@ -2942,13 +3496,8 @@ impl NavigationStateManager {
         println!("\n=== Get-Send-Mode ===");
         println!("Current status: {}", self.get_stack_summary());
         println!();
-        println!("1. Add file TO file-stack");
-        println!("2. Get: Save file here, FROM file-stack");
-        // println!("3. Add current directory to stack");
-        /*
-        Pending future functions
-        to use saved directory for something
-        */
+        println!("1. Add item TO stack (file or dir)");
+        println!("2. Get: Save item here, FROM stack");
         println!("3. Save current location as pocket dimension");
         println!("4. Go to pocket dimension");
         println!("5. View stacks & pocket dimensions");
@@ -2968,9 +3517,8 @@ impl NavigationStateManager {
 
         // Process user selection and return appropriate action
         match input.trim() {
-            "1" => Ok(GetSendModeAction::AddFileToStack),
-            "2" => Ok(GetSendModeAction::GetFileFromStack),
-            // "3" => Ok(GetSendModeAction::AddDirectoryToStack),
+            "1" => Ok(GetSendModeAction::AddItemToStack),
+            "2" => Ok(GetSendModeAction::GetItemFromStack),
             "3" => Ok(GetSendModeAction::SavePocketDimension),
             "4" => Ok(GetSendModeAction::GoToPocketDimension),
             "5" => Ok(GetSendModeAction::ViewStacks),
@@ -2997,8 +3545,8 @@ impl NavigationStateManager {
 /// and the action processing logic.
 ///
 /// # Variants
-/// - `AddFileToStack` - Initiate file addition workflow
-/// - `GetFileFromStack` - Initiate file retrieval workflow
+/// - `AddItemToStack` - Initiate file addition workflow
+/// - `GetItemFromStack` - Initiate file retrieval workflow
 /// - `AddDirectoryToStack` - Initiate directory addition workflow
 /// - `SavePocketDimension` - Initiate pocket dimension saving workflow
 /// - `GoToPocketDimension` - Initiate pocket dimension selection and restoration
@@ -3013,7 +3561,7 @@ impl NavigationStateManager {
 /// # Example
 /// ```rust
 /// match action {
-///     GetSendModeAction::AddFileToStack => {
+///     GetSendModeAction::AddItemToStack => {
 ///         // Handle file addition workflow
 ///     },
 ///     GetSendModeAction::ReturnToBrowser => {
@@ -3027,18 +3575,12 @@ impl NavigationStateManager {
 pub enum GetSendModeAction {
     /// Add a file to the file path stack
     /// Triggers the interactive file selection and addition workflow
-    AddFileToStack,
+    AddItemToStack,
 
     /// Retrieve a file from the file path stack
     /// Triggers the interactive file selection and retrieval workflow
-    GetFileFromStack,
+    GetItemFromStack,
 
-    /*
-    pending future functions to use directory stack
-    */
-    // // Add current directory to the directory path stack
-    // // Triggers the directory addition workflow with confirmation
-    // AddDirectoryToStack,
     /// Save current navigation state as a pocket dimension
     /// Triggers the pocket dimension creation workflow with nickname selection
     SavePocketDimension,
@@ -11446,12 +11988,11 @@ pub fn file_fantastic() -> Result<()> {
                                 Err(e) => println!("Error during archive operation: {}", e),
                             }
                         }
-                        // NEW: Handle Get-Send-Mode
                         NavigationAction::GetSendMode => {
                             // Enter Get-Send-Mode loop
                             loop {
                                 match state_manager.interactive_get_send_mode()? {
-                                    GetSendModeAction::AddFileToStack => {
+                                    GetSendModeAction::AddItemToStack => {
                                         /*
                                         TODO Plan A:
                                         get 'item' from stack ...
@@ -11467,72 +12008,92 @@ pub fn file_fantastic() -> Result<()> {
                                             page_entries, // &all_entries, // Pass ALL page entries for pagination
                                             &current_directory_path, // Pass current directory path
                                         ) {
-                                            Ok(_) => println!("File stack operation completed."),
+                                            Ok(_) => println!("Item stack operation completed."),
                                             Err(e) => println!("Error: {}", e),
                                         }
                                     }
-                                    GetSendModeAction::GetFileFromStack => {
-                                        match state_manager.interactive_get_file_from_stack() {
-                                            Ok(Some(source_file_path)) => {
-                                                println!(
-                                                    "Retrieved file: {}",
-                                                    source_file_path.display()
-                                                );
-                                                println!(
-                                                    "Copying to current directory: {}",
-                                                    current_directory_path.display()
-                                                );
+                                    // In your main event handling code:
+                                    GetSendModeAction::GetItemFromStack => {
+                                        match state_manager.interactive_get_item_from_stack() {
+                                            Ok(Some(retrieval_result)) => {
+                                                match retrieval_result.item_type {
+                                                    StackItemType::File => {
+                                                        println!(
+                                                            "Retrieved file: {}",
+                                                            retrieval_result.path.display()
+                                                        );
+                                                        println!(
+                                                            "Copying to current directory: {}",
+                                                            current_directory_path.display()
+                                                        );
 
-                                                // Copy the file to current directory with archive handling
-                                                match copy_file_with_archive_handling(
-                                                    &source_file_path,
-                                                    &current_directory_path,
-                                                ) {
-                                                    Ok(final_destination_path) => {
-                                                        println!(
-                                                            "✓ Copy operation completed successfully!"
-                                                        );
-                                                        println!(
-                                                            "Final location: {}",
-                                                            final_destination_path.display()
-                                                        );
+                                                        // Copy the file to current directory
+                                                        match copy_file_from_stack(
+                                                            &retrieval_result.path,
+                                                            &current_directory_path,
+                                                        ) {
+                                                            Ok(final_destination_path) => {
+                                                                println!(
+                                                                    "✓ File copy operation completed successfully!"
+                                                                );
+                                                                println!(
+                                                                    "Final location: {}",
+                                                                    final_destination_path
+                                                                        .display()
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!(
+                                                                    "✗ File copy operation failed: {}",
+                                                                    e
+                                                                );
+                                                            }
+                                                        }
                                                     }
-                                                    Err(e) => {
-                                                        eprintln!("✗ Copy operation failed: {}", e);
+                                                    StackItemType::Directory => {
                                                         println!(
-                                                            "The file remains in the stack for retry if needed."
+                                                            "Retrieved directory: {}/",
+                                                            retrieval_result.path.display()
+                                                        );
+                                                        println!(
+                                                            "Copying to current directory: {}",
+                                                            current_directory_path.display()
                                                         );
 
-                                                        // Re-add the file to the stack since copy failed
-                                                        if let Err(re_add_error) = state_manager
-                                                            .add_file_to_stack(source_file_path)
-                                                        {
-                                                            eprintln!(
-                                                                "Warning: Could not re-add file to stack: {}",
-                                                                re_add_error
-                                                            );
+                                                        // Copy the directory recursively to current directory
+                                                        match copy_directory_from_stack(
+                                                            &retrieval_result.path,
+                                                            &current_directory_path,
+                                                        ) {
+                                                            Ok(final_destination_path) => {
+                                                                println!(
+                                                                    "✓ Directory copy operation completed successfully!"
+                                                                );
+                                                                println!(
+                                                                    "Final location: {}/",
+                                                                    final_destination_path
+                                                                        .display()
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!(
+                                                                    "✗ Directory copy operation failed: {}",
+                                                                    e
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                 }
 
-                                                println!("Press Enter to continue...");
+                                                println!("\nPress Enter to continue...");
                                                 let _ = io::stdin().read_line(&mut String::new());
                                             }
-                                            Ok(None) => println!("No file selected."),
+                                            Ok(None) => println!("No item selected."),
                                             Err(e) => {
-                                                println!("Error getting file from stack: {}", e)
+                                                println!("Error getting item from stack: {}", e)
                                             }
                                         }
                                     }
-                                    /*
-                                    pending future functions to used saved dir-stack items
-                                    */
-                                    // GetSendModeAction::AddDirectoryToStack => {
-                                    //     match state_manager.interactive_save_directory_to_stack(&current_directory_path) {
-                                    //         Ok(_) => println!("Directory added to stack successfully."),
-                                    //         Err(e) => println!("Error adding directory to stack: {}", e),
-                                    //     }
-                                    // },
                                     GetSendModeAction::SavePocketDimension => {
                                         print!(
                                             "Enter nickname for this location (or Enter for auto): "
