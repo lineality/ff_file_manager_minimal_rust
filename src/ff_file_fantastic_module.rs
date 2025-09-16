@@ -1,8 +1,14 @@
 // src/lib.rs (or src/ff_file_fantastic_module.rs)
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
+
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small
@@ -340,12 +346,6 @@ When adding new platforms to conditional compilation, always remember to update 
 /// - default terminal size 80/24
 /// - or first MVP, terminal size is default terminal size
 /// - for MVP...mouse to scroll up and down works fine for mvp
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Maximum Levenshtein distance to consider a match
 const MAX_SEARCH_DISTANCE: usize = 2;
@@ -4231,79 +4231,72 @@ pub struct GrepSearchResult {
     /// Display number for user selection (1-based)
     pub display_index: usize,
 }
-
-/// Formats a timestamp into a human-readable format
+/// Formats a timestamp into a human-readable format with proper error handling
 ///
 /// # Purpose
-/// Converts system timestamps into user-friendly date/time representations
-/// that adapt based on how recent the timestamp is, prioritizing relevant
-/// information over complete timestamps.
+/// Internal version that returns Result for error propagation.
+/// The public format_timestamp function wraps this for backward compatibility.
 ///
 /// # Arguments
 /// * `timestamp` - SystemTime to format
 ///
 /// # Returns
-/// * String - Formatted date/time string
-///
-/// # Format Rules
-/// The function uses different formats based on the age of the timestamp:
-/// - Today: "HH:MM" (e.g., "14:30")
-/// - This year: "MM-DD HH:MM" (e.g., "09-15 14:30")
-/// - Older: "YYYY-MM-DD" (e.g., "2022-09-15")
-///
-/// # Timezone Behavior
-/// All times are displayed in the local system timezone.
-///
-/// # Edge Cases
-/// - For timestamps that can't be compared with now (future with TryFrom error),
-///   falls back to displaying them as if they're old timestamps
-/// - The Unix epoch (1970-01-01) is handled correctly and displayed as "1970-01-01"
-///
-/// # Examples
-/// ```rust
-/// // Format the current time (will show HH:MM)
-/// let now = SystemTime::now();
-/// let formatted = format_timestamp(now);
-///
-/// // Format a file's modification time
-/// let metadata = fs::metadata("example.txt")?;
-/// let modified = metadata.modified()?;
-/// let formatted = format_timestamp(modified);
-/// ```
-fn format_timestamp(timestamp: SystemTime) -> String {
-    // Get current time and the file time as Duration since UNIX_EPOCH
+/// * `Result<String>` - Formatted date/time string or error
+fn format_timestamp_internal(timestamp: SystemTime) -> Result<String> {
+    // Get current time
     let now = SystemTime::now();
 
-    // Convert timestamps to Duration since UNIX_EPOCH, handling errors
-    let now_duration = now
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0));
-    let file_duration = timestamp
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0));
+    // Convert timestamps to Duration since UNIX_EPOCH
+    let now_duration = now.duration_since(UNIX_EPOCH).map_err(|e| {
+        FileFantasticError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to get current time: {}", e),
+        ))
+    })?;
+
+    let file_duration = timestamp.duration_since(UNIX_EPOCH).map_err(|e| {
+        FileFantasticError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to convert timestamp: {}", e),
+        ))
+    })?;
 
     // Convert to seconds
     let now_secs = now_duration.as_secs();
     let file_secs = file_duration.as_secs();
 
-    // Calculate time components
-    let secs_per_day = 24 * 60 * 60;
-    let days_diff = (now_secs - file_secs) / secs_per_day;
+    // Get the calendar date components for both timestamps
+    let (file_year, file_month, file_day) = seconds_to_ymd(file_secs);
+    let (current_year, current_month, current_day) = seconds_to_ymd(now_secs);
 
-    // Get components for the file timestamp
-    let (year, month, day, hour, minute) = seconds_to_components(file_secs);
-    let (current_year, _, _) = seconds_to_ymd(now_secs);
+    // Get time components for the file
+    let (_, _, _, hour, minute) = seconds_to_components(file_secs);
 
-    // Format based on how old the file is
-    if days_diff == 0 {
-        // Today: show time only
-        format!("{:02}:{:02}", hour, minute)
-    } else if year == current_year {
-        // This year: show month-day and time
-        format!("{:02}-{:02} {:02}:{:02}", month, day, hour, minute)
+    // Determine format based on actual calendar dates
+    if file_year == current_year && file_month == current_month && file_day == current_day {
+        // Same calendar day: show time only
+        Ok(format!("{:02}:{:02}", hour, minute))
+    } else if file_year == current_year {
+        // Same calendar year but different day: show month-day and time
+        Ok(format!(
+            "{:02}-{:02} {:02}:{:02}",
+            file_month, file_day, hour, minute
+        ))
     } else {
-        // Older: show full date
-        format!("{}-{:02}-{:02}", year, month, day)
+        // Different year: show full date
+        Ok(format!("{}-{:02}-{:02}", file_year, file_month, file_day))
+    }
+}
+
+/// Public wrapper that maintains backward compatibility
+///
+/// # Purpose
+/// Provides the original String return type for existing code.
+/// Handles errors by returning a placeholder string.
+fn format_timestamp(timestamp: SystemTime) -> String {
+    match format_timestamp_internal(timestamp) {
+        Ok(formatted) => formatted,
+        Err(_) => String::from("????-??-??"),
     }
 }
 

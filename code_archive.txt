@@ -1232,3 +1232,79 @@ fn parse_special_flags(input: &str) -> Option<(String, String)> {
 
     //     Ok(())
     // }
+
+
+// /// Formats a timestamp into a human-readable format
+// ///
+// /// # Purpose
+// /// Converts system timestamps into user-friendly date/time representations
+// /// that adapt based on how recent the timestamp is, prioritizing relevant
+// /// information over complete timestamps.
+// ///
+// /// # Arguments
+// /// * `timestamp` - SystemTime to format
+// ///
+// /// # Returns
+// /// * String - Formatted date/time string
+// ///
+// /// # Format Rules
+// /// The function uses different formats based on the age of the timestamp:
+// /// - Today: "HH:MM" (e.g., "14:30")
+// /// - This year: "MM-DD HH:MM" (e.g., "09-15 14:30")
+// /// - Older: "YYYY-MM-DD" (e.g., "2022-09-15")
+// ///
+// /// # Timezone Behavior
+// /// All times are displayed in the local system timezone.
+// ///
+// /// # Edge Cases
+// /// - For timestamps that can't be compared with now (future with TryFrom error),
+// ///   falls back to displaying them as if they're old timestamps
+// /// - The Unix epoch (1970-01-01) is handled correctly and displayed as "1970-01-01"
+// ///
+// /// # Examples
+// /// ```rust
+// /// // Format the current time (will show HH:MM)
+// /// let now = SystemTime::now();
+// /// let formatted = format_timestamp(now);
+// ///
+// /// // Format a file's modification time
+// /// let metadata = fs::metadata("example.txt")?;
+// /// let modified = metadata.modified()?;
+// /// let formatted = format_timestamp(modified);
+// /// ```
+// fn format_timestamp(timestamp: SystemTime) -> String {
+//     // Get current time and the file time as Duration since UNIX_EPOCH
+//     let now = SystemTime::now();
+
+//     // Convert timestamps to Duration since UNIX_EPOCH, handling errors
+//     let now_duration = now
+//         .duration_since(UNIX_EPOCH)
+//         .unwrap_or(Duration::from_secs(0));
+//     let file_duration = timestamp
+//         .duration_since(UNIX_EPOCH)
+//         .unwrap_or(Duration::from_secs(0));
+
+//     // Convert to seconds
+//     let now_secs = now_duration.as_secs();
+//     let file_secs = file_duration.as_secs();
+
+//     // Calculate time components
+//     let secs_per_day = 24 * 60 * 60;
+//     let days_diff = (now_secs - file_secs) / secs_per_day;
+
+//     // Get components for the file timestamp
+//     let (year, month, day, hour, minute) = seconds_to_components(file_secs);
+//     let (current_year, _, _) = seconds_to_ymd(now_secs);
+
+//     // Format based on how old the file is
+//     if days_diff == 0 {
+//         // Today: show time only
+//         format!("{:02}:{:02}", hour, minute)
+//     } else if year == current_year {
+//         // This year: show month-day and time
+//         format!("{:02}-{:02} {:02}:{:02}", month, day, hour, minute)
+//     } else {
+//         // Older: show full date
+//         format!("{}-{:02}-{:02}", year, month, day)
+//     }
+// }
