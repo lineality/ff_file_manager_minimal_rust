@@ -847,9 +847,43 @@ fn create_directory_zip_archive(
 /// }
 /// ```
 fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> Result<bool> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    // #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    // {
+    //     // Use zip command on Unix-like systems (including Android/Termux)
+    //     let output = std::process::Command::new("zip")
+    //         .arg("-r") // Recursive
+    //         .arg(zip_path)
+    //         .arg(source_path)
+    //         .output()
+    //         .map_err(|e| {
+    //             eprintln!("Failed to execute zip command: {}", e);
+    //             eprintln!("Make sure 'zip' is installed on your system");
+    //             // On Android/Termux, provide specific installation hint
+    //             if cfg!(target_os = "android") {
+    //                 eprintln!("On Termux, install zip with: pkg install zip");
+    //             }
+    //             FileFantasticError::Io(e)
+    //         })?;
+
+    //     if output.status.success() {
+    //         Ok(true)
+    //     } else {
+    //         let error_msg = String::from_utf8_lossy(&output.stderr);
+    //         eprintln!("Zip command failed: {}", error_msg);
+    //         Ok(false)
+    //     }
+    // }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
     {
-        // Use zip command on Unix-like systems (including Android/Termux)
+        // Use zip command on Unix-like systems (including Android/Termux and BSD)
         let output = std::process::Command::new("zip")
             .arg("-r") // Recursive
             .arg(zip_path)
@@ -862,6 +896,16 @@ fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> 
                 if cfg!(target_os = "android") {
                     eprintln!("On Termux, install zip with: pkg install zip");
                 }
+                // On BSD systems, provide specific installation hints
+                #[cfg(target_os = "freebsd")]
+                eprintln!("On FreeBSD, install zip with: pkg install zip");
+                #[cfg(target_os = "openbsd")]
+                eprintln!("On OpenBSD, install zip with: pkg_add zip");
+                #[cfg(target_os = "netbsd")]
+                eprintln!("On NetBSD, install zip with: pkgin install zip");
+                #[cfg(target_os = "dragonfly")]
+                eprintln!("On DragonFly BSD, install zip with: pkg install zip");
+
                 FileFantasticError::Io(e)
             })?;
 
@@ -899,12 +943,16 @@ fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> 
         }
     }
 
-    // Fixed: Added target_os = "android" to the exclusion list
+    // Fixed: Added all BSD variants to the exclusion list
     #[cfg(not(any(
         target_os = "linux",
         target_os = "macos",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
     )))]
     {
         Err(FileFantasticError::UnsupportedPlatform)
@@ -4296,6 +4344,58 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         return Err(FileFantasticError::NoTerminalFound);
     }
 
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        // Try different terminal emulators common on BSD systems
+        // xterm is usually available on most BSD installations with X11
+        let terminal_commands = [
+            ("xterm", vec!["-e", "cd"]), // xterm is most common on BSD
+            ("urxvt", vec!["-cd"]),
+            ("rxvt", vec!["-cd"]),
+            ("konsole", vec!["--workdir"]),
+            ("gnome-terminal", vec!["--working-directory"]),
+            ("xfce4-terminal", vec!["--working-directory"]),
+            ("kitty", vec!["--directory"]),
+            ("alacritty", vec!["--working-directory"]),
+            ("sakura", vec!["--working-directory"]),
+        ];
+
+        for (terminal, args) in terminal_commands.iter() {
+            let mut command = std::process::Command::new(terminal);
+
+            if *terminal == "xterm" || *terminal == "urxvt" || *terminal == "rxvt" {
+                // These terminals need special handling with the shell
+                // BSD systems often use sh or ksh by default
+                command
+                    .args(args)
+                    .arg(directory_path.to_string_lossy().to_string())
+                    .arg("&& $SHELL");
+            } else if *terminal == "alacritty" || *terminal == "kitty" {
+                // Some newer terminals handle working directory differently
+                command.arg(args[0]).arg(directory_path);
+            } else {
+                command.args(args).arg(directory_path);
+            }
+
+            match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    // Log the attempt but continue trying other terminals
+                    eprintln!("Failed to open terminal {}: {}", terminal, e);
+                    continue;
+                }
+            }
+        }
+
+        // None of the terminals worked
+        return Err(FileFantasticError::NoTerminalFound);
+    }
+
     #[cfg(target_os = "android")]
     {
         // Try different terminal emulators in order of preference
@@ -4355,6 +4455,21 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
                 FileFantasticError::Io(e)
             })?;
         return Ok(());
+    }
+
+    // This is a fallback for platforms not explicitly handled
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    {
+        Err(FileFantasticError::UnsupportedPlatform)
     }
 
     // This is a fallback for platforms not explicitly handled
@@ -8530,6 +8645,44 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
         }
     }
 
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        // BSD systems - try common terminal emulators
+        let terminal_commands = [
+            ("xterm", vec!["-e"]),
+            ("rxvt", vec!["-e"]),
+            ("urxvt", vec!["-e"]),
+            ("konsole", vec!["--e"]),
+            ("gnome-terminal", vec!["--"]),
+            ("xfce4-terminal", vec!["--command"]),
+            ("mate-terminal", vec!["--command"]),
+            ("alacritty", vec!["-e"]),
+            ("kitty", vec!["-e"]),
+            ("sakura", vec!["-e"]),
+            ("st", vec!["-e"]), // suckless terminal, popular on BSD
+        ];
+
+        let mut terminal_launched = false;
+        for (terminal, args) in terminal_commands.iter() {
+            let mut cmd = std::process::Command::new(terminal);
+            cmd.args(args).arg(program_path).arg(file_path);
+
+            if cmd.spawn().is_ok() {
+                terminal_launched = true;
+                break;
+            }
+        }
+
+        if !terminal_launched {
+            return Err(FileFantasticError::NoTerminalFound);
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         // Build command string for Windows cmd.exe
@@ -8546,6 +8699,32 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             .map_err(|e| {
                 eprintln!("Failed to open cmd.exe for partner program: {}", e);
                 FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
+            })?;
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    {
+        // Fallback for unsupported platforms - try to launch directly
+        std::process::Command::new(program_path)
+            .arg(file_path)
+            .spawn()
+            .map_err(|e| {
+                eprintln!(
+                    "Failed to launch partner program on unsupported platform: {}",
+                    e
+                );
+                FileFantasticError::EditorLaunchFailed(format!(
+                    "Unsupported platform. Direct launch failed for {}",
+                    extract_program_display_name(program_path)
+                ))
             })?;
     }
 
@@ -9244,6 +9423,34 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     FileFantasticError::Io(e)
                 })?;
         }
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        {
+            // BSD systems typically use xdg-open if available, otherwise try direct opening
+            let result = std::process::Command::new("xdg-open")
+                .arg(file_path)
+                .spawn();
+
+            if result.is_err() {
+                // Fallback: try to open with a common editor
+                std::process::Command::new("vi")
+                    .arg(file_path)
+                    .spawn()
+                    .map_err(|e| {
+                        eprintln!("Failed to open file on BSD system: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+            } else {
+                result.map_err(|e| {
+                    eprintln!("Failed to open file with xdg-open on BSD: {}", e);
+                    FileFantasticError::Io(e)
+                })?;
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
@@ -9254,6 +9461,22 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to open file with default application: {}", e);
                     FileFantasticError::Io(e)
                 })?;
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        )))]
+        {
+            // Fallback for unsupported platforms
+            eprintln!("Platform not supported for default file opening");
+            return Err(FileFantasticError::EditorLaunchFailed(
+                "Platform not supported for default file opening".to_string(),
+            ));
         }
         return Ok(());
     }
@@ -9383,6 +9606,61 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 return open_file(file_path); // Ask again
             }
         }
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        {
+            // BSD systems - try common terminal emulators
+            let terminal_commands = [
+                ("xterm", vec!["-e", editor]), // Most common, usually in base X11
+                ("rxvt", vec!["-e", editor]),  // Lightweight alternative
+                ("urxvt", vec!["-e", editor]), // rxvt-unicode
+                ("rxvt-unicode", vec!["-e", editor]), // Alternative name
+                ("konsole", vec!["--e", editor]), // KDE terminal
+                ("gnome-terminal", vec!["--", editor]), // GNOME terminal
+                ("mate-terminal", vec!["--", editor]), // MATE desktop
+                ("xfce4-terminal", vec!["--command", editor]), // Xfce
+                ("sakura", vec!["-e", editor]), // Lightweight GTK terminal
+                ("st", vec!["-e", editor]),    // suckless terminal
+                ("kitty", vec![editor]),       // Modern GPU-accelerated terminal
+                ("alacritty", vec!["-e", editor]), // Another modern terminal
+                ("terminology", vec!["-e", editor]), // Enlightenment terminal
+            ];
+
+            let mut success = false;
+            for (terminal, args) in terminal_commands.iter() {
+                let mut cmd = std::process::Command::new(terminal);
+                cmd.args(args).arg(file_path);
+
+                if cmd.spawn().is_ok() {
+                    success = true;
+                    break;
+                }
+            }
+            if !success {
+                // BSD-specific fallback: try to run editor directly in current terminal
+                // as a last resort before showing error
+                let direct_result = std::process::Command::new(editor).arg(file_path).spawn();
+
+                if direct_result.is_err() {
+                    // Follow existing error handling pattern
+                    println!(
+                        "No terminal available on BSD system. Falling back to system default... \nPress Enter to continue"
+                    );
+                    let error = FileFantasticError::EditorLaunchFailed(editor.to_string());
+                    eprintln!("Error: {}", error);
+                    let mut buf = String::new();
+                    io::stdin().read_line(&mut buf).map_err(|e| {
+                        eprintln!("Failed to read input: {}", e);
+                        FileFantasticError::Io(e)
+                    })?;
+                    return open_file(file_path); // Ask again
+                }
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
@@ -9395,6 +9673,25 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 .spawn()
                 .map_err(|e| {
                     eprintln!("Failed to open cmd.exe for editor: {}", e);
+                    FileFantasticError::EditorLaunchFailed(editor.to_string())
+                })?;
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        )))]
+        {
+            // Fallback for unsupported platforms - try direct execution
+            std::process::Command::new(editor)
+                .arg(file_path)
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("Failed to open editor on unsupported platform: {}", e);
                     FileFantasticError::EditorLaunchFailed(editor.to_string())
                 })?;
         }
