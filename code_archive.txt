@@ -875,3 +875,360 @@ fn parse_special_flags(input: &str) -> Option<(String, String)> {
                                     //         Err(e) => println!("Error adding directory to stack: {}", e),
                                     //     }
                                     // },
+
+
+/ /// Vanilla home made pair compair levenshtein_distance
+// /// e.g. for simple fuzzy search
+// /// Calculates the Levenshtein distance between two strings
+// ///
+// /// # Purpose
+// /// Provides fuzzy text matching capability for the search functionality,
+// /// measuring how many single-character edits (insertions, deletions, substitutions)
+// /// are needed to transform one string into another.
+// ///
+// /// # Arguments
+// /// * `s` - First string for comparison
+// /// * `t` - Second string for comparison
+// ///
+// /// # Returns
+// /// * `usize` - The edit distance between the strings (lower = more similar)
+// ///
+// /// # Algorithm
+// /// Uses a dynamic programming approach with two work vectors to calculate
+// /// the minimum edit distance between strings:
+// /// - 0 means strings are identical
+// /// - Higher values indicate greater differences
+// /// - Equal to max(s.len(), t.len()) when strings share no characters
+// ///
+// /// # Performance Considerations
+// /// - O(m*n) time complexity where m and n are string lengths
+// /// - O(n) space complexity using the two-vector approach
+// /// - Efficient for short strings like filenames, but may not scale well
+// ///   for very long strings
+// ///
+// /// # Usage Context
+// /// Used in the `fuzzy_search` method to find files matching a partial query,
+// /// allowing for approximate/inexact matches when users don't know the exact filename.
+// ///
+// /// # Examples
+// /// ```
+// /// assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+// /// assert_eq!(levenshtein_distance("rust", "dust"), 1);
+// /// assert_eq!(levenshtein_distance("", "test"), 4);
+// /// ```
+// fn levenshtein_distance(s: &str, t: &str) -> usize {
+//     // Convert strings to vectors of chars for easier indexing
+//     // Do this FIRST to get correct character counts
+//     let s_chars: Vec<char> = s.chars().collect();
+//     let t_chars: Vec<char> = t.chars().collect();
+
+//     // Get the CHARACTER lengths, not byte lengths
+//     let m = s_chars.len();
+//     let n = t_chars.len();
+
+//     // Handle empty string cases
+//     if m == 0 {
+//         return n;
+//     }
+//     if n == 0 {
+//         return m;
+//     }
+
+//     // Create two work vectors
+//     let mut v0: Vec<usize> = (0..=n).collect();
+//     let mut v1: Vec<usize> = vec![0; n + 1];
+
+//     // Iterate through each character of s
+//     for i in 0..m {
+//         // First element of v1 is the deletion cost
+//         v1[0] = i + 1;
+
+//         // Calculate costs for each character of t
+//         for j in 0..n {
+//             let deletion_cost = v0[j + 1] + 1;
+//             let insertion_cost = v1[j] + 1;
+//             let substitution_cost = v0[j] + if s_chars[i] == t_chars[j] { 0 } else { 1 };
+
+//             v1[j + 1] = deletion_cost.min(insertion_cost).min(substitution_cost);
+//         }
+
+//         // Swap vectors for next iteration
+//         std::mem::swap(&mut v0, &mut v1);
+//     }
+
+//     // Return final distance
+//     v0[n]
+// }
+
+
+    /*
+    pending use of saved directories
+    */
+    // /// Q&A interface to save current directory to directory stack
+    // ///
+    // /// # Purpose
+    // /// Provides an interactive interface for adding the current directory
+    // /// to the directory stack, with user confirmation.
+    // ///
+    // /// # Arguments
+    // /// * `current_directory` - The current directory to potentially add
+    // ///
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // ///
+    // /// # User Interface Flow
+    // /// 1. Display the current directory path
+    // /// 2. Ask for user confirmation to add it to the stack
+    // /// 3. Add to stack if user confirms (default is yes)
+    // /// 4. Display confirmation with current stack size
+    // ///
+    // /// # Confirmation Logic
+    // /// - Empty input or 'y'/'Y': Add to stack
+    // /// - Any other input: Do not add to stack
+    // ///
+    // /// # Example Interaction
+    // /// ```text
+    // /// === Add Directory to Stack ===
+    // /// Current directory: /home/user/projects
+    // /// Add current directory to stack? (Y/n):
+    // /// Added to directory stack. Total directories: 2
+    // /// ```
+    // pub fn interactive_save_directory_to_stack(&mut self, current_directory: &PathBuf) -> Result<()> {
+    //     println!("\n=== Add Directory to Stack ===");
+    //     println!("Current directory: {}", current_directory.display());
+
+    //     print!("Add current directory to stack? (Y/n): ");
+    //     io::stdout().flush().map_err(|e| FileFantasticError::Io(e))?;
+
+    //     let mut response = String::new();
+    //     io::stdin().read_line(&mut response).map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Default to 'yes' if user just presses enter
+    //     if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //         self.add_directory_to_stack(current_directory.clone())?;
+    //         println!("Added to directory stack. Total directories: {}", self.directory_path_stack.len());
+    //     } else {
+    //         println!("Cancelled.");
+    //     }
+
+    //     Ok(())
+    // }
+
+    // /// Interactive interface to save a specific directory to the directory stack
+    // ///
+    // /// # Purpose
+    // /// Provides an interactive confirmation interface for adding a specific directory
+    // /// to the directory stack. Typically used for adding the current working directory
+    // /// without needing to select from a list.
+    // ///
+    // /// # Arguments
+    // /// * `directory_path` - The directory path to potentially add (not necessarily current)
+    // ///
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // ///
+    // /// # User Interface Flow
+    // /// 1. Display the directory path to be added
+    // /// 2. Ask for user confirmation
+    // /// 3. Add to stack if user confirms (default is yes)
+    // /// 4. Display confirmation with stack size
+    // ///
+    // /// # Note on Parameter Name Change
+    // /// Changed from `current_directory` to `directory_path` to better reflect that
+    // /// this can be ANY directory path, not just the current one.
+    // ///
+    // /// # Example Usage
+    // /// ```rust
+    // /// // Add current working directory
+    // /// state_manager.interactive_save_directory_to_stack(&current_dir)?;
+    // ///
+    // /// // Add a specific directory
+    // /// let project_dir = PathBuf::from("/home/user/projects");
+    // /// state_manager.interactive_save_directory_to_stack(&project_dir)?;
+    // /// ```
+    // pub fn interactive_save_directory_to_stack(&mut self, directory_path: &PathBuf) -> Result<()> {
+    //     println!("\n=== Add Directory to Stack ===");
+    //     println!("Directory: {}", directory_path.display());
+
+    //     print!("Add this directory to stack? (Y/n): ");
+    //     io::stdout()
+    //         .flush()
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     let mut response = String::new();
+    //     io::stdin()
+    //         .read_line(&mut response)
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Default to 'yes' if user just presses enter or explicitly says yes
+    //     if response.trim().is_empty() || response.trim().eq_ignore_ascii_case("y") {
+    //         match self.add_directory_to_stack(directory_path.clone()) {
+    //             Ok(()) => {
+    //                 println!(
+    //                     "✓ Added to directory stack. Total directories: {}",
+    //                     self.directory_path_stack.len()
+    //                 );
+    //             }
+    //             Err(e) => {
+    //                 eprintln!("✗ Failed to add directory to stack: {}", e);
+    //             }
+    //         }
+    //     } else {
+    //         println!("Cancelled.");
+    //     }
+
+    //     Ok(())
+    // }
+
+
+    // /// Interactive interface to add a file to the file stack
+    // ///
+    // /// # Purpose
+    // /// Provides a simple interactive interface for adding files to the file stack.
+    // /// Shows the current directory listing and prompts user to select a file by number.
+    // /// Works with the current page view only, utilizing existing navigation state.
+    // ///
+    // /// # Arguments
+    // /// * `nav_state` - Current navigation state with lookup table for numbered selection
+    // /// * `current_directory_entries` - Current directory entries to display for selection (current page only)
+    // /// * `current_directory_path` - Current directory path for display context
+    // ///
+    // /// # Returns
+    // /// * `Result<()>` - Success or error with context
+    // ///
+    // /// # User Interface Workflow
+    // ///
+    // /// ## Step 1: Display Current View
+    // /// - Show current directory contents with numbered items (same as main navigation)
+    // /// - This respects current filter and pagination state
+    // ///
+    // /// ## Step 2: Selection Prompt
+    // /// - User selects item by number (same interface as navigation)
+    // /// - Can cancel with 'b' for back
+    // ///
+    // /// ## Step 3: Validation
+    // /// - Verify selected item exists in lookup table
+    // /// - Ensure selected item is a file (not a directory)
+    // ///
+    // /// ## Step 4: Add to Stack
+    // /// - Add file path to the file stack
+    // /// - Display confirmation with updated stack count
+    // ///
+    // /// # Example Interaction
+    // /// ```text
+    // /// Current Directory: /home/user/documents
+    // ///
+    // /// Num  Name                    Size     Modified
+    // /// ------------------------------------------------
+    // ///  1)  folder1/               -        14:30
+    // ///  2)  document.txt           1.2 KB   15:45
+    // ///  3)  image.png              500 KB   16:20
+    // ///
+    // /// === Add File to Stack ===
+    // /// Select file to add to stack
+    // /// Enter file number (or 'b' to back/cancel): 2
+    // ///
+    // /// ✓ Added 'document.txt' to file stack. Total files: 1
+    // /// ```
+    // ///
+    // /// # Error Handling
+    // /// - Validates numbered selections against navigation lookup table
+    // /// - Ensures selected items are files, not directories
+    // /// - Provides clear error messages for invalid selections
+    // /// - Handles cancellation gracefully
+    // /// - Manages IO errors during user interaction
+    // pub fn interactive_add_file_tostack(
+    //     &mut self,
+    //     nav_state: &NavigationState,
+    //     current_directory_entries: &[FileSystemEntry],
+    //     current_directory_path: &PathBuf,
+    // ) -> Result<()> {
+    //     // WORKFLOW STEP 1: Display current directory contents
+    //     // This shows the current page with existing filters and numbering
+    //     display_directory_contents(
+    //         current_directory_entries,
+    //         current_directory_path,
+    //         None, // Pagination info handled by main navigation
+    //         nav_state.current_filter,
+    //         nav_state,
+    //     )
+    //     .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // WORKFLOW STEP 2: Prompt for file selection
+    //     println!("\n=== Add File to Stack ===");
+    //     println!("Select file to add to stack");
+    //     print!("Enter file number (or 'b' to back/cancel): ");
+    //     io::stdout()
+    //         .flush()
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Read user input
+    //     let mut input = String::new();
+    //     io::stdin()
+    //         .read_line(&mut input)
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+    //     let input = input.trim();
+
+    //     // Handle cancellation request
+    //     if input.eq_ignore_ascii_case("b") {
+    //         println!("Back/Cancelled.");
+    //         return Ok(());
+    //     }
+
+    //     // WORKFLOW STEP 3: Validate and process the user's selection
+    //     if let Ok(number) = input.parse::<usize>() {
+    //         // Use navigation state's lookup to find the selected item
+    //         if let Some(item_info) = nav_state.lookup_item(number) {
+    //             // Check if selected item is a file (not a directory)
+    //             if item_info.item_type == FileSystemItemType::Directory {
+    //                 // User selected a directory - show error and return
+    //                 let item_name = item_info
+    //                     .item_path
+    //                     .file_name()
+    //                     .unwrap_or_default()
+    //                     .to_string_lossy();
+    //                 eprintln!(
+    //                     "\n✗ Error: '{}' is a directory. Please select a file.",
+    //                     item_name
+    //                 );
+    //             } else {
+    //                 // WORKFLOW STEP 4: It's a file - add to stack
+
+    //                 // Extract file name for display
+    //                 let file_name = item_info
+    //                     .item_path
+    //                     .file_name()
+    //                     .unwrap_or_default()
+    //                     .to_string_lossy();
+
+    //                 // Add the file to the stack
+    //                 match self.add_file_to_stack(item_info.item_path.clone()) {
+    //                     Ok(()) => {
+    //                         // Success - show confirmation with stack count
+    //                         println!(
+    //                             "\n✓ Added '{}' to file stack. Total files: {}",
+    //                             file_name,
+    //                             self.file_path_stack.len()
+    //                         );
+    //                     }
+    //                     Err(e) => {
+    //                         // Failed to add to stack - show error
+    //                         eprintln!("\n✗ Failed to add file to stack: {}", e);
+    //                     }
+    //                 }
+    //             }
+    //         } else {
+    //             // Invalid item number - not in lookup table
+    //             println!("Error: Invalid item number {}. Please try again.", number);
+    //         }
+    //     } else {
+    //         // Input was not a valid number
+    //         println!("Error: Please enter a valid number or 'b' to cancel.");
+    //     }
+
+    //     // Wait for user acknowledgment before returning to main interface
+    //     println!("\nPress Enter to continue...");
+    //     let _ = io::stdin().read_line(&mut String::new());
+
+    //     Ok(())
+    // }
