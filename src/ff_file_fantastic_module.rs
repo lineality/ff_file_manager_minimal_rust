@@ -1171,7 +1171,8 @@ fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> 
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "dragonfly",
+        target_os = "redox",
     ))]
     {
         // Use zip command on Unix-like systems (including Android/Termux and BSD)
@@ -1196,6 +1197,9 @@ fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> 
                 eprintln!("On NetBSD, install zip with: pkgin install zip");
                 #[cfg(target_os = "dragonfly")]
                 eprintln!("On DragonFly BSD, install zip with: pkg install zip");
+                // After the DragonFly BSD hint, add:
+                #[cfg(target_os = "redox")]
+                eprintln!("On Redox OS, install zip through the package manager");
 
                 FileFantasticError::Io(e)
             })?;
@@ -1243,7 +1247,8 @@ fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> 
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "dragonfly",
+        target_os = "redox",
     )))]
     {
         Err(FileFantasticError::UnsupportedPlatform)
@@ -4763,7 +4768,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
             })?;
         return Ok(());
     }
-
     #[cfg(target_os = "linux")]
     {
         // Try different terminal emulators in order of preference
@@ -4811,7 +4815,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         // None of the terminals worked
         return Err(FileFantasticError::NoTerminalFound);
     }
-
     #[cfg(any(
         target_os = "freebsd",
         target_os = "openbsd",
@@ -4863,7 +4866,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         // None of the terminals worked
         return Err(FileFantasticError::NoTerminalFound);
     }
-
     #[cfg(target_os = "android")]
     {
         // Try different terminal emulators in order of preference
@@ -4911,7 +4913,6 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         // None of the terminals worked
         return Err(FileFantasticError::NoTerminalFound);
     }
-
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
@@ -4924,7 +4925,38 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
             })?;
         return Ok(());
     }
+    #[cfg(target_os = "redox")]
+    {
+        // Redox OS uses Orbital windowing system with its own terminal
+        let result = std::process::Command::new("orbital")
+            .arg("terminal")
+            .arg("--working-directory")
+            .arg(directory_path)
+            .spawn();
 
+        match result {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                eprintln!("Failed to open Orbital terminal on Redox OS: {}", e);
+
+                // Fallback: try to open a basic terminal without working directory
+                let fallback_result = std::process::Command::new("orbital")
+                    .arg("terminal")
+                    .spawn();
+
+                match fallback_result {
+                    Ok(_) => {
+                        eprintln!("Note: Terminal opened but not in the requested directory");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to open any terminal on Redox OS: {}", e);
+                        return Err(FileFantasticError::NoTerminalFound);
+                    }
+                }
+            }
+        }
+    }
     // This is a fallback for platforms not explicitly handled
     #[cfg(not(any(
         target_os = "macos",
@@ -4934,7 +4966,8 @@ fn open_new_terminal(directory_path: &PathBuf) -> Result<()> {
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "dragonfly",
+        target_os = "redox",
     )))]
     {
         Err(FileFantasticError::UnsupportedPlatform)
@@ -9057,7 +9090,6 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             program_path.display()
         )));
     }
-
     // Launch using platform-specific terminal commands (reusing existing logic patterns)
     #[cfg(target_os = "macos")]
     {
@@ -9077,7 +9109,6 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
                 FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
             })?;
     }
-
     #[cfg(target_os = "linux")]
     {
         // Try different terminal emulators in order of preference
@@ -9112,7 +9143,6 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             return Err(FileFantasticError::NoTerminalFound);
         }
     }
-
     #[cfg(any(
         target_os = "freebsd",
         target_os = "openbsd",
@@ -9150,7 +9180,36 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             return Err(FileFantasticError::NoTerminalFound);
         }
     }
+    #[cfg(target_os = "redox")]
+    {
+        // Redox OS - try Orbital's terminal emulator
+        let mut terminal_launched = false;
 
+        // Try orbital terminal first
+        let mut cmd = std::process::Command::new("orbital");
+        cmd.arg("terminal")
+            .arg("-e")
+            .arg(program_path)
+            .arg(file_path);
+
+        if cmd.spawn().is_ok() {
+            terminal_launched = true;
+        } else {
+            // Fallback: try to launch the program directly
+            // Some Redox programs might work without terminal wrapper
+            if std::process::Command::new(program_path)
+                .arg(file_path)
+                .spawn()
+                .is_ok()
+            {
+                terminal_launched = true;
+            }
+        }
+
+        if !terminal_launched {
+            return Err(FileFantasticError::NoTerminalFound);
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         // Build command string for Windows cmd.exe
@@ -9169,7 +9228,6 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
                 FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
             })?;
     }
-
     #[cfg(not(any(
         target_os = "macos",
         target_os = "linux",
@@ -9177,7 +9235,8 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "dragonfly",
+        target_os = "redox",
     )))]
     {
         // Fallback for unsupported platforms - try to launch directly
