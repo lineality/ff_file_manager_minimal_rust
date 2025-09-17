@@ -1257,6 +1257,131 @@ fn calculate_items_per_page(
     }
 }
 
+#[cfg(test)]
+mod calculate_items_per_page_tests {
+    use super::*;
+
+    /// Test default behavior with no adjustment
+    #[test]
+    fn test_calculate_items_per_page_no_adjustment() {
+        let result = calculate_items_per_page(0, true);
+        assert_eq!(result, ITEMS_PER_PAGE_DEFAULT as u16);
+
+        let result = calculate_items_per_page(0, false);
+        assert_eq!(result, ITEMS_PER_PAGE_DEFAULT as u16);
+    }
+
+    /// Test positive adjustments within normal range
+    #[test]
+    fn test_calculate_items_per_page_positive_adjustments() {
+        // Small positive adjustment
+        let result = calculate_items_per_page(5, true);
+        assert_eq!(result, (ITEMS_PER_PAGE_DEFAULT as u16) + 5);
+
+        // Medium positive adjustment
+        let result = calculate_items_per_page(100, true);
+        assert_eq!(result, (ITEMS_PER_PAGE_DEFAULT as u16) + 100);
+
+        // Large positive adjustment
+        let result = calculate_items_per_page(1000, true);
+        assert_eq!(result, (ITEMS_PER_PAGE_DEFAULT as u16) + 1000);
+    }
+
+    /// Test negative adjustments within normal range
+    #[test]
+    fn test_calculate_items_per_page_negative_adjustments() {
+        // Small negative adjustment
+        let result = calculate_items_per_page(5, false);
+        assert_eq!(result, (ITEMS_PER_PAGE_DEFAULT as u16) - 5);
+
+        // Medium negative adjustment (assuming ITEMS_PER_PAGE_DEFAULT >= 10)
+        let result = calculate_items_per_page(10, false);
+        assert_eq!(result, (ITEMS_PER_PAGE_DEFAULT as u16) - 10);
+    }
+
+    /// Test overflow protection with positive adjustments
+    #[test]
+    fn test_calculate_items_per_page_positive_overflow_protection() {
+        // Test maximum possible adjustment
+        let result = calculate_items_per_page(u16::MAX, true);
+        assert_eq!(result, u16::MAX);
+
+        // Test adjustment that would cause overflow
+        let large_adjustment = u16::MAX - (ITEMS_PER_PAGE_DEFAULT as u16) + 1;
+        let result = calculate_items_per_page(large_adjustment, true);
+        assert_eq!(result, u16::MAX);
+    }
+
+    /// Test underflow protection with negative adjustments
+    #[test]
+    fn test_calculate_items_per_page_negative_underflow_protection() {
+        // Test adjustment equal to base (should result in 0)
+        let result = calculate_items_per_page(ITEMS_PER_PAGE_DEFAULT as u16, false);
+        assert_eq!(result, 0);
+
+        // Test adjustment greater than base (should result in 0)
+        let result = calculate_items_per_page((ITEMS_PER_PAGE_DEFAULT as u16) + 1, false);
+        assert_eq!(result, 0);
+
+        // Test maximum negative adjustment
+        let result = calculate_items_per_page(u16::MAX, false);
+        assert_eq!(result, 0);
+    }
+
+    /// Test boundary conditions
+    #[test]
+    fn test_calculate_items_per_page_boundary_conditions() {
+        // Test minimum non-zero result
+        let adjustment = (ITEMS_PER_PAGE_DEFAULT as u16) - 1;
+        let result = calculate_items_per_page(adjustment, false);
+        assert_eq!(result, 1);
+
+        // Test one less than overflow
+        let adjustment = u16::MAX - (ITEMS_PER_PAGE_DEFAULT as u16);
+        let result = calculate_items_per_page(adjustment, true);
+        assert_eq!(result, u16::MAX);
+    }
+
+    /// Test that zero items per page is explicitly allowed
+    #[test]
+    fn test_calculate_items_per_page_zero_items_allowed() {
+        let result = calculate_items_per_page(ITEMS_PER_PAGE_DEFAULT as u16, false);
+        assert_eq!(result, 0, "Zero items per page should be allowed for header-only display");
+    }
+
+    /// Test consistency of adjustment direction parameter
+    #[test]
+    fn test_calculate_items_per_page_direction_consistency() {
+        let base = ITEMS_PER_PAGE_DEFAULT as u16;
+        let adjustment = 5;
+
+        let positive_result = calculate_items_per_page(adjustment, true);
+        let negative_result = calculate_items_per_page(adjustment, false);
+
+        assert_eq!(positive_result, base + adjustment);
+        assert_eq!(negative_result, base - adjustment);
+        assert!(positive_result > negative_result, "Positive adjustment should yield larger result");
+    }
+
+    /// Property-based test for saturating arithmetic
+    #[test]
+    fn test_calculate_items_per_page_saturating_arithmetic_properties() {
+        let base = ITEMS_PER_PAGE_DEFAULT as u16;
+
+        // For any adjustment, positive direction should never be less than base
+        for adjustment in [1, 100, 1000, u16::MAX] {
+            let result = calculate_items_per_page(adjustment, true);
+            assert!(result >= base, "Positive adjustment result should be >= base");
+        }
+
+        // For any adjustment, negative direction should never be greater than base
+        for adjustment in [1, 100, 1000, u16::MAX] {
+            let result = calculate_items_per_page(adjustment, false);
+            assert!(result <= base, "Negative adjustment result should be <= base");
+        }
+    }
+}
+
 /// Calculates name width from NavigationState for convenience
 ///
 /// # Purpose
@@ -1419,6 +1544,43 @@ fn create_directory_zip_archive(
         Err(FileFantasticError::InvalidName(
             "Zip creation failed".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod create_directory_zip_archive_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Test successful creation of zip archive without custom name
+    /// Note: This test requires that create_zip_with_system_command actually works
+    #[test]
+    fn test_create_zip_archive_validates_source_exists() {
+        // Test with non-existent source
+        let nonexistent_source = PathBuf::from("/definitely/does/not/exist/path");
+        let some_dest = PathBuf::from("/tmp"); // Assuming /tmp exists on Unix-like systems
+
+        let result = create_directory_zip_archive(&nonexistent_source, &some_dest, None);
+
+        assert!(result.is_err(), "Should error when source doesn't exist");
+    }
+
+    /// Test that source must be a directory
+    #[test]
+    fn test_create_zip_archive_validates_source_is_directory() {
+        // Create a temporary file
+        let temp_file_path = std::env::temp_dir().join("test_file_not_dir.txt");
+        let _ = fs::write(&temp_file_path, "test content");
+
+        let dest_path = std::env::temp_dir();
+
+        let result = create_directory_zip_archive(&temp_file_path, &dest_path, None);
+
+        assert!(result.is_err(), "Should error when source is not a directory");
+
+        // Clean up
+        let _ = fs::remove_file(temp_file_path);
     }
 }
 
