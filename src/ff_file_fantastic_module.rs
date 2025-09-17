@@ -823,7 +823,6 @@ pub struct StackRetrievalResult {
     /// The path to the retrieved item
     pub path: PathBuf,
 }
-
 /// Calculates the actual name column width based on user adjustments
 ///
 /// # Purpose
@@ -838,19 +837,24 @@ pub struct StackRetrievalResult {
 ///   - `false` = Remove characters (narrower column)
 ///
 /// # Returns
-/// * `u16` - The calculated column width in characters
+/// * `u16` - The calculated column width in characters, never less than minimum_width
 ///
 /// # Calculation Logic
 /// 1. Start with MAX_NAME_LENGTH_DEFAULT (55 characters)
-/// 2. Apply adjustment in the specified direction
-/// 3. Use saturating arithmetic to prevent overflow
-/// 4. Enforce minimum width of 8 characters (FILENAME_SUFFIX_LENGTH + 3 for "...")
+/// 2. Apply adjustment in the specified direction using saturating arithmetic
+/// 3. Enforce minimum width of 8 characters (FILENAME_SUFFIX_LENGTH + 3 for "...")
+/// 4. **Always** enforce minimum width regardless of adjustment direction
 ///
 /// # Minimum Width Rationale
 /// The minimum of 8 characters ensures we can always display:
 /// - 3 characters for ellipsis "..."
 /// - 5 characters for file suffix (e.g., ".docx")
 /// This prevents display corruption with very narrow columns.
+///
+/// # Safety Guarantees
+/// - Uses saturating arithmetic to prevent overflow/underflow
+/// - Always enforces minimum width constraint in both directions
+/// - Validates configuration assumptions in debug builds
 ///
 /// # Examples
 /// ```rust
@@ -876,18 +880,317 @@ fn calculate_name_width(
     // Calculate minimum allowed width (suffix + ellipsis)
     let minimum_width: u16 = (FILENAME_SUFFIX_LENGTH + 3) as u16;
 
-    // Apply adjustment based on direction
-    if adjustment_direction_true_is_positive_false_is_negative {
+    // Validate configuration assumptions in debug builds
+    // This catches configuration errors during development
+    debug_assert!(
+        base_width >= minimum_width,
+        "Configuration error: MAX_NAME_LENGTH_DEFAULT ({}) must be >= minimum required width ({}). \
+         Minimum width = FILENAME_SUFFIX_LENGTH ({}) + 3 chars for ellipsis = {}",
+        base_width, minimum_width, FILENAME_SUFFIX_LENGTH, minimum_width
+    );
+
+    // Apply adjustment based on direction using saturating arithmetic
+    let adjusted_width = if adjustment_direction_true_is_positive_false_is_negative {
         // Positive adjustment: add to base width
         // saturating_add prevents overflow, returns u16::MAX if result would overflow
         base_width.saturating_add(adjustment_magnitude)
     } else {
         // Negative adjustment: subtract from base width
         // saturating_sub prevents underflow, returns 0 if result would be negative
-        // max ensures we never go below minimum_width
-        base_width
-            .saturating_sub(adjustment_magnitude)
-            .max(minimum_width)
+        base_width.saturating_sub(adjustment_magnitude)
+    };
+
+    // CRITICAL: Always enforce minimum width regardless of adjustment direction
+    // This ensures display integrity and prevents configuration-dependent bugs
+    adjusted_width.max(minimum_width)
+}
+
+#[cfg(test)]
+mod calculate_name_width_tests {
+    use super::*;
+
+    /// Test basic functionality with no adjustments
+    #[test]
+    fn test_baseline_no_adjustment() {
+        let expected_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Both directions should return same value with zero adjustment
+        let result_positive = calculate_name_width(0, true);
+        let result_negative = calculate_name_width(0, false);
+
+        // Should return at least the minimum width
+        assert!(result_positive >= min_width,
+                "Zero positive adjustment returned {} but minimum is {}",
+                result_positive, min_width);
+        assert!(result_negative >= min_width,
+                "Zero negative adjustment returned {} but minimum is {}",
+                result_negative, min_width);
+
+        // If configuration is correct, should return expected width
+        if expected_width >= min_width {
+            assert_eq!(result_positive, expected_width);
+            assert_eq!(result_negative, expected_width);
+        } else {
+            // If base width is less than minimum, should return minimum
+            assert_eq!(result_positive, min_width);
+            assert_eq!(result_negative, min_width);
+        }
+    }
+
+    /// Test positive adjustments of various sizes
+    #[test]
+    fn test_positive_adjustments() {
+        let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Small positive adjustment
+        let result_small = calculate_name_width(1, true);
+        let expected_small = base_width.saturating_add(1).max(min_width);
+        assert_eq!(result_small, expected_small,
+                  "Small positive adjustment failed");
+
+        // Medium positive adjustment
+        let result_medium = calculate_name_width(25, true);
+        let expected_medium = base_width.saturating_add(25).max(min_width);
+        assert_eq!(result_medium, expected_medium,
+                  "Medium positive adjustment failed");
+
+        // Large positive adjustment
+        let result_large = calculate_name_width(1000, true);
+        let expected_large = base_width.saturating_add(1000).max(min_width);
+        assert_eq!(result_large, expected_large,
+                  "Large positive adjustment failed");
+
+        // All results should be at least minimum width
+        assert!(result_small >= min_width);
+        assert!(result_medium >= min_width);
+        assert!(result_large >= min_width);
+    }
+
+    /// Test negative adjustments of various sizes
+    #[test]
+    fn test_negative_adjustments() {
+        let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Small negative adjustment (shouldn't hit minimum)
+        let small_adjustment = if base_width > min_width + 5 { 5 } else { 1 };
+        let result_small = calculate_name_width(small_adjustment, false);
+        assert!(result_small >= min_width,
+               "Small negative adjustment returned less than minimum");
+
+        // Medium negative adjustment
+        let result_medium = calculate_name_width(20, false);
+        let expected_medium = base_width.saturating_sub(20).max(min_width);
+        assert_eq!(result_medium, expected_medium,
+                  "Medium negative adjustment failed");
+
+        // Large negative adjustment (should hit minimum)
+        let result_large = calculate_name_width(base_width + 100, false);
+        assert_eq!(result_large, min_width,
+                  "Large negative adjustment should return minimum width");
+    }
+
+    /// Test overflow protection with maximum values
+    #[test]
+    fn test_overflow_protection() {
+        // Maximum positive adjustment should not panic or wrap around
+        let result_max = calculate_name_width(u16::MAX, true);
+
+        // Should be either u16::MAX or saturated to u16::MAX
+        let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let expected_max = base_width.saturating_add(u16::MAX);
+        assert_eq!(result_max, expected_max,
+                  "Maximum positive adjustment should saturate properly");
+
+        // Near-maximum adjustment that would overflow
+        if base_width < u16::MAX {
+            let overflow_adjustment = u16::MAX - base_width + 1;
+            let result_overflow = calculate_name_width(overflow_adjustment, true);
+            assert_eq!(result_overflow, u16::MAX,
+                      "Overflow adjustment should saturate to u16::MAX");
+        }
+    }
+
+    /// Test underflow protection with maximum negative values
+    #[test]
+    fn test_underflow_protection() {
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Maximum negative adjustment should hit minimum, not underflow
+        let result_max_negative = calculate_name_width(u16::MAX, false);
+        assert_eq!(result_max_negative, min_width,
+                  "Maximum negative adjustment should return minimum width");
+
+        // Various large negative adjustments should all return minimum
+        for large_adjustment in [1000, 5000, u16::MAX / 2, u16::MAX] {
+            let result = calculate_name_width(large_adjustment, false);
+            assert_eq!(result, min_width,
+                      "Large negative adjustment {} should return minimum width",
+                      large_adjustment);
+        }
+    }
+
+    /// Test minimum width enforcement is consistent
+    #[test]
+    fn test_minimum_width_always_enforced() {
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Test various adjustment magnitudes in both directions
+        for magnitude in [0, 1, 10, 100, 1000, u16::MAX] {
+            let result_positive = calculate_name_width(magnitude, true);
+            let result_negative = calculate_name_width(magnitude, false);
+
+            assert!(result_positive >= min_width,
+                   "Positive adjustment {} returned {} which is less than minimum {}",
+                   magnitude, result_positive, min_width);
+
+            assert!(result_negative >= min_width,
+                   "Negative adjustment {} returned {} which is less than minimum {}",
+                   magnitude, result_negative, min_width);
+        }
+    }
+
+    /// Test boundary values and edge cases
+    #[test]
+    fn test_boundary_values() {
+        let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Test adjustment of exactly 1
+        let plus_one = calculate_name_width(1, true);
+        let minus_one = calculate_name_width(1, false);
+
+        assert_eq!(plus_one, base_width.saturating_add(1).max(min_width));
+        assert_eq!(minus_one, base_width.saturating_sub(1).max(min_width));
+
+        // Test adjustment equal to base width
+        let result_equal = calculate_name_width(base_width, false);
+        assert_eq!(result_equal, min_width,
+                  "Adjustment equal to base width should return minimum");
+
+        // Test u16 boundaries
+        assert!(calculate_name_width(0, true) <= u16::MAX);
+        assert!(calculate_name_width(0, false) <= u16::MAX);
+        assert!(calculate_name_width(u16::MAX, true) <= u16::MAX);
+        assert!(calculate_name_width(u16::MAX, false) <= u16::MAX);
+    }
+
+    /// Test function determinism and consistency
+    #[test]
+    fn test_deterministic_behavior() {
+        // Function should always return the same result for same inputs
+        let test_cases = [
+            (0, true),
+            (0, false),
+            (10, true),
+            (10, false),
+            (100, true),
+            (100, false),
+            (u16::MAX, true),
+            (u16::MAX, false),
+        ];
+
+        for (magnitude, direction) in test_cases {
+            let result1 = calculate_name_width(magnitude, direction);
+            let result2 = calculate_name_width(magnitude, direction);
+            let result3 = calculate_name_width(magnitude, direction);
+
+            assert_eq!(result1, result2,
+                      "Function not deterministic for magnitude={}, direction={}",
+                      magnitude, direction);
+            assert_eq!(result2, result3,
+                      "Function not deterministic for magnitude={}, direction={}",
+                      magnitude, direction);
+        }
+    }
+
+    /// Test minimum width calculation correctness
+    #[test]
+    fn test_minimum_width_calculation() {
+        let calculated_min = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Verify minimum allows for ellipsis + suffix as documented
+        assert!(calculated_min >= 8,
+               "Minimum width {} should be at least 8 characters", calculated_min);
+
+        // Verify the calculation makes sense
+        let suffix_len = FILENAME_SUFFIX_LENGTH as u16;
+        assert_eq!(calculated_min, suffix_len + 3,
+                  "Minimum width calculation is incorrect");
+
+        // Test that function actually uses this minimum
+        let result = calculate_name_width(u16::MAX, false);
+        assert_eq!(result, calculated_min,
+                  "Function doesn't use calculated minimum width");
+    }
+
+    /// Test configuration validation (will only fail in debug builds)
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_configuration_assumptions() {
+        let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // This test verifies our configuration is sane
+        // If this fails, the constants need to be adjusted
+        assert!(base_width >= min_width,
+               "Configuration error: MAX_NAME_LENGTH_DEFAULT ({}) must be >= minimum width ({})",
+               base_width, min_width);
+
+        // Test that the function works correctly with current configuration
+        let result = calculate_name_width(0, true);
+        assert_eq!(result, base_width,
+                  "With valid configuration, zero adjustment should return base width");
+    }
+
+    /// Test mathematical properties and invariants
+    #[test]
+    fn test_mathematical_invariants() {
+        let min_width = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+        // Invariant: result is always >= minimum width
+        for magnitude in [0, 1, 10, 100, 1000] {
+            for direction in [true, false] {
+                let result = calculate_name_width(magnitude, direction);
+                assert!(result >= min_width,
+                       "Invariant violation: result {} < minimum {} for magnitude={}, direction={}",
+                       result, min_width, magnitude, direction);
+            }
+        }
+
+        // Invariant: positive adjustments never decrease width (unless hitting boundaries)
+        let base_result = calculate_name_width(0, true);
+        for magnitude in [1, 5, 10] {
+            let adjusted_result = calculate_name_width(magnitude, true);
+            if base_result < u16::MAX - magnitude {
+                assert!(adjusted_result >= base_result,
+                       "Positive adjustment should not decrease width");
+            }
+        }
+    }
+
+    /// Test extreme scenarios and stress conditions
+    #[test]
+    fn test_extreme_scenarios() {
+        // Test with all possible boolean values explicitly
+        assert!(calculate_name_width(0, true) >= (FILENAME_SUFFIX_LENGTH + 3) as u16);
+        assert!(calculate_name_width(0, false) >= (FILENAME_SUFFIX_LENGTH + 3) as u16);
+
+        // Test alternating large adjustments don't cause issues
+        let large_pos = calculate_name_width(10000, true);
+        let large_neg = calculate_name_width(10000, false);
+
+        assert!(large_pos <= u16::MAX);
+        assert!(large_neg == (FILENAME_SUFFIX_LENGTH + 3) as u16);
+
+        // Test that we can handle the full range of u16
+        let min_adjust = calculate_name_width(u16::MIN, true);  // 0
+        let max_adjust = calculate_name_width(u16::MAX, true);
+
+        assert!(min_adjust >= (FILENAME_SUFFIX_LENGTH + 3) as u16);
+        assert_eq!(max_adjust, u16::MAX);
     }
 }
 

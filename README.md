@@ -282,3 +282,15 @@ if the size is no more than 99 of that unit
 ## TUI Size:
 - default terminal size 80/24
 - 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
+
+
+## Run Tests
+```bash
+RUST_TRACEBACK=full cargo test
+```
+```bash
+RUST_TRACEBACK=full cargo test --profile release-performance
+```
+```bash
+RUST_TRACEBACK=full cargo test --profile release-small
+```

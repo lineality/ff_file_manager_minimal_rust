@@ -1308,3 +1308,72 @@ fn parse_special_flags(input: &str) -> Option<(String, String)> {
 //         format!("{}-{:02}-{:02}", year, month, day)
 //     }
 // }
+
+
+// lacks enforcement of minimum
+/// Calculates the actual name column width based on user adjustments
+///
+/// # Purpose
+/// Determines how many characters wide the name column should be by applying
+/// the user's adjustment to the default baseline. This width controls how much
+/// of each filename is visible before truncation.
+///
+/// # Arguments
+/// * `adjustment_magnitude` - The positive number of characters to add or remove
+/// * `adjustment_direction_true_is_positive_false_is_negative` - Direction of adjustment:
+///   - `true` = Add characters (wider column)
+///   - `false` = Remove characters (narrower column)
+///
+/// # Returns
+/// * `u16` - The calculated column width in characters
+///
+/// # Calculation Logic
+/// 1. Start with MAX_NAME_LENGTH_DEFAULT (55 characters)
+/// 2. Apply adjustment in the specified direction
+/// 3. Use saturating arithmetic to prevent overflow
+/// 4. Enforce minimum width of 8 characters (FILENAME_SUFFIX_LENGTH + 3 for "...")
+///
+/// # Minimum Width Rationale
+/// The minimum of 8 characters ensures we can always display:
+/// - 3 characters for ellipsis "..."
+/// - 5 characters for file suffix (e.g., ".docx")
+/// This prevents display corruption with very narrow columns.
+///
+/// # Examples
+/// ```rust
+/// // Default width (no adjustment)
+/// assert_eq!(calculate_name_width(0, true), 55);
+///
+/// // Increase width by 10
+/// assert_eq!(calculate_name_width(10, true), 65);
+///
+/// // Decrease width by 50 (hits minimum)
+/// assert_eq!(calculate_name_width(50, false), 8);
+///
+/// // Maximum possible width
+/// assert_eq!(calculate_name_width(u16::MAX, true), u16::MAX);
+/// ```
+fn calculate_name_width(
+    adjustment_magnitude: u16,
+    adjustment_direction_true_is_positive_false_is_negative: bool,
+) -> u16 {
+    // Convert default to u16 for calculation
+    let base_width: u16 = MAX_NAME_LENGTH_DEFAULT as u16;
+
+    // Calculate minimum allowed width (suffix + ellipsis)
+    let minimum_width: u16 = (FILENAME_SUFFIX_LENGTH + 3) as u16;
+
+    // Apply adjustment based on direction
+    if adjustment_direction_true_is_positive_false_is_negative {
+        // Positive adjustment: add to base width
+        // saturating_add prevents overflow, returns u16::MAX if result would overflow
+        base_width.saturating_add(adjustment_magnitude)
+    } else {
+        // Negative adjustment: subtract from base width
+        // saturating_sub prevents underflow, returns 0 if result would be negative
+        // max ensures we never go below minimum_width
+        base_width
+            .saturating_sub(adjustment_magnitude)
+            .max(minimum_width)
+    }
+}
