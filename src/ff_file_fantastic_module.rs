@@ -2,8 +2,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::{self};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -807,6 +807,323 @@ fn recursive_copy_directory(source: &PathBuf, destination: &PathBuf) -> Result<(
     Ok(())
 }
 
+/// Creates a zip file containing a single file using platform-appropriate system commands
+///
+/// # Purpose
+/// Executes platform-specific zip creation commands to compress a single file into a proper
+/// zip archive, avoiding external dependencies while providing cross-platform functionality.
+/// Unlike `create_simple_file_archive()`, this creates genuine zip files compatible with
+/// standard zip tools.
+///
+/// # Arguments
+/// * `source_file_path` - Path to the file to compress
+/// * `zip_destination_path` - Output path for the zip file
+///
+/// # Returns
+/// * `Result<bool>` - True if zip creation succeeded, false if failed
+///
+/// # Platform Implementation
+/// - **Linux/macOS/Android/BSD**: Uses `zip` command to compress single file
+/// - **Windows**: Uses PowerShell `Compress-Archive` cmdlet
+///
+/// # Command Details
+/// ## Linux/macOS/Android/BSD
+/// ```bash
+/// zip "output.zip" "source_file.txt"
+/// ```
+/// The file will be stored in the zip with its original name (no directory structure).
+///
+/// ## Windows
+/// ```powershell
+/// Compress-Archive -Path "source_file.txt" -DestinationPath "output.zip"
+/// ```
+///
+/// # Zip Structure
+/// The created zip file will contain the single file with its original filename,
+/// stored at the root level of the archive (no directory paths).
+///
+/// # Error Handling
+/// - Validates source file exists and is a file (not directory)
+/// - Handles command execution failures
+/// - Checks exit status of zip commands
+/// - Provides platform-specific error context and installation hints
+///
+/// # Example
+/// ```rust
+/// let source_file = PathBuf::from("/home/user/document.txt");
+/// let zip_file = PathBuf::from("/home/user/document_backup.zip");
+///
+/// match create_single_file_zip_archive_via_command(&source_file, &zip_file) {
+///     Ok(true) => println!("File zipped successfully"),
+///     Ok(false) => println!("Zip command failed"),
+///     Err(e) => eprintln!("Error executing zip command: {}", e),
+/// }
+/// ```
+///
+/// # Notes
+/// - Source file must exist and be a regular file (not a directory or symlink)
+/// - Destination directory must be writable
+/// - Requires zip utilities to be installed on the system
+fn create_single_file_zip_archive_via_command(
+    source_file_path: &Path,
+    zip_destination_path: &Path,
+) -> Result<bool> {
+    // Validate source file exists
+    if !source_file_path.exists() {
+        return Err(FileFantasticError::NotFound(source_file_path.to_path_buf()));
+    }
+
+    // Validate source is actually a file (not directory)
+    if !source_file_path.is_file() {
+        return Err(FileFantasticError::InvalidName(format!(
+            "Source is not a file: {}",
+            source_file_path.display()
+        )));
+    }
+
+    // Validate destination directory exists (create parent directories if needed)
+    if let Some(parent_dir) = zip_destination_path.parent() {
+        if !parent_dir.exists() {
+            std::fs::create_dir_all(parent_dir).map_err(|e| {
+                eprintln!(
+                    "Failed to create destination directory: {}",
+                    parent_dir.display()
+                );
+                FileFantasticError::Io(e)
+            })?;
+        }
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "redox",
+    ))]
+    {
+        // Use zip command on Unix-like systems for single file
+        // Note: We use -j flag to store just the file without directory path
+        let output = std::process::Command::new("zip")
+            .arg("-j") // Store files without directory structure
+            .arg(zip_destination_path) // Output zip file
+            .arg(source_file_path) // Input file to zip
+            .output()
+            .map_err(|e| {
+                eprintln!("Failed to execute zip command: {}", e);
+                eprintln!("Make sure 'zip' is installed on your system");
+
+                // Provide platform-specific installation hints
+                if cfg!(target_os = "android") {
+                    eprintln!("On Termux, install zip with: pkg install zip");
+                }
+                #[cfg(target_os = "freebsd")]
+                eprintln!("On FreeBSD, install zip with: pkg install zip");
+                #[cfg(target_os = "openbsd")]
+                eprintln!("On OpenBSD, install zip with: pkg_add zip");
+                #[cfg(target_os = "netbsd")]
+                eprintln!("On NetBSD, install zip with: pkgin install zip");
+                #[cfg(target_os = "dragonfly")]
+                eprintln!("On DragonFly BSD, install zip with: pkg install zip");
+                #[cfg(target_os = "redox")]
+                eprintln!("On Redox OS, install zip through the package manager");
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                {
+                    eprintln!("On Ubuntu/Debian: apt install zip");
+                    eprintln!("On RHEL/CentOS/Fedora: yum install zip (or dnf install zip)");
+                    eprintln!("On macOS: brew install zip (or use built-in zip)");
+                }
+
+                FileFantasticError::Io(e)
+            })?;
+
+        if output.status.success() {
+            println!(
+                "Single file archived successfully: {}",
+                zip_destination_path.display()
+            );
+            Ok(true)
+        } else {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Zip command failed for single file: {}", error_msg);
+            eprintln!("Source file: {}", source_file_path.display());
+            eprintln!("Destination zip: {}", zip_destination_path.display());
+            Ok(false)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell Compress-Archive on Windows for single file
+        // PowerShell handles single files naturally
+        let output = std::process::Command::new("powershell")
+            .arg("-Command")
+            .arg(&format!(
+                "Compress-Archive -Path '{}' -DestinationPath '{}' -Force",
+                source_file_path.display(),
+                zip_destination_path.display()
+            ))
+            .output()
+            .map_err(|e| {
+                eprintln!(
+                    "Failed to execute PowerShell Compress-Archive command: {}",
+                    e
+                );
+                eprintln!("Make sure PowerShell is available on your Windows system");
+                FileFantasticError::Io(e)
+            })?;
+
+        if output.status.success() {
+            println!(
+                "Single file archived successfully: {}",
+                zip_destination_path.display()
+            );
+            Ok(true)
+        } else {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "PowerShell Compress-Archive failed for single file: {}",
+                error_msg
+            );
+            eprintln!("Source file: {}", source_file_path.display());
+            eprintln!("Destination zip: {}", zip_destination_path.display());
+            Ok(false)
+        }
+    }
+
+    // Fallback for unsupported platforms
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "redox",
+        target_os = "windows"
+    )))]
+    {
+        eprintln!("Zip creation not supported on this platform");
+        Err(FileFantasticError::InvalidName(
+            "Platform not supported for zip creation".to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod create_single_file_zip_archive_via_comtests {
+    use super::*;
+    // use std::fs::File;
+    // use std::io::Write;
+    // use tempfile::TempDir;
+
+    // #[test]
+    // fn test_create_single_file_zip_archive_via_command() -> Result<()> {
+    //     // Create temporary directory for test
+    //     let temp_dir = TempDir::new().map_err(|e| FileFantasticError::Io(e))?;
+    //     let temp_path = temp_dir.path();
+
+    //     // Create a test file
+    //     let test_file_path = temp_path.join("test_file.txt");
+    //     let mut test_file = File::create(&test_file_path).map_err(|e| FileFantasticError::Io(e))?;
+    //     writeln!(test_file, "This is a test file for zip archiving.")
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+    //     writeln!(test_file, "It contains multiple lines.")
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+    //     writeln!(test_file, "Line three for good measure.")
+    //         .map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Create zip destination path
+    //     let zip_path = temp_path.join("test_file.zip");
+
+    //     // Test the function
+    //     match create_single_file_zip_archive_via_command(&test_file_path, &zip_path) {
+    //         Ok(true) => {
+    //             // Verify zip file was created
+    //             assert!(zip_path.exists(), "Zip file should exist after creation");
+    //             assert!(zip_path.is_file(), "Zip path should be a file");
+
+    //             // Check file size is reasonable (should be smaller than original due to compression)
+    //             let original_size = std::fs::metadata(&test_file_path)
+    //                 .map_err(|e| FileFantasticError::Io(e))?
+    //                 .len();
+    //             let zip_size = std::fs::metadata(&zip_path)
+    //                 .map_err(|e| FileFantasticError::Io(e))?
+    //                 .len();
+
+    //             // Zip file should exist and have some content (header + compressed data)
+    //             assert!(zip_size > 0, "Zip file should not be empty");
+    //             println!(
+    //                 "Original file: {} bytes, Zip file: {} bytes",
+    //                 original_size, zip_size
+    //             );
+    //         }
+    //         Ok(false) => {
+    //             println!(
+    //                 "Zip command failed - this might be expected if zip tools are not installed"
+    //             );
+    //             // This is not necessarily a test failure - zip tools might not be available
+    //         }
+    //         Err(e) => {
+    //             println!("Error during zip creation: {}", e);
+    //             // This might be expected in CI environments without zip tools
+    //         }
+    //     }
+
+    //     Ok(())
+    // }
+
+    #[test]
+    fn test_create_single_file_zip_archive_nonexistent_file() {
+        let nonexistent_file = Path::new("/definitely/does/not/exist/file.txt");
+        let zip_path = Path::new("/tmp/should_not_be_created.zip");
+
+        let result = create_single_file_zip_archive_via_command(nonexistent_file, zip_path);
+
+        // Should return NotFound error
+        assert!(result.is_err());
+        match result {
+            Err(FileFantasticError::NotFound(_)) => {
+                println!("Correctly detected non-existent source file");
+            }
+            _ => panic!("Should have returned NotFound error for non-existent file"),
+        }
+    }
+
+    // #[test]
+    // fn test_create_single_file_zip_archive_directory_as_source() -> Result<()> {
+    //     // Create temporary directory for test
+    //     let temp_dir = TempDir::new().map_err(|e| FileFantasticError::Io(e))?;
+    //     let temp_path = temp_dir.path();
+
+    //     // Create a subdirectory (not a file)
+    //     let test_dir_path = temp_path.join("test_directory");
+    //     std::fs::create_dir(&test_dir_path).map_err(|e| FileFantasticError::Io(e))?;
+
+    //     // Create zip destination path
+    //     let zip_path = temp_path.join("should_fail.zip");
+
+    //     // Test the function with directory as source (should fail)
+    //     let result = create_single_file_zip_archive_via_command(&test_dir_path, &zip_path);
+
+    //     // Should return InvalidName error because source is directory, not file
+    //     assert!(result.is_err());
+    //     match result {
+    //         Err(FileFantasticError::InvalidName(msg)) => {
+    //             assert!(msg.contains("not a file"));
+    //             println!("Correctly detected directory as source: {}", msg);
+    //         }
+    //         _ => panic!("Should have returned InvalidName error for directory source"),
+    //     }
+
+    //     Ok(())
+    // }
+}
+
 /// Result of retrieving an item from stack with type information
 ///
 /// # Purpose
@@ -886,7 +1203,10 @@ fn calculate_name_width(
         base_width >= minimum_width,
         "Configuration error: MAX_NAME_LENGTH_DEFAULT ({}) must be >= minimum required width ({}). \
          Minimum width = FILENAME_SUFFIX_LENGTH ({}) + 3 chars for ellipsis = {}",
-        base_width, minimum_width, FILENAME_SUFFIX_LENGTH, minimum_width
+        base_width,
+        minimum_width,
+        FILENAME_SUFFIX_LENGTH,
+        minimum_width
     );
 
     // Apply adjustment based on direction using saturating arithmetic
@@ -920,12 +1240,18 @@ mod calculate_name_width_tests {
         let result_negative = calculate_name_width(0, false);
 
         // Should return at least the minimum width
-        assert!(result_positive >= min_width,
-                "Zero positive adjustment returned {} but minimum is {}",
-                result_positive, min_width);
-        assert!(result_negative >= min_width,
-                "Zero negative adjustment returned {} but minimum is {}",
-                result_negative, min_width);
+        assert!(
+            result_positive >= min_width,
+            "Zero positive adjustment returned {} but minimum is {}",
+            result_positive,
+            min_width
+        );
+        assert!(
+            result_negative >= min_width,
+            "Zero negative adjustment returned {} but minimum is {}",
+            result_negative,
+            min_width
+        );
 
         // If configuration is correct, should return expected width
         if expected_width >= min_width {
@@ -947,20 +1273,26 @@ mod calculate_name_width_tests {
         // Small positive adjustment
         let result_small = calculate_name_width(1, true);
         let expected_small = base_width.saturating_add(1).max(min_width);
-        assert_eq!(result_small, expected_small,
-                  "Small positive adjustment failed");
+        assert_eq!(
+            result_small, expected_small,
+            "Small positive adjustment failed"
+        );
 
         // Medium positive adjustment
         let result_medium = calculate_name_width(25, true);
         let expected_medium = base_width.saturating_add(25).max(min_width);
-        assert_eq!(result_medium, expected_medium,
-                  "Medium positive adjustment failed");
+        assert_eq!(
+            result_medium, expected_medium,
+            "Medium positive adjustment failed"
+        );
 
         // Large positive adjustment
         let result_large = calculate_name_width(1000, true);
         let expected_large = base_width.saturating_add(1000).max(min_width);
-        assert_eq!(result_large, expected_large,
-                  "Large positive adjustment failed");
+        assert_eq!(
+            result_large, expected_large,
+            "Large positive adjustment failed"
+        );
 
         // All results should be at least minimum width
         assert!(result_small >= min_width);
@@ -977,19 +1309,25 @@ mod calculate_name_width_tests {
         // Small negative adjustment (shouldn't hit minimum)
         let small_adjustment = if base_width > min_width + 5 { 5 } else { 1 };
         let result_small = calculate_name_width(small_adjustment, false);
-        assert!(result_small >= min_width,
-               "Small negative adjustment returned less than minimum");
+        assert!(
+            result_small >= min_width,
+            "Small negative adjustment returned less than minimum"
+        );
 
         // Medium negative adjustment
         let result_medium = calculate_name_width(20, false);
         let expected_medium = base_width.saturating_sub(20).max(min_width);
-        assert_eq!(result_medium, expected_medium,
-                  "Medium negative adjustment failed");
+        assert_eq!(
+            result_medium, expected_medium,
+            "Medium negative adjustment failed"
+        );
 
         // Large negative adjustment (should hit minimum)
         let result_large = calculate_name_width(base_width + 100, false);
-        assert_eq!(result_large, min_width,
-                  "Large negative adjustment should return minimum width");
+        assert_eq!(
+            result_large, min_width,
+            "Large negative adjustment should return minimum width"
+        );
     }
 
     /// Test overflow protection with maximum values
@@ -1001,15 +1339,20 @@ mod calculate_name_width_tests {
         // Should be either u16::MAX or saturated to u16::MAX
         let base_width = MAX_NAME_LENGTH_DEFAULT as u16;
         let expected_max = base_width.saturating_add(u16::MAX);
-        assert_eq!(result_max, expected_max,
-                  "Maximum positive adjustment should saturate properly");
+        assert_eq!(
+            result_max, expected_max,
+            "Maximum positive adjustment should saturate properly"
+        );
 
         // Near-maximum adjustment that would overflow
         if base_width < u16::MAX {
             let overflow_adjustment = u16::MAX - base_width + 1;
             let result_overflow = calculate_name_width(overflow_adjustment, true);
-            assert_eq!(result_overflow, u16::MAX,
-                      "Overflow adjustment should saturate to u16::MAX");
+            assert_eq!(
+                result_overflow,
+                u16::MAX,
+                "Overflow adjustment should saturate to u16::MAX"
+            );
         }
     }
 
@@ -1020,15 +1363,19 @@ mod calculate_name_width_tests {
 
         // Maximum negative adjustment should hit minimum, not underflow
         let result_max_negative = calculate_name_width(u16::MAX, false);
-        assert_eq!(result_max_negative, min_width,
-                  "Maximum negative adjustment should return minimum width");
+        assert_eq!(
+            result_max_negative, min_width,
+            "Maximum negative adjustment should return minimum width"
+        );
 
         // Various large negative adjustments should all return minimum
         for large_adjustment in [1000, 5000, u16::MAX / 2, u16::MAX] {
             let result = calculate_name_width(large_adjustment, false);
-            assert_eq!(result, min_width,
-                      "Large negative adjustment {} should return minimum width",
-                      large_adjustment);
+            assert_eq!(
+                result, min_width,
+                "Large negative adjustment {} should return minimum width",
+                large_adjustment
+            );
         }
     }
 
@@ -1042,13 +1389,21 @@ mod calculate_name_width_tests {
             let result_positive = calculate_name_width(magnitude, true);
             let result_negative = calculate_name_width(magnitude, false);
 
-            assert!(result_positive >= min_width,
-                   "Positive adjustment {} returned {} which is less than minimum {}",
-                   magnitude, result_positive, min_width);
+            assert!(
+                result_positive >= min_width,
+                "Positive adjustment {} returned {} which is less than minimum {}",
+                magnitude,
+                result_positive,
+                min_width
+            );
 
-            assert!(result_negative >= min_width,
-                   "Negative adjustment {} returned {} which is less than minimum {}",
-                   magnitude, result_negative, min_width);
+            assert!(
+                result_negative >= min_width,
+                "Negative adjustment {} returned {} which is less than minimum {}",
+                magnitude,
+                result_negative,
+                min_width
+            );
         }
     }
 
@@ -1067,8 +1422,10 @@ mod calculate_name_width_tests {
 
         // Test adjustment equal to base width
         let result_equal = calculate_name_width(base_width, false);
-        assert_eq!(result_equal, min_width,
-                  "Adjustment equal to base width should return minimum");
+        assert_eq!(
+            result_equal, min_width,
+            "Adjustment equal to base width should return minimum"
+        );
 
         // Test u16 boundaries
         assert!(calculate_name_width(0, true) <= u16::MAX);
@@ -1097,12 +1454,16 @@ mod calculate_name_width_tests {
             let result2 = calculate_name_width(magnitude, direction);
             let result3 = calculate_name_width(magnitude, direction);
 
-            assert_eq!(result1, result2,
-                      "Function not deterministic for magnitude={}, direction={}",
-                      magnitude, direction);
-            assert_eq!(result2, result3,
-                      "Function not deterministic for magnitude={}, direction={}",
-                      magnitude, direction);
+            assert_eq!(
+                result1, result2,
+                "Function not deterministic for magnitude={}, direction={}",
+                magnitude, direction
+            );
+            assert_eq!(
+                result2, result3,
+                "Function not deterministic for magnitude={}, direction={}",
+                magnitude, direction
+            );
         }
     }
 
@@ -1112,18 +1473,26 @@ mod calculate_name_width_tests {
         let calculated_min = (FILENAME_SUFFIX_LENGTH + 3) as u16;
 
         // Verify minimum allows for ellipsis + suffix as documented
-        assert!(calculated_min >= 8,
-               "Minimum width {} should be at least 8 characters", calculated_min);
+        assert!(
+            calculated_min >= 8,
+            "Minimum width {} should be at least 8 characters",
+            calculated_min
+        );
 
         // Verify the calculation makes sense
         let suffix_len = FILENAME_SUFFIX_LENGTH as u16;
-        assert_eq!(calculated_min, suffix_len + 3,
-                  "Minimum width calculation is incorrect");
+        assert_eq!(
+            calculated_min,
+            suffix_len + 3,
+            "Minimum width calculation is incorrect"
+        );
 
         // Test that function actually uses this minimum
         let result = calculate_name_width(u16::MAX, false);
-        assert_eq!(result, calculated_min,
-                  "Function doesn't use calculated minimum width");
+        assert_eq!(
+            result, calculated_min,
+            "Function doesn't use calculated minimum width"
+        );
     }
 
     /// Test configuration validation (will only fail in debug builds)
@@ -1135,14 +1504,19 @@ mod calculate_name_width_tests {
 
         // This test verifies our configuration is sane
         // If this fails, the constants need to be adjusted
-        assert!(base_width >= min_width,
-               "Configuration error: MAX_NAME_LENGTH_DEFAULT ({}) must be >= minimum width ({})",
-               base_width, min_width);
+        assert!(
+            base_width >= min_width,
+            "Configuration error: MAX_NAME_LENGTH_DEFAULT ({}) must be >= minimum width ({})",
+            base_width,
+            min_width
+        );
 
         // Test that the function works correctly with current configuration
         let result = calculate_name_width(0, true);
-        assert_eq!(result, base_width,
-                  "With valid configuration, zero adjustment should return base width");
+        assert_eq!(
+            result, base_width,
+            "With valid configuration, zero adjustment should return base width"
+        );
     }
 
     /// Test mathematical properties and invariants
@@ -1154,9 +1528,14 @@ mod calculate_name_width_tests {
         for magnitude in [0, 1, 10, 100, 1000] {
             for direction in [true, false] {
                 let result = calculate_name_width(magnitude, direction);
-                assert!(result >= min_width,
-                       "Invariant violation: result {} < minimum {} for magnitude={}, direction={}",
-                       result, min_width, magnitude, direction);
+                assert!(
+                    result >= min_width,
+                    "Invariant violation: result {} < minimum {} for magnitude={}, direction={}",
+                    result,
+                    min_width,
+                    magnitude,
+                    direction
+                );
             }
         }
 
@@ -1165,8 +1544,10 @@ mod calculate_name_width_tests {
         for magnitude in [1, 5, 10] {
             let adjusted_result = calculate_name_width(magnitude, true);
             if base_result < u16::MAX - magnitude {
-                assert!(adjusted_result >= base_result,
-                       "Positive adjustment should not decrease width");
+                assert!(
+                    adjusted_result >= base_result,
+                    "Positive adjustment should not decrease width"
+                );
             }
         }
     }
@@ -1186,7 +1567,7 @@ mod calculate_name_width_tests {
         assert!(large_neg == (FILENAME_SUFFIX_LENGTH + 3) as u16);
 
         // Test that we can handle the full range of u16
-        let min_adjust = calculate_name_width(u16::MIN, true);  // 0
+        let min_adjust = calculate_name_width(u16::MIN, true); // 0
         let max_adjust = calculate_name_width(u16::MAX, true);
 
         assert!(min_adjust >= (FILENAME_SUFFIX_LENGTH + 3) as u16);
@@ -1346,7 +1727,10 @@ mod calculate_items_per_page_tests {
     #[test]
     fn test_calculate_items_per_page_zero_items_allowed() {
         let result = calculate_items_per_page(ITEMS_PER_PAGE_DEFAULT as u16, false);
-        assert_eq!(result, 0, "Zero items per page should be allowed for header-only display");
+        assert_eq!(
+            result, 0,
+            "Zero items per page should be allowed for header-only display"
+        );
     }
 
     /// Test consistency of adjustment direction parameter
@@ -1360,7 +1744,10 @@ mod calculate_items_per_page_tests {
 
         assert_eq!(positive_result, base + adjustment);
         assert_eq!(negative_result, base - adjustment);
-        assert!(positive_result > negative_result, "Positive adjustment should yield larger result");
+        assert!(
+            positive_result > negative_result,
+            "Positive adjustment should yield larger result"
+        );
     }
 
     /// Property-based test for saturating arithmetic
@@ -1371,13 +1758,19 @@ mod calculate_items_per_page_tests {
         // For any adjustment, positive direction should never be less than base
         for adjustment in [1, 100, 1000, u16::MAX] {
             let result = calculate_items_per_page(adjustment, true);
-            assert!(result >= base, "Positive adjustment result should be >= base");
+            assert!(
+                result >= base,
+                "Positive adjustment result should be >= base"
+            );
         }
 
         // For any adjustment, negative direction should never be greater than base
         for adjustment in [1, 100, 1000, u16::MAX] {
             let result = calculate_items_per_page(adjustment, false);
-            assert!(result <= base, "Negative adjustment result should be <= base");
+            assert!(
+                result <= base,
+                "Negative adjustment result should be <= base"
+            );
         }
     }
 }
@@ -1535,7 +1928,8 @@ fn create_directory_zip_archive(
     let zip_destination_path = destination_directory_path.join(&zip_filename);
 
     // Create zip archive using system commands
-    let zip_result = create_zip_with_system_command(source_directory_path, &zip_destination_path)?;
+    let zip_result =
+        create_zip_of_dir_with_system_command(source_directory_path, &zip_destination_path)?;
 
     if zip_result {
         println!("Directory archived: {}", zip_destination_path.display());
@@ -1554,7 +1948,7 @@ mod create_directory_zip_archive_tests {
     use std::path::PathBuf;
 
     /// Test successful creation of zip archive without custom name
-    /// Note: This test requires that create_zip_with_system_command actually works
+    /// Note: This test requires that create_zip_of_dir_with_system_command actually works
     #[test]
     fn test_create_zip_archive_validates_source_exists() {
         // Test with non-existent source
@@ -1577,7 +1971,10 @@ mod create_directory_zip_archive_tests {
 
         let result = create_directory_zip_archive(&temp_file_path, &dest_path, None);
 
-        assert!(result.is_err(), "Should error when source is not a directory");
+        assert!(
+            result.is_err(),
+            "Should error when source is not a directory"
+        );
 
         // Clean up
         let _ = fs::remove_file(temp_file_path);
@@ -1622,13 +2019,16 @@ mod create_directory_zip_archive_tests {
 /// let source = PathBuf::from("/home/user/documents");
 /// let zip_file = PathBuf::from("/home/user/documents_backup.zip");
 ///
-/// match create_zip_with_system_command(&source, &zip_file) {
+/// match create_zip_of_dir_with_system_command(&source, &zip_file) {
 ///     Ok(true) => println!("Zip created successfully"),
 ///     Ok(false) => println!("Zip command failed"),
 ///     Err(e) => eprintln!("Error executing zip command: {}", e),
 /// }
 /// ```
-fn create_zip_with_system_command(source_path: &PathBuf, zip_path: &PathBuf) -> Result<bool> {
+fn create_zip_of_dir_with_system_command(
+    source_path: &PathBuf,
+    zip_path: &PathBuf,
+) -> Result<bool> {
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -2860,7 +3260,7 @@ impl NavigationStateManager {
         let archive_path = archive_directory.join(archive_name);
 
         // Create simple archive (since we can't use external zip libraries)
-        self.create_simple_file_archive(file_path, &archive_path)?;
+        create_single_file_zip_archive_via_command(file_path, &archive_path)?;
 
         Ok(archive_path)
     }
@@ -2918,53 +3318,6 @@ impl NavigationStateManager {
         fs::copy(file_path, &archive_path).map_err(|e| FileFantasticError::Io(e))?;
 
         Ok(archive_path)
-    }
-
-    /// Creates a simple archive format for a single file
-    ///
-    /// # Purpose
-    /// Since we can't use third-party libraries, this creates a simple
-    /// archive format that stores the file with some metadata.
-    ///
-    /// # Note
-    /// This is a simplified implementation. In production, you would
-    /// implement proper ZIP format or use a library.
-    fn create_simple_file_archive(&self, source_file: &Path, archive_path: &Path) -> Result<()> {
-        // Read source file
-        let mut source = File::open(source_file).map_err(|e| FileFantasticError::Io(e))?;
-
-        let mut contents = Vec::new();
-        source
-            .read_to_end(&mut contents)
-            .map_err(|e| FileFantasticError::Io(e))?;
-
-        // Create archive file with simple format
-        let mut archive = File::create(archive_path).map_err(|e| FileFantasticError::Io(e))?;
-
-        let filename = source_file
-            .file_name()
-            .ok_or_else(|| {
-                FileFantasticError::InvalidName("Could not extract filename".to_string())
-            })?
-            .to_string_lossy();
-
-        // Write simple archive format
-        // Format: [filename_length:u32][filename][file_size:u64][file_contents]
-        let filename_bytes = filename.as_bytes();
-        archive
-            .write_all(&(filename_bytes.len() as u32).to_le_bytes())
-            .map_err(|e| FileFantasticError::Io(e))?;
-        archive
-            .write_all(filename_bytes)
-            .map_err(|e| FileFantasticError::Io(e))?;
-        archive
-            .write_all(&(contents.len() as u64).to_le_bytes())
-            .map_err(|e| FileFantasticError::Io(e))?;
-        archive
-            .write_all(&contents)
-            .map_err(|e| FileFantasticError::Io(e))?;
-
-        Ok(())
     }
 
     /// Interactive interface to add any item (file or directory) to the appropriate stack
@@ -11384,6 +11737,7 @@ mod archive_tests_2 {
     use super::*;
     use std::env;
     use std::fs;
+    use std::fs::File;
     use std::io::{Read, Write};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
