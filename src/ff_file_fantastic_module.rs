@@ -10169,8 +10169,8 @@ fn open_in_tmux_split(editor: &str, file_path: &PathBuf, split_type: &str) -> Re
 
     // Explicitly translate our split type flags to tmux split-window arguments
     let (tmux_split_arg, split_direction) = match split_type {
-        "-vsplit" | "--vertical-split-tmux" => ("-v", "vertical"),
-        "-hsplit" | "--horizontal-split-tmux" => ("-h", "horizontal"),
+        "vsplit" | "-vsplit" | "--vertical-split-tmux" => ("-v", "vertical"),
+        "hsplit" | "-hsplit" | "--horizontal-split-tmux" => ("-h", "horizontal"),
         _ => {
             return Err(FileFantasticError::EditorLaunchFailed(format!(
                 "Invalid split type '{}'. Expected '-vsplit' or '-hsplit'",
@@ -10236,7 +10236,9 @@ fn parse_special_flags(input: &str) -> Option<(String, String)> {
         ("-h", "--headless"),
         ("--headless", "--headless"),
         ("-vsplit", "--vertical-split-tmux"),
+        ("vsplit", "--vertical-split-tmux"),
         ("--vertical-split-tmux", "--vertical-split-tmux"),
+        ("hsplit", "--horizontal-split-tmux"),
         ("-hsplit", "--horizontal-split-tmux"),
         ("--horizontal-split-tmux", "--horizontal-split-tmux"),
         ("-rc", "--rows-and-columns"),
@@ -10653,9 +10655,15 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         // Extract the primary action flag (for headless/tmux)
         let primary_flag = if flag_list.contains(&"--headless") {
             "--headless" // Changed to avoid confusion
-        } else if flag_list.contains(&"-vsplit") || flag_list.contains(&"--vertical-split-tmux") {
+        } else if flag_list.contains(&"vsplit")
+            || flag_list.contains(&"-vsplit")
+            || flag_list.contains(&"--vertical-split-tmux")
+        {
             "-vsplit"
-        } else if flag_list.contains(&"-hsplit") || flag_list.contains(&"--horizontal-split-tmux") {
+        } else if flag_list.contains(&"hsplit")
+            || flag_list.contains(&"-hsplit")
+            || flag_list.contains(&"--horizontal-split-tmux")
+        {
             "-hsplit"
         } else if flag_list.contains(&"-rc") || flag_list.contains(&"--rows-and-columns") {
             ""
