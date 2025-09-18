@@ -12548,7 +12548,7 @@ pub fn display_help_menu_system() -> Result<()> {
 
         println!();
         print!(
-            "{}Enter section number (1-8) or 'q' to quit: {}",
+            "{}Enter section number (1-10) or 'q' to quit: {}",
             ansi_colors::BOLD,
             ansi_colors::RESET
         );
@@ -12585,7 +12585,7 @@ pub fn display_help_menu_system() -> Result<()> {
             }
             _ => {
                 println!(
-                    "{}Try again...Please enter 1-9 or 'q'.{}",
+                    "{}Try again...Please enter 1-10 or 'q'.{}",
                     ansi_colors::YELLOW,
                     ansi_colors::RESET
                 );
