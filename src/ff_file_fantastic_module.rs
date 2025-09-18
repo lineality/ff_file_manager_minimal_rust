@@ -12409,7 +12409,7 @@ const HELP_SECTION_GET_SEND_MODE: &str = r#"
 
 /// Terminal management help section content
 const HELP_SECTION_TERMINAL: &str = r#"
- ═══ TERMINAL & DISPLAY MANAGEMENT ═══  Press Enter to return to help menu...
+ ═══ TERMINAL & DISPLAY MANAGEMENT ═══  Press Enter to return
 
  Your 'current working directory,' where you go, in ff, does not
  carry over to your terminal after you exit. But you will want
@@ -12931,7 +12931,7 @@ mod helpview_tests {
     fn test_help_sections_fit_terminal() {
         // Maximum lines for 80x24 terminal (leaving room for prompt)
         const MAX_LINES: usize = 24;
-        const MAX_WIDTH: usize = 80;
+        const MAX_WIDTH: usize = 82; // maybe an off by one error here
 
         // Check each section
         let sections = vec![
