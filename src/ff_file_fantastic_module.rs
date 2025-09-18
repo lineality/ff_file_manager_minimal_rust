@@ -143,6 +143,7 @@ not work. In such cases it is nice to have a stable backup option.
 6. all errors to be handled
 7. terminal cli application
 8. Module to be used by other projects
+9. memory slim
 
 # Main functions/features:
 1. minimal text user interface (TUI)
@@ -158,6 +159,7 @@ not work. In such cases it is nice to have a stable backup option.
 8. hit enter to refresh
 11. single letter commands
 12. legend shows command 'words': use first letter as command
+13. Search: -g --grep, -r --recursive, -c --case-sensitive
 ```
 quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 ```
@@ -171,6 +173,8 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 20. Use your own programs with ff to work on files (such as 'lines' or 'rows_and_columns' for .csv files, or a hex-editor such as 'tofu')
 21. User can resize TUI: tall+/-N or wide+/-N (e.g. tall+2 or wide-4)
 22. modular to easy integration into other projects
+23. headless and tmux support: instead of a new terminal emulator, can use -h terminal editor in same terminal, or new tmux split
+24. 'Rows & Columns' -rc to inspect .csv tabular data when opening file
 
 ## Scrolling
 Instructions appear in info-bar:
@@ -211,23 +215,16 @@ if the size is no more than 99 of that unit
 - 'tall+N' or 'tall-N' or 'wide+N' or 'wide-N' will change TUI, not cumulative
 
 
-General Pattern for Platform-Specific Code
-When adding new platforms to conditional compilation, always remember to update all relevant cfg attributes:
-// If you have:
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-{ /* implementation A */ }
-
-#[cfg(target_os = "windows")]
-{ /* implementation B */ }
-
-// Then the fallback must exclude ALL handled platforms:
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "android"  // Don't forget to add here too!
-)))]
-{ /* fallback implementation */ }
+## Run Tests
+```bash
+RUST_TRACEBACK=full cargo test
+```
+```bash
+RUST_TRACEBACK=full cargo test --profile release-performance
+```
+```bash
+RUST_TRACEBACK=full cargo test --profile release-small
+```
 */
 
 /// ff - A minimal file manager in Rust
@@ -12362,7 +12359,6 @@ const HELP_SECTION_SEARCH: &str = r#"
 /// File operations help section content
 const HELP_SECTION_FILE_OPERATIONS: &str = r#"
  ═══ FILE OPERATIONS ═══    Press  Enter to return to help menu...
-
  Sometimes you will use a teminal and a GUI desktop.
  Sometimes you will use a headless environment (like with ssh).
  Maybe you use tmux or tiling/window managers.
@@ -12383,7 +12379,8 @@ const HELP_SECTION_FILE_OPERATIONS: &str = r#"
  EXAMPLES:
   hx                    Open file with Helix editor, in a new window
   vi -h                 Headless: Open with vi editor in same terminal
-  hx -hsplit            Headless Tmux: Open with Helix in a new split"#;
+  hx -hsplit            Headless Tmux: Open with Helix in a new split
+  hx -rc -vsplit        Tmux split view of rows-cols .csv "#;
 
 /// Get-Send Mode
 const HELP_SECTION_GET_SEND_MODE: &str = r#"
@@ -12536,6 +12533,7 @@ pub fn display_help_menu_system() -> Result<()> {
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
+        println!();
         println!(
             "  {}10.{} View complete help in editor (vi/nano)",
             ansi_colors::GREEN,
