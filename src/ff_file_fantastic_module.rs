@@ -13399,7 +13399,6 @@ pub fn file_fantastic() -> Result<()> {
                                 ])
                                 .output()?;
                         }
-
                         NavigationAction::HsplitTmux => {
                             // This command should create a new horizontal pane with your default shell.
                             let _ = Command::new("tmux")
@@ -13414,7 +13413,6 @@ pub fn file_fantastic() -> Result<()> {
                                 ])
                                 .output()?;
                         }
-
                         NavigationAction::ArchiveModeShortcut => {
                             match state_manager.interactive_archive_selection(
                                 &nav_state,
@@ -13521,7 +13519,6 @@ pub fn file_fantastic() -> Result<()> {
                                                         }
                                                     }
                                                 }
-
                                                 println!("\nPress Enter to continue...");
                                                 let _ = io::stdin().read_line(&mut String::new());
                                             }
@@ -13547,7 +13544,6 @@ pub fn file_fantastic() -> Result<()> {
                                         } else {
                                             Some(nickname.trim().to_string())
                                         };
-
                                         match state_manager.save_pocket_dimension(
                                             current_directory_path.clone(),
                                             &nav_state,
