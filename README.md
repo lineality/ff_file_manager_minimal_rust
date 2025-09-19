@@ -1,4 +1,13 @@
 # ff_file_manager_minimal_rust
+ff is a minimal file manager. It's File Fantastic.
+...it's a File Fantasy.
+
+```bash
+ff
+ff path/
+ff --help
+ff --source
+```
 
 ## Build
 see https://github.com/lineality/rust_compile_optimizations_cheatsheet

@@ -12232,23 +12232,24 @@ enum HelpSection {
 ///
 /// Displayed at the top of the help menu selection screen
 const HELP_MENU_HEADER: &str = r#"
- ╔═══════════════════════════════════════════════════════════════════════════╗
- ║ ff is a minimal file manager. It's File Fantastic! ...it's a File Fantasy.║
- ╚═════════https://github.com/lineality/ff_file_manager_minimal_rust═════════╝
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║ ff is a minimal file manager. It's File Fantastic! ...it's a File Fantasy.║
+  ╚═════════https://github.com/lineality/ff_file_manager_minimal_rust═════════╝
+                         get source code -> ff --source
 
- Goal: Best of both worlds between raw terminal and file manager:
-       GUI features in a TUI. Switch easily between terminal and ff.
+  Goal: Best of both worlds between raw terminal and file manager:
+        GUI features in a TUI. Switch easily between terminal and ff.
  "#;
 
 /// Quick start and examples help section content
 const HELP_SECTION_QUICK_START: &str = r#"
- ═══ QUICK START & EXAMPLES ═══  Press Enter to return to help menu...
+ ═══ QUICK START & EXAMPLES ═══        Press Enter to return to help menu...
 
- USAGE in terminal:
-   ff [OPTIONS] [DIRECTORY]
+ USAGE in terminal:      ff [OPTIONS] [DIRECTORY]
 
  OPTIONS:
    -h, --help            Show this help menu
+   --source              Get ff source code, Rust 'crate'
 
  EXAMPLES:
    ff                    Open ff in current directory
@@ -12260,7 +12261,7 @@ const HELP_SECTION_QUICK_START: &str = r#"
  BASIC WORKFLOW:
    1. Launch ff in/to any directory
    2. Navigate TO files/directories with selection numbers
-   3. Navigate with BACKward with 'b'
+   3. Navigate backwards to parent directory with 'b'
    4. Sort with 'n' (name), 's' (size), 'm' (modified)
    5. Filter with 'd' (dirs only), 'f' (files only)
    6. Search by typing a search term (and hitting enter)
@@ -12857,12 +12858,14 @@ pub fn display_quick_usage_info() -> Result<()> {
     );
     println!();
     println!("{}OPTIONS:{}", ansi_colors::CYAN, ansi_colors::RESET);
-    println!("  -h, --help    Show complete help menu");
+    println!("  -h, --help    Show complete help menu.");
+    println!("  --source      Get ff source code.");
     println!();
     println!("{}EXAMPLES:{}", ansi_colors::GREEN, ansi_colors::RESET);
     println!("  ff            Open in current directory");
     println!("  ff ~/Documents Open in Documents folder");
     println!("  ff --help     Show help menu");
+    println!("  ff --source   Get crate of source code.");
 
     Ok(())
 }

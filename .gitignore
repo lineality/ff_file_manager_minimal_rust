@@ -7,7 +7,7 @@ data/
 logs/
 
 .env
-
+source_crate_*
 test_analysis_report_*
 
 test.csv_metadata.toml
