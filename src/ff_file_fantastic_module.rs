@@ -12829,7 +12829,10 @@ fn strip_ansi_codes(text: &str) -> String {
 /// # Returns
 /// * `bool` - true if help flag found, false otherwise
 pub fn check_for_help_flag_in_args(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "-h" || arg == "--help")
+    // args.iter().any(|arg| arg == "-h" || arg == "--help")
+    args.iter()
+        // .skip(1)
+        .any(|arg| arg == "-h" || arg == "--help")
 }
 
 /// Display quick usage information
