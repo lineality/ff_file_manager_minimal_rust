@@ -7956,8 +7956,10 @@ impl NavigationState {
     /// Resets navigation state to clean defaults while preserving location and sort
     ///
     /// # Purpose
-    /// Clears filters, pagination, selection, and search state to provide a "clean slate"
-    /// view of the current directory while preserving the user's preferred sort method
+    /// Clears filters, pagination, selection, sort, and search state to provide a "clean slate"
+    /// view of the current directory. Defaults to Name "Ascending" (alphabetal order).
+    ///
+    /// Alternate design option: preserving the user's preferred sort method
     /// and current location.
     ///
     /// # State Reset
@@ -7965,7 +7967,7 @@ impl NavigationState {
     /// - Resets to first page (page 0)
     /// - Clears any selected item
     /// - Clears any active search term
-    /// - Preserves: current sort method, current directory location
+    /// - Defaults to Name "Ascending" (alphabetal order).
     ///
     /// # Usage Context
     /// Called when user presses Enter with no input to "refresh" and clear all
@@ -7992,9 +7994,8 @@ impl NavigationState {
         // Clear any active search
         self.active_search_term = None;
 
-        // Note: We preserve current_sort_method and last_sort_command
-        // because users typically want to keep their preferred sort order
-        // when refreshing/resetting the view
+        // Defaults to Name "Ascending" (alphabetal order)
+        self.current_sort_method = DirectorySortingMethodEnum::Name(true);
     }
 
     /// Master wrapper function that handles all search routing and renumbers results
