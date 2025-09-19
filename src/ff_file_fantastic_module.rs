@@ -10034,10 +10034,14 @@ fn launch_partner_program_in_terminal(program_path: &PathBuf, file_path: &PathBu
             .args(["/C", "start", "cmd", "/C"])
             .arg(format!("{} && pause", command_string))
             .spawn()
-            .map_err(|e| {
-                eprintln!("Failed to open cmd.exe for partner program: {}", e);
-                FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
-            })?;
+            .map_err(
+                |_| FileFantasticError::NoTerminalFound,
+                // Use NoTerminalFound instead
+                // .map_err(|e| {
+                //     eprintln!("Failed to open cmd.exe for partner program: {}", e);
+                //     FileFantasticError::EditorLaunchFailed(extract_program_display_name(program_path))
+                // }
+            )?;
     }
     #[cfg(not(any(
         target_os = "macos",
@@ -12230,10 +12234,10 @@ enum HelpSection {
 const HELP_MENU_HEADER: &str = r#"
  ╔═══════════════════════════════════════════════════════════════════════════╗
  ║ ff is a minimal file manager. It's File Fantastic! ...it's a File Fantasy.║
- ╚═══════════════════════════════════════════════════════════════════════════╝
+ ╚═════════https://github.com/lineality/ff_file_manager_minimal_rust═════════╝
 
- Goal: Best of both worlds between raw terminal and file manager: GUI features
-       in a TUI. Switch easily between terminal and ff.
+ Goal: Best of both worlds between raw terminal and file manager:
+       GUI features in a TUI. Switch easily between terminal and ff.
  "#;
 
 /// Quick start and examples help section content
@@ -13026,7 +13030,8 @@ mod helpview_tests {
 /// Public entry point for File Fantastic file manager module
 pub fn file_fantastic() -> Result<()> {
     // Collect command line arguments
-    let args: Vec<String> = env::args().collect();
+    // let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Check if help was requested
     if check_for_help_flag_in_args(&args) {
