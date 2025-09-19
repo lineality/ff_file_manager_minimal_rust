@@ -13035,6 +13035,8 @@ pub fn file_fantastic() -> Result<()> {
 
     // Check if help was requested
     if check_for_help_flag_in_args(&args) {
+        println!("Help requested!");
+        println!("pirate's args {:?}", &args);
         // Display help menu instead of launching file manager
         match display_help_menu_system() {
             Ok(()) => {
@@ -13046,7 +13048,6 @@ pub fn file_fantastic() -> Result<()> {
                 // std::process::exit(1);
             }
         }
-
         match display_quick_usage_info() {
             Ok(()) => {
                 // Help displayed successfully, exit cleanly
