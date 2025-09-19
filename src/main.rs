@@ -37,9 +37,15 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
         "src/source_it_module.rs",
         include_str!("source_it_module.rs"),
     ),
-    // SourcedFile::new("src/lib.rs", include_str!("lib.rs")),
     SourcedFile::new("README.md", include_str!("../README.md")),
-    // SourcedFile::new("LICENSE", include_str!("../LICENSE")),
+    SourcedFile::new("LICENSE", include_str!("../LICENSE")),
+    SourcedFile::new(
+        "testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest.txt",
+        include_str!(
+            "../testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest.txt"
+        ),
+    ),
+    SourcedFile::new("test.csv", include_str!("../test.csv")),
     SourcedFile::new(".gitignore", include_str!("../.gitignore")),
 ];
 
