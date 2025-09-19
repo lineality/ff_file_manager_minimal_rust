@@ -7622,14 +7622,9 @@ mod tests_iterative_crawl {
     fn test_collect_entries_iterative_basic() {
         // Test basic functionality - can collect entries from temp directory
         let nav_state = create_test_navigation_state();
-        let temp_dir = std::env::temp_dir();
+        let current_dir = std::env::current_dir().expect("Should be able to get current directory");
 
-        let result = nav_state.collect_entries_iterative(
-            &temp_dir,
-            Some(0), // Only the directory itself
-            None,
-            None,
-        );
+        let result = nav_state.collect_entries_iterative(&current_dir, Some(0), None, None);
 
         assert!(result.is_ok(), "Should successfully read temp directory");
         let entries = result.expect("Failed to get entries");
