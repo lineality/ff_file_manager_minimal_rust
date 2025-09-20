@@ -10584,7 +10584,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     let prompt = if partner_programs.is_empty() {
         // Standard prompt when no partner programs are configured
         format!(
-            "{}Open file w/  Default: Enter | software 'name': vi --headless, hx, gedit, firefox | tmux: nano -hsplit/vsplit | .csv stats: -rc -> {}",
+            "{}(Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: nano -hsplit, hx -vsplit | .csv stats: vi -rc) {}",
             YELLOW, RESET
         )
     } else {
@@ -10602,7 +10602,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
 
         format!(
-            "{}Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: -hsplit | .csv stats: -rc | (By #: 1. tofu, 2. lines:{}): {}",
+            "{}Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: -hsplit | .csv: -rc | Partner #: {}): {}",
             YELLOW, numbered_options, RESET
         )
     };
@@ -11348,6 +11348,11 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 fn handle_file_open(path: &PathBuf) -> Result<()> {
     match open_file(path) {
         Ok(_) => {
+            println!("Opening File");
+            println!(" Tip: Add partner programs (for processing files) to this config file");
+            println!(" /path/to/executable/");
+            println!(" └── ff_data/                            <- Created if doesn't exist");
+            println!("     └── absolute_paths_to_local_partner_fileopening_executibles.txt");
             println!("\nPress Enter to continue");
             let mut buf = String::new();
             io::stdin().read_line(&mut buf).map_err(|e| {
