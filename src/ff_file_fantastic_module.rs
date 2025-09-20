@@ -10565,7 +10565,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
     let prompt = if partner_programs.is_empty() {
         // Standard prompt when no partner programs are configured
         format!(
-            "{}Open with... (hit enter for default, or software 'name' as used in terminal: vi --headless, gedit, firefox...tmux: nano -hsplit|vsplit, -rc for .csv stats) {}",
+            "{}Open file w/  Default: Enter | software 'name': vi --headless, hx, gedit, firefox | tmux: nano -hsplit/vsplit | .csv stats: -rc -> {}",
             YELLOW, RESET
         )
     } else {
@@ -10583,7 +10583,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
         }
 
         format!(
-            "{}Open with... (Enter for default, or software 'name' as w/ terminal: vi --headless, nano -hsplit, gedit, firefox, -rc for .csv stats OR by number: {}): {}",
+            "{}Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: -hsplit | .csv stats: -rc | (By #: 1. tofu, 2. lines:{}): {}",
             YELLOW, numbered_options, RESET
         )
     };
