@@ -12243,7 +12243,7 @@ const HELP_MENU_HEADER: &str = r#"
 
 /// Quick start and examples help section content
 const HELP_SECTION_QUICK_START: &str = r#"
- ═══ QUICK START & EXAMPLES ═══        Press Enter to return to help menu...
+═══ QUICK START & EXAMPLES ═══     Press Enter to return to help menu
 
  USAGE in terminal:      ff [OPTIONS] [DIRECTORY]
 
@@ -13371,6 +13371,8 @@ pub fn file_fantastic() -> Result<()> {
                         // give path blurb
                         NavigationAction::Quit => {
                             // Print the current directory path for cd command
+                            println!("For Help Menu, run:  ff --help");
+                            println!("For Souce Code, run: ff --source");
                             println!("\nTo continue from this location, run:");
                             println!("cd {}", current_directory_path.display());
                             return Ok(());
