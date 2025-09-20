@@ -381,6 +381,13 @@ const YELLOW: &str = "\x1b[33m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
 
+/// Version information embedded at compile time from Cargo.toml
+///
+/// These constants are populated by the Rust compiler using the env! macro,
+/// which reads environment variables that Cargo sets during compilation.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+
 /*
 Error Handling section starts
 */
@@ -13036,6 +13043,60 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
     SourcedFile::new(".gitignore", include_str!("../.gitignore")),
 ];
 
+/// Constructs and returns a formatted version statement for the application.
+///
+/// # Returns
+///
+/// A `String` containing package name and version
+///
+/// # Example
+///
+/// ```
+/// let version_info = get_version_statement();
+/// println!("{}", version_info);
+/// // Output: my-app 1.0.0
+/// ```
+pub fn get_version_statement() -> String {
+    format!("{} {}", PKG_NAME, VERSION)
+}
+
+/// Writes version information to stdout.
+///
+/// # Returns
+///
+/// * `Ok(())` if version information was successfully written
+/// * `Err(FileFantasticError)` if writing or flushing failed
+///
+/// # Errors
+///
+/// Returns an error if stdout is not available or writing fails
+/// (e.g., broken pipe, redirected to read-only location)
+pub fn display_version() -> Result<()> {
+    let mut stdout = io::stdout();
+
+    // Write version statement
+    writeln!(stdout, "{}", get_version_statement())
+        .map_err(|e| FileFantasticError::Io(e))?;
+
+    // Ensure output is flushed
+    stdout.flush()
+        .map_err(|e| FileFantasticError::Io(e))?;
+
+    Ok(())
+}
+
+/// Checks if version information was requested via command line arguments.
+///
+/// # Arguments
+///
+/// * `args` - A slice of string references representing command line arguments
+///
+/// # Returns
+///
+/// `true` if either "--version" or "-v" is found in the arguments
+pub fn is_version_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--version" || arg == "-v")
+}
 
 /// Public entry point for File Fantastic file manager module
 ///
@@ -13088,6 +13149,18 @@ pub fn file_fantastic() -> Result<()> {
     // Collect command line arguments
     // let args: Vec<String> = env::args().collect();
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if is_version_requested(&args) {
+        match display_version() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                // Failed to write to stdout, try stderr as fallback
+                eprintln!("Error displaying version: {}", e);
+                eprintln!("{}", get_version_statement());
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Module: Source It (export source code)
     if args.contains(&"--source".to_string()) {
