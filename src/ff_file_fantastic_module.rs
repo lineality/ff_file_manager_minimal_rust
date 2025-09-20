@@ -9,6 +9,12 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Module: analyze rows and colums of data file
+use super::rows_and_columns_module::rc_analyze_datafile_save_results_to_resultsfile;
+
+// Module: Share Source
+use super::source_it_module::{SourcedFile, handle_sourceit_command};
+
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small
@@ -51,13 +57,18 @@ so that entering that keyword calls the executable (starts the program):
 ```path
 /home/YOURCOMPUTERNAME/ff_file_browser/ff
 ```
-2. Open the bash shell configuration file in a text editor. The configuration file is usually located at ~/.bashrc or ~/.bash_profile. (use whatever editor: vim, nano, hx (helix), gedit, lapce, teehee, lapce, etc.)
+2. Open the bash shell configuration file in a text editor.
+The configuration file is usually located at ~/.bashrc or ~/.bash_profile.
+(use whatever editor: vim, nano, hx (helix), gedit, lapce, teehee, lapce, etc.)
 ```bash
 hx ~/.bashrc
 ```
 or in some systems it may be called 'bash_profile'
 
-3. Add an "alias" for your executable at the end of your bash file. Replace /path/to/your_executable with the path of your executable. And replace "your_keyword" with whatever you want to call File Fantastic by typing into your terminal. Add this line (with your details put in):
+3. Add an "alias" for your executable at the end of your bash file.
+Replace /path/to/your_executable with the path of your executable.
+And replace "your_keyword" with whatever you want to call File Fantastic
+by typing into your terminal. Add this line (with your details put in):
 ```text
 alias your_keyword='/path/to/your_executable'
 ```
@@ -369,9 +380,6 @@ const YELLOW: &str = "\x1b[33m";
 // const BOLD: &str = "\x1b[1m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
-
-/// analyze rows and colums of data file
-use super::rows_and_columns_module::rc_analyze_datafile_save_results_to_resultsfile;
 
 /*
 Error Handling section starts
@@ -6110,13 +6118,12 @@ fn process_user_input(
         }
     }
 
+    // command flags that are more than one character long
     match lowercase_input.as_str() {
         "vsplit" => return Ok(NavigationAction::VsplitTmux),
-        _ => {}
-    }
-
-    match lowercase_input.as_str() {
         "hsplit" => return Ok(NavigationAction::HsplitTmux),
+        "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
+        "--source" => return Ok(NavigationAction::GoToSouceCode),
         _ => {}
     }
 
@@ -6751,6 +6758,11 @@ enum NavigationAction {
 
     /// archive mode
     ArchiveModeShortcut,
+
+    GoToHelpMenuMode,
+
+    // Module:
+    GoToSouceCode,
 }
 
 /// Formats file size into human readable format
@@ -12987,6 +12999,44 @@ mod helpview_tests {
     }
 }
 
+
+// Developer explicitly lists files to embed
+const FF_SOURCE_FILES: &[SourcedFile] = &[
+    SourcedFile::new("Cargo.toml", include_str!("../Cargo.toml")),
+    SourcedFile::new("src/main.rs", include_str!("main.rs")),
+    SourcedFile::new(
+        "src/csv_processor_module.rs",
+        include_str!("csv_processor_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/error_types_module.rs",
+        include_str!("error_types_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/ff_file_fantastic_module.rs",
+        include_str!("ff_file_fantastic_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/rows_and_columns_module.rs",
+        include_str!("rows_and_columns_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/source_it_module.rs",
+        include_str!("source_it_module.rs"),
+    ),
+    SourcedFile::new("README.md", include_str!("../README.md")),
+    SourcedFile::new("LICENSE", include_str!("../LICENSE")),
+    SourcedFile::new(
+        "testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest.txt",
+        include_str!(
+            "../testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest.txt"
+        ),
+    ),
+    SourcedFile::new("test.csv", include_str!("../test.csv")),
+    SourcedFile::new(".gitignore", include_str!("../.gitignore")),
+];
+
+
 /// Public entry point for File Fantastic file manager module
 ///
 /// # Usage as a Module
@@ -13038,6 +13088,15 @@ pub fn file_fantastic() -> Result<()> {
     // Collect command line arguments
     // let args: Vec<String> = env::args().collect();
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Module: Source It (export source code)
+    if args.contains(&"--source".to_string()) {
+        match handle_sourceit_command("ff_file_fantastic", None, FF_SOURCE_FILES) {
+            Ok(path) => println!("Source extracted to: {}", path.display()),
+            Err(e) => eprintln!("Failed to extract source: {}", e),
+        }
+        return Ok(());
+    }
 
     // Check if help was requested
     if check_for_help_flag_in_args(&args) {
@@ -13430,6 +13489,21 @@ pub fn file_fantastic() -> Result<()> {
                             ) {
                                 Ok(_) => println!("Archive operation completed."),
                                 Err(e) => println!("Error during archive operation: {}", e),
+                            }
+                        }
+                        NavigationAction::GoToHelpMenuMode => {
+                            match display_help_menu_system() {
+                                Ok(()) => {
+                                }
+                                Err(e) => {
+                                    eprintln!("Error displaying help: {}", e);
+                                }
+                            }
+                        }
+                        NavigationAction::GoToSouceCode => {
+                            match handle_sourceit_command("ff_file_fantastic", None, FF_SOURCE_FILES) {
+                                Ok(path) => println!("Source extracted to: {}", path.display()),
+                                Err(e) => eprintln!("Failed to extract source: {}", e),
                             }
                         }
                         NavigationAction::GetSendMode => {
