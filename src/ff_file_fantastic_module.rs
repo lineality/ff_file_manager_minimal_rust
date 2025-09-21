@@ -13008,6 +13008,7 @@ mod helpview_tests {
 // Developer explicitly lists files to embed
 const FF_SOURCE_FILES: &[SourcedFile] = &[
     SourcedFile::new("Cargo.toml", include_str!("../Cargo.toml")),
+    SourcedFile::new("build.rs", include_str!("../build.rs")),
     SourcedFile::new("src/main.rs", include_str!("main.rs")),
     SourcedFile::new(
         "src/csv_processor_module.rs",
