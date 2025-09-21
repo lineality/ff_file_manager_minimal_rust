@@ -1450,3 +1450,65 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+
+
+/// Constructs and returns a formatted version statement for the application.
+///
+/// # Returns
+///
+/// A `String` containing package name and version
+///
+/// # Example
+///
+/// ```
+/// let version_info = get_version_statement();
+/// println!("{}", version_info);
+/// // Output: my-app 1.0.0
+/// ```
+pub fn get_version_statement() -> String {
+    format!("{} {}", PKG_NAME, VERSION)
+}
+
+/// Writes version information to stdout.
+///
+/// # Returns
+///
+/// * `Ok(())` if version information was successfully written
+/// * `Err(FileFantasticError)` if writing or flushing failed
+///
+/// # Errors
+///
+/// Returns an error if stdout is not available or writing fails
+/// (e.g., broken pipe, redirected to read-only location)
+pub fn display_version() -> Result<()> {
+    let mut stdout = io::stdout();
+
+    // Write version statement
+    writeln!(stdout, "{}", get_version_statement()).map_err(|e| FileFantasticError::Io(e))?;
+
+    // Ensure output is flushed
+    stdout.flush().map_err(|e| FileFantasticError::Io(e))?;
+
+    Ok(())
+}
+
+/// Checks if version information was requested via command line arguments.
+///
+/// # Arguments
+///
+/// * `args` - A slice of string references representing command line arguments
+///
+/// # Returns
+///
+/// `true` if either "--version" or "-v" is found in the arguments
+pub fn is_version_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--version" || arg == "-v")
+}
+
+/// Version information embedded at compile time from Cargo.toml
+///
+/// These constants are populated by the Rust compiler using the env! macro,
+/// which reads environment variables that Cargo sets during compilation.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");

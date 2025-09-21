@@ -381,13 +381,6 @@ const YELLOW: &str = "\x1b[33m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
 
-/// Version information embedded at compile time from Cargo.toml
-///
-/// These constants are populated by the Rust compiler using the env! macro,
-/// which reads environment variables that Cargo sets during compilation.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-
 /*
 Error Handling section starts
 */
@@ -5040,6 +5033,7 @@ pub struct GrepSearchResult {
     /// Display number for user selection (1-based)
     pub display_index: usize,
 }
+
 /// Formats a timestamp into a human-readable format with proper error handling
 ///
 /// # Purpose
@@ -13011,7 +13005,6 @@ mod helpview_tests {
     }
 }
 
-
 // Developer explicitly lists files to embed
 const FF_SOURCE_FILES: &[SourcedFile] = &[
     SourcedFile::new("Cargo.toml", include_str!("../Cargo.toml")),
@@ -13048,21 +13041,41 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
     SourcedFile::new(".gitignore", include_str!("../.gitignore")),
 ];
 
-/// Constructs and returns a formatted version statement for the application.
+// At the top of your file, create a module for build info
+mod build_info {
+    // Include the generated file here
+    include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
+}
+
+// Create a function to format the build info for display
+/// Formats all build information for version display
+///
+/// # Returns
+/// A formatted string containing all build information
+fn format_version_info() -> String {
+    format!(
+        "Version: {}\nBuild Date-Time: {}\nOS: {}\nArchitecture: {}\nRust Edition: {}\nRustc: {}\nProfile: {}",
+        build_info::BUILD_PACKAGE_VERSION,
+        build_info::BUILD_TIMESTAMP,
+        build_info::BUILD_OS,
+        build_info::BUILD_ARCHITECTURE,
+        build_info::BUILD_RUST_EDITION,
+        build_info::BUILD_RUSTC_VERSION,
+        build_info::BUILD_PROFILE
+    )
+}
+
+/// Checks if version information was requested via command line arguments.
+///
+/// # Arguments
+///
+/// * `args` - A slice of string references representing command line arguments
 ///
 /// # Returns
 ///
-/// A `String` containing package name and version
-///
-/// # Example
-///
-/// ```
-/// let version_info = get_version_statement();
-/// println!("{}", version_info);
-/// // Output: my-app 1.0.0
-/// ```
-pub fn get_version_statement() -> String {
-    format!("{} {}", PKG_NAME, VERSION)
+/// `true` if either "--version" or "-v" is found in the arguments
+pub fn is_version_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--version" || arg == "-v")
 }
 
 /// Writes version information to stdout.
@@ -13080,27 +13093,12 @@ pub fn display_version() -> Result<()> {
     let mut stdout = io::stdout();
 
     // Write version statement
-    writeln!(stdout, "{}", get_version_statement())
-        .map_err(|e| FileFantasticError::Io(e))?;
+    writeln!(stdout, "{}", format_version_info()).map_err(|e| FileFantasticError::Io(e))?;
 
     // Ensure output is flushed
-    stdout.flush()
-        .map_err(|e| FileFantasticError::Io(e))?;
+    stdout.flush().map_err(|e| FileFantasticError::Io(e))?;
 
     Ok(())
-}
-
-/// Checks if version information was requested via command line arguments.
-///
-/// # Arguments
-///
-/// * `args` - A slice of string references representing command line arguments
-///
-/// # Returns
-///
-/// `true` if either "--version" or "-v" is found in the arguments
-pub fn is_version_requested(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--version" || arg == "-v")
 }
 
 /// Public entry point for File Fantastic file manager module
@@ -13161,7 +13159,6 @@ pub fn file_fantastic() -> Result<()> {
             Err(e) => {
                 // Failed to write to stdout, try stderr as fallback
                 eprintln!("Error displaying version: {}", e);
-                eprintln!("{}", get_version_statement());
                 std::process::exit(1);
             }
         }
@@ -13569,17 +13566,18 @@ pub fn file_fantastic() -> Result<()> {
                                 Err(e) => println!("Error during archive operation: {}", e),
                             }
                         }
-                        NavigationAction::GoToHelpMenuMode => {
-                            match display_help_menu_system() {
-                                Ok(()) => {
-                                }
-                                Err(e) => {
-                                    eprintln!("Error displaying help: {}", e);
-                                }
+                        NavigationAction::GoToHelpMenuMode => match display_help_menu_system() {
+                            Ok(()) => {}
+                            Err(e) => {
+                                eprintln!("Error displaying help: {}", e);
                             }
-                        }
+                        },
                         NavigationAction::GoToSouceCode => {
-                            match handle_sourceit_command("ff_file_fantastic", None, FF_SOURCE_FILES) {
+                            match handle_sourceit_command(
+                                "ff_file_fantastic",
+                                None,
+                                FF_SOURCE_FILES,
+                            ) {
                                 Ok(path) => println!("Source extracted to: {}", path.display()),
                                 Err(e) => eprintln!("Failed to extract source: {}", e),
                             }
