@@ -1512,3 +1512,156 @@ pub fn is_version_requested(args: &[String]) -> bool {
 /// which reads environment variables that Cargo sets during compilation.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+
+
+/// Gets the Rust compiler version by executing rustc --version
+///
+/// # Returns
+/// String containing the rustc version (e.g., "1.75.0")
+fn get_rustc_version() -> String {
+    match Command::new("rustc").arg("--version").output() {
+        Ok(output) => {
+            if output.status.success() {
+                let version_string = String::from_utf8_lossy(&output.stdout);
+                // Parse "rustc 1.75.0 (abcdef 2024-01-15)" to get just "1.75.0"
+                version_string
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("unknown")
+                    .to_string()
+            } else {
+                String::from("unknown")
+            }
+        }
+        Err(_) => String::from("unknown"),
+    }
+}
+
+
+
+// /// Writes version information to stdout.
+// ///
+// /// # Returns
+// ///
+// /// * `Ok(())` if version information was successfully written
+// /// * `Err(FileFantasticError)` if writing or flushing failed
+// ///
+// /// # Errors
+// ///
+// /// Returns an error if stdout is not available or writing fails
+// /// (e.g., broken pipe, redirected to read-only location)
+// pub fn display_version() -> Result<()> {
+//     let mut stdout = io::stdout();
+
+//     // Write version statement
+//     writeln!(stdout, "{}", format_version_info()).map_err(|e| FileFantasticError::Io(e))?;
+
+//     // Ensure output is flushed
+//     stdout.flush().map_err(|e| FileFantasticError::Io(e))?;
+
+//     Ok(())
+// }
+
+// use std::io::{self, Write};
+
+
+
+// /// Compile-time version information from Cargo.toml
+// const VERSION: &str = env!("CARGO_PKG_VERSION");
+// const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+
+
+
+/// Constructs and returns a formatted version statement from compile-time constants.
+///
+/// This function uses compile-time constants that should always be available,
+/// but returns a Result for consistency and future-proofing.
+///
+/// # Returns
+///
+/// * `Ok(String)` containing package name and version
+/// * `Err` if the constants are somehow invalid (extremely unlikely)
+///
+/// # Example
+///
+/// ```
+/// match backup_get_version_statement() {
+///     Ok(version) => println!("{}", version),
+///     Err(e) => eprintln!("Error: {}", e),
+/// }
+/// // Output: my-app 1.0.0
+/// ```
+pub fn backup_get_version_statement() -> Result<String> {
+    // Validate that constants are not empty (defensive programming)
+    if PKG_NAME.is_empty() || VERSION.is_empty() {
+        return Err("Package name or version is empty".into());
+    }
+
+    Ok(format!("{} {}", PKG_NAME, VERSION))
+}
+
+/// Writes version information to stdout with three levels of failsafe.
+///
+/// Attempts to display version information in order of preference:
+/// 1. Full version info from `format_version_info()`
+/// 2. Basic version from compile-time constants
+/// 3. Fallback constant string
+///
+/// # Returns
+///
+/// * `Ok(())` if any version information was successfully written
+/// * `Err(FileFantasticError)` only if all attempts to write failed
+///
+/// # Errors
+///
+/// Returns an error only if stdout is completely unavailable and
+/// all three levels of version output failed.
+pub fn display_version() -> Result<()> {
+    let mut stdout = io::stdout();
+
+    // Level 1: Try full version info
+    let full_version = format_version_info();
+
+    // Check if full version is valid (not empty, not error-like)
+    if !full_version.is_empty()
+        && !full_version.contains("unknown")
+        && !full_version.contains("not detected")
+    {
+        // Try to write full version
+        if writeln!(stdout, "{}", full_version).is_ok() {
+            // Successfully wrote, now flush and return
+            return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+        }
+        // Write failed, print warning and continue to fallback
+        eprintln!("Warning: Failed to write full version info to stdout");
+    }
+
+    // Level 2: Try backup version from compile-time constants
+    match backup_get_version_statement() {
+        Ok(backup_version) => {
+            if writeln!(stdout, "{}", backup_version).is_ok() {
+                // Successfully wrote backup version
+                return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+            }
+            // Write failed, print warning and continue to final fallback
+            eprintln!("Warning: Failed to write backup version info to stdout");
+        }
+        Err(e) => {
+            // Even backup version construction failed (very unlikely)
+            eprintln!("Warning: Could not construct backup version: {}", e);
+        }
+    }
+
+    // Level 3: Last resort - try to write fallback constant
+    if writeln!(stdout, "{}", FALLBACK_VERSION).is_ok() {
+        // Even the minimal version worked
+        return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+    }
+
+    // All three attempts failed - stdout is completely broken
+    eprintln!("Error: Could not write any version information to stdout");
+    Err(FileFantasticError::Io(io::Error::new(
+        io::ErrorKind::Other,
+        "Failed to write any version information to stdout",
+    )))
+}

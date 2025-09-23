@@ -26,6 +26,21 @@ use in ~main with
 above main:
 
 
+/*
+* For build.rs and backup
+* code below, with
+if is_version_requested(&args) {
+    match display_version() {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            // Failed to write to stdout, try stderr as fallback
+            eprintln!("Error displaying version: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+*/
+
 // At the top of your file, create a module for build info
 mod build_info {
     // Include the generated file here
@@ -60,46 +75,121 @@ fn format_version_info() -> String {
 ///
 /// `true` if either "--version" or "-v" is found in the arguments
 pub fn is_version_requested(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--version" || arg == "-v")
+    args.iter()
+        .any(|arg| arg == "--version" || arg == "-v" || arg == "-V")
 }
 
-/// Writes version information to stdout.
+/// Version information embedded at compile time from Cargo.toml
+///
+/// These constants are populated by the Rust compiler using the env! macro,
+/// which reads environment variables that Cargo sets during compilation.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+/// Fallback version string when all else fails
+const FALLBACK_VERSION: &str = "version unknown";
+
+/// Constructs and returns a formatted version statement from compile-time constants.
+///
+/// This function uses compile-time constants as a reliable backup.
+/// It will return SOMETHING even if one constant is empty.
 ///
 /// # Returns
 ///
-/// * `Ok(())` if version information was successfully written
-/// * `Err(FileFantasticError)` if writing or flushing failed
+/// * `Ok(String)` containing whatever version info is available
+/// * `Err` only if both constants are completely empty (should never happen)
+///
+/// # Example
+///
+/// ```
+/// match backup_get_version_statement() {
+///     Ok(version) => println!("{}", version),
+///     Err(e) => eprintln!("Error: {}", e),
+/// }
+/// // Output: my-app 1.0.0
+/// ```
+pub fn backup_get_version_statement() -> Result<String> {
+    // Return whatever we have - this is a BACKUP!
+    let result = if !PKG_NAME.is_empty() && !VERSION.is_empty() {
+        // Best case: both available
+        format!("{} {}", PKG_NAME, VERSION)
+    } else if !PKG_NAME.is_empty() {
+        // Only package name available
+        format!("{} (version unknown)", PKG_NAME)
+    } else if !VERSION.is_empty() {
+        // Only version available
+        format!("unknown {}", VERSION)
+    } else {
+        // Both empty - this should never happen with env! macros
+        format!("unknown")
+    };
+
+    Ok(result)
+}
+
+/// Writes version information to stdout with three levels of failsafe.
+///
+/// Attempts to display version information in order of preference:
+/// 1. Full version info from `format_version_info()`
+/// 2. Basic version from compile-time constants (partial data is OK)
+/// 3. Fallback constant string
+///
+/// # Returns
+///
+/// * `Ok(())` if any version information was successfully written
+/// * `Err(FileFantasticError)` only if all attempts to write failed
 ///
 /// # Errors
 ///
-/// Returns an error if stdout is not available or writing fails
-/// (e.g., broken pipe, redirected to read-only location)
+/// Returns an error only if stdout is completely unavailable and
+/// all three levels of version output failed.
 pub fn display_version() -> Result<()> {
     let mut stdout = io::stdout();
 
-    // Write version statement
-    writeln!(stdout, "{}", format_version_info()).map_err(|e| FileFantasticError::Io(e))?;
+    // Level 1: Try full version info
+    let full_version = format_version_info();
 
-    // Ensure output is flushed
-    stdout.flush().map_err(|e| FileFantasticError::Io(e))?;
+    // Check if full version is valid (not empty, not error-like)
+    if !full_version.is_empty()
+        && !full_version.contains("unknown")
+        && !full_version.contains("not detected")
+    {
+        // Try to write full version
+        if writeln!(stdout, "{}", full_version).is_ok() {
+            // Successfully wrote, now flush and return
+            return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+        }
+        // Write failed, print warning and continue to fallback
+        eprintln!("Warning: Failed to write full version info to stdout");
+    }
 
-    Ok(())
-}
-
-
-in ~main
-
-let args: Vec<String> = std::env::args().skip(1).collect();
-
-if is_version_requested(&args) {
-    match display_version() {
-        Ok(()) => std::process::exit(0),
+    // Level 2: Try backup version from compile-time constants
+    match backup_get_version_statement() {
+        Ok(backup_version) => {
+            if writeln!(stdout, "{}", backup_version).is_ok() {
+                // Successfully wrote backup version
+                return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+            }
+            // Write failed, print warning and continue to final fallback
+            eprintln!("Warning: Failed to write backup version info to stdout");
+        }
         Err(e) => {
-            // Failed to write to stdout, try stderr as fallback
-            eprintln!("Error displaying version: {}", e);
-            std::process::exit(1);
+            // Even backup version construction failed (very unlikely)
+            eprintln!("Warning: Could not construct backup version: {}", e);
         }
     }
+
+    // Level 3: Last resort - try to write fallback constant
+    if writeln!(stdout, "{}", FALLBACK_VERSION).is_ok() {
+        // Even the minimal version worked
+        return stdout.flush().map_err(|e| FileFantasticError::Io(e));
+    }
+
+    // All three attempts failed - stdout is completely broken
+    eprintln!("Error: Could not write any version information to stdout");
+    Err(FileFantasticError::Io(io::Error::new(
+        io::ErrorKind::Other,
+        "Failed to write any version information to stdout",
+    )))
 }
 
  */
@@ -471,6 +561,7 @@ Validation Checklist
 */
 
 use std::env;
+use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -491,7 +582,18 @@ fn main() {
     let os_type = get_os_type();
     let architecture = get_architecture();
     let rust_edition = get_rust_edition();
-    let rustc_version = get_rustc_version();
+
+    // Get rustc version with proper error handling
+    // Method 1: Using match (most explicit)
+    let rustc_version = match get_rustc_version() {
+        Ok(version) => version,
+        Err(err) => {
+            // Print warning to stderr during build (visible in cargo output)
+            eprintln!("Warning: Could not detect rustc version: {}", err);
+            String::from("unknown")
+        }
+    };
+
     let build_profile = get_build_profile();
     let package_version = get_package_version();
 
@@ -708,26 +810,86 @@ fn read_toml_field(path: &str, field_name: &str) -> Result<String, String> {
     Err(format!("Field '{}' not found", field_name))
 }
 
-/// Gets the Rust compiler version by executing rustc --version
+/// Gets the Rust compiler version by executing rustc version command
+///
+/// This function is compatible with multiple operating systems and provides
+/// safe fallback for unsupported platforms. It tries multiple version flag
+/// formats for maximum compatibility.
 ///
 /// # Returns
-/// String containing the rustc version (e.g., "1.75.0")
-fn get_rustc_version() -> String {
-    match Command::new("rustc").arg("--version").output() {
-        Ok(output) => {
-            if output.status.success() {
-                let version_string = String::from_utf8_lossy(&output.stdout);
-                // Parse "rustc 1.75.0 (abcdef 2024-01-15)" to get just "1.75.0"
-                version_string
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("unknown")
-                    .to_string()
-            } else {
-                String::from("unknown")
-            }
+///
+/// * `Ok(String)` - Contains the rustc version (e.g., "1.75.0") or "unknown" for unsupported platforms
+/// * `Err(Box<dyn Error>)` - Contains error description if version cannot be determined on supported platforms
+///
+/// # Supported Platforms
+///
+/// * Linux (including Android/Termux)
+/// * macOS
+/// * Windows
+/// * FreeBSD, OpenBSD, NetBSD, DragonFly BSD
+/// * Redox OS
+fn get_rustc_version() -> Result<String, Box<dyn Error>> {
+    // Path 1: Known/supported operating systems
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "redox",
+    ))]
+    {
+        // Try --version first (most common)
+        let output = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .or_else(|_| {
+                // Fallback to -V if --version fails
+                eprintln!("Warning: --version failed, trying -V");
+                Command::new("rustc").arg("-V").output()
+            })
+            .map_err(|e| format!("Failed to execute rustc with both --version and -V: {}", e))?;
+
+        // Check if command executed successfully
+        if !output.status.success() {
+            return Err(format!(
+                "rustc returned non-zero exit code: {}",
+                output.status.code().unwrap_or(-1)
+            )
+            .into());
         }
-        Err(_) => String::from("unknown"),
+
+        // Parse the output (same format for both flags)
+        let version_string = String::from_utf8_lossy(&output.stdout);
+
+        // Extract version number from "rustc 1.75.0 (hash date)" format
+        let version = version_string
+            .split_whitespace()
+            .nth(1)
+            .ok_or("Unable to parse rustc version output")?;
+
+        return Ok(version.to_string());
+    }
+
+    // Path 2: Unknown/unsupported operating systems
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "redox",
+    )))]
+    {
+        // Print warning during build
+        eprintln!("Warning: rustc version detection not supported on this platform");
+        return Ok(String::from("unknown"));
     }
 }
 
