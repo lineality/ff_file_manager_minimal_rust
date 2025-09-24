@@ -391,6 +391,11 @@ fn calculate_sha256_for_file(file_path: &Path) -> Result<String, Box<dyn Error>>
         calculate_sha256_macos_bsd(file_path)
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        calculate_sha256_windows(file_path)
+    }
+
     #[cfg(not(any(
         target_os = "linux",
         target_os = "android",
