@@ -12507,6 +12507,14 @@ pub fn display_help_menu_system() -> Result<()> {
         println!("{}", HELP_MENU_HEADER);
         print!("{}", ansi_colors::RESET);
 
+        // Quit instructions (...learning from the vim nightmare...)
+        println!(
+            "  {}q.{} Type 'q' & hit Enter to quit help menu / File Fantastic",
+            ansi_colors::YELLOW,
+            ansi_colors::RESET
+        );
+        println!();
+
         // Display menu options
         println!(
             "{} Select a help section:{}",
@@ -12541,12 +12549,12 @@ pub fn display_help_menu_system() -> Result<()> {
             ansi_colors::RESET
         );
         println!(
-            "  {}6.{} File Operations (Get-Send Mode)",
+            "  {}6.{} Go To File: Opening / Processing a File",
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
         println!(
-            "  {}7.{} Get-Send Mode",
+            "  {}7.{} Get-Send Mode (Get/Send/Move files & directories)",
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
@@ -12556,7 +12564,7 @@ pub fn display_help_menu_system() -> Result<()> {
             ansi_colors::RESET
         );
         println!(
-            "  {}9.{} Partner Programs Configuration",
+            "  {}9.{} 'Partner Programs' Configuration",
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
@@ -12566,13 +12574,6 @@ pub fn display_help_menu_system() -> Result<()> {
             ansi_colors::GREEN,
             ansi_colors::RESET
         );
-        println!();
-        println!(
-            "  {}q.{} Quit help menu",
-            ansi_colors::YELLOW,
-            ansi_colors::RESET
-        );
-
         println!();
         print!(
             "{}Enter section number (1-10) or 'q' to quit: {}",
