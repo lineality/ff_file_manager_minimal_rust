@@ -9,6 +9,17 @@ ff --help
 ff --source
 ```
 
+## Help Menu
+- cli, run
+```bash
+ff --help
+ff -h
+```
+- command inside ff
+```
+--help
+```
+
 ## Build
 see https://github.com/lineality/rust_compile_optimizations_cheatsheet
 
@@ -303,3 +314,19 @@ RUST_TRACEBACK=full cargo test --profile release-performance
 ```bash
 RUST_TRACEBACK=full cargo test --profile release-small
 ```
+
+
+## Source-It
+- Get/Save ff source code (from the binary, not online) to your CWD:
+- cli, run
+```bash
+ff --source
+```
+- command inside ff
+```
+--source
+```
+- inspect, modify, make, create
+- https://github.com/lineality/source_it_module
+
+
