@@ -12878,6 +12878,7 @@ pub fn display_quick_usage_info() -> Result<()> {
     println!();
     println!("{}OPTIONS:{}", ansi_colors::CYAN, ansi_colors::RESET);
     println!("  -h, --help    Show complete help menu.");
+    println!("  -v, --version Show build version info.");
     println!("  --source      Get ff source code.");
     println!();
     println!("{}EXAMPLES:{}", ansi_colors::GREEN, ansi_colors::RESET);
@@ -12885,6 +12886,8 @@ pub fn display_quick_usage_info() -> Result<()> {
     println!("  ff ~/Documents Open in Documents folder");
     println!("  ff --help     Show help menu");
     println!("  ff --source   Get crate of source code.");
+    println!();
+    println!("  '--help' and '--source' are commands inside ff too.");
 
     Ok(())
 }
@@ -13613,9 +13616,10 @@ pub fn file_fantastic() -> Result<()> {
                         // give path blurb
                         NavigationAction::Quit => {
                             // Print the current directory path for cd command
-                            println!("For Help Menu, run:  ff --help");
-                            println!("For Souce Code, run: ff --source");
-                            println!("\nTo continue from this location, run:");
+                            println!(
+                                "For Help Menu or For Source Code, run:  ff --help; ff --source"
+                            );
+                            println!("To continue from this location, run:");
                             println!("cd {}", current_directory_path.display());
                             return Ok(());
                         }
