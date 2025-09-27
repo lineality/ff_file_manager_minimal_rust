@@ -15,6 +15,8 @@ use super::rows_and_columns_module::rc_analyze_datafile_save_results_to_resultsf
 // Module: Share Source
 use super::source_it_module::{SourcedFile, handle_sourceit_command};
 
+use super::row_line_count_tui_module::show_minimal_linecount_tui;
+
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small
@@ -6125,6 +6127,7 @@ fn process_user_input(
         "hsplit" => return Ok(NavigationAction::HsplitTmux),
         "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
         "--source" => return Ok(NavigationAction::GoToSouceCode),
+        "--line-count" | "--row-count" => return Ok(NavigationAction::GoToFileLineCountMode),
         _ => {}
     }
 
@@ -6764,6 +6767,8 @@ enum NavigationAction {
 
     // Module:
     GoToSouceCode,
+
+    GoToFileLineCountMode,
 }
 
 /// Formats file size into human readable format
@@ -13034,6 +13039,10 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
         "src/source_it_module.rs",
         include_str!("source_it_module.rs"),
     ),
+    SourcedFile::new(
+        "src/row_line_count_tui_module.rs",
+        include_str!("row_line_count_tui_module.rs"),
+    ),
     SourcedFile::new("README.md", include_str!("../README.md")),
     SourcedFile::new("LICENSE", include_str!("../LICENSE")),
     SourcedFile::new(
@@ -13694,6 +13703,12 @@ pub fn file_fantastic() -> Result<()> {
                                 Err(e) => eprintln!("Failed to extract source: {}", e),
                             }
                         }
+                        NavigationAction::GoToFileLineCountMode => match show_minimal_linecount_tui(&current_directory_path) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                eprintln!("Error with GoToFileLineCountMode: {}", e);
+                            }
+                        },
                         NavigationAction::GetSendMode => {
                             // Enter Get-Send-Mode loop
                             loop {

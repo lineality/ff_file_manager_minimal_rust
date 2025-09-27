@@ -12,6 +12,9 @@ mod rows_and_columns_module;
 // Share Source
 mod source_it_module;
 
+// show data & code file line counts
+mod row_line_count_tui_module;
+
 // ff as a module for any project
 fn main() {
     // Let's call File Fantastic Go!!
