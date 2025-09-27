@@ -6127,7 +6127,7 @@ fn process_user_input(
         "hsplit" => return Ok(NavigationAction::HsplitTmux),
         "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
         "--source" => return Ok(NavigationAction::GoToSouceCode),
-        "--line-count" | "--row-count" => return Ok(NavigationAction::GoToFileLineCountMode),
+        "--line-count" | "--row-count" | "--count-rows" | "--count-lines" => return Ok(NavigationAction::GoToFileLineCountMode),
         _ => {}
     }
 

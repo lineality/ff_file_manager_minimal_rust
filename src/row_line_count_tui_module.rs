@@ -43,8 +43,8 @@ struct DisplayConfig {
     show_header_in_line_count: bool,
     /// Terminal width (default 80)
     terminal_width: usize,
-    /// Terminal height (default 24)
-    terminal_height: usize,
+    // Terminal height (default 24)
+    // terminal_height: usize,
 }
 
 impl Default for DisplayConfig {
@@ -53,7 +53,7 @@ impl Default for DisplayConfig {
             sort_mode: SortMode::NameAscending,
             show_header_in_line_count: true,
             terminal_width: 80,
-            terminal_height: 24,
+            // terminal_height: 24,
         }
     }
 }
@@ -278,25 +278,11 @@ fn display_file_list_tui(files: &[FileLineCount], config: &DisplayConfig) {
     print!("\x1B[2J\x1B[H");
     let _ = io::stdout().flush();
 
-    // Calculate available display lines (reserve space for prompt)
-    let available_lines = if config.terminal_height > 2 {
-        config.terminal_height - 2
-    } else {
-        1
-    };
-
-    let mut lines_used = 0;
-
     // Display header/legend always
     println!("# File Name{:width$}Line Count", "", width = config.terminal_width.saturating_sub(25));
 
-
     // Display files up to terminal height limit
     for (index, file) in files.iter().enumerate() {
-        if lines_used >= available_lines {
-            break; // Respect terminal height constraints
-        }
-
         // Verify file still exists before displaying
         if !file.file_path.exists() {
             eprintln!("Warning: File no longer exists: {}", file.file_path.display());
@@ -327,8 +313,6 @@ fn display_file_list_tui(files: &[FileLineCount], config: &DisplayConfig) {
                  "",
                  if config.show_header_in_line_count { file.line_count } else { file.line_count.saturating_sub(1) },
                  width = padding_width);
-
-        lines_used += 1;
     }
 
     // Show command prompt
@@ -1023,7 +1007,7 @@ mod linecount_tui_tests {
         assert_eq!(config.sort_mode, SortMode::NameAscending);
         assert_eq!(config.show_header_in_line_count, true);
         assert_eq!(config.terminal_width, 80);
-        assert_eq!(config.terminal_height, 24);
+        // assert_eq!(config.terminal_height, 24);
     }
 
     /// Tests FileLineCount struct creation and cloning
