@@ -6,6 +6,9 @@ archive/
 data/
 logs/
 
+test_empty/
+test_temp/
+
 .env
 source_crate_*
 test_analysis_report_*
