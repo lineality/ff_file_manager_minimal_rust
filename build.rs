@@ -13,6 +13,10 @@
 //! The information is written to a generated file that can be included in the main program.
 
 /*
+build.rs saves a data file
+which is then used to convey
+that build information.
+
 your-project/
 ├── Cargo.toml
 ├── build.rs          <-- Must be here, at the root
@@ -573,9 +577,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// This function executes at compile time and generates build_info.rs
 /// containing constants with build metadata.
 fn main() {
-    // Tell Cargo to rerun this script if Cargo.toml changes
-    println!("cargo:rerun-if-changed=Cargo.toml");
-    println!("cargo:rerun-if-changed=build.rs");
+    // Explicitly tell Cargo to always run:
+    println!("cargo:rerun-if-changed-env=FORCE_BUILD_INFO_UPDATE");
 
     // Collect all build information with error handling
     let build_timestamp = get_build_timestamp();
