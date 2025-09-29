@@ -6041,6 +6041,8 @@ fn get_line_count_options() -> &'static HashMap<&'static str, ()> {
             ("--row-count", ()),
             ("--line-counts", ()),
             ("--row-counts", ()),
+            ("--linecounts", ()),
+            ("--rowcounts", ()),
             ("--lines-count", ()),
             ("--rows-count", ()),
             ("--count-rows", ()),
