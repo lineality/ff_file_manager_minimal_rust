@@ -9540,7 +9540,7 @@ fn display_directory_contents(
         } else {
             // Show size info even when only one page
             println!(
-                "\x1b[1m{}--- (Re)Size: {} {} ---{}",
+                "\x1b[1m{}--- (Re)Size: {} {} ---   See files' row counts using:  --row-counts{}",
                 YELLOW, tall_display, wide_display, RESET
             );
         }
@@ -12472,7 +12472,7 @@ const HELP_SECTION_VIEW_MODES: &str = r#"
   ═══ ROW-COUNTS & MODULAR VIEW-MODES ═══    Press Enter to return...
 
   COUNT ROWS / LINES: See how many rows the files in a directory have.
-  Enter mode with '--count-rows' or '--count-lines'
+  Enter mode with '--row-counts' or '--line-counts'
 
   Commands: (n)ame sort, (c)ount sort, (h)eader, (Enter) reset, (b/q)uit
   Sort by name or count (toggle to reverse sort), and
