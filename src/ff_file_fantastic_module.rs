@@ -6032,6 +6032,31 @@ fn format_tui_adjustments(
     (tall_display, wide_display)
 }
 
+static LINE_COUNT_LOOKUP: OnceLock<HashMap<&'static str, ()>> = OnceLock::new();
+
+fn get_line_count_options() -> &'static HashMap<&'static str, ()> {
+    LINE_COUNT_LOOKUP.get_or_init(|| {
+        HashMap::from([
+            ("--line-count", ()),
+            ("--row-count", ()),
+            ("--line-counts", ()),
+            ("--row-counts", ()),
+            ("--lines-count", ()),
+            ("--rows-count", ()),
+            ("--count-rows", ()),
+            ("--count-lines", ()),
+            ("--linescounts", ()),
+            ("--rowscounts", ()),
+            ("--linecount", ()),
+            ("--rowcount", ()),
+            ("--linescount", ()),
+            ("--rowscount", ()),
+            ("--countrows", ()),
+            ("--countlines", ()),
+        ])
+    })
+}
+
 /// Processes user input and returns the corresponding NavigationAction
 ///
 /// # Purpose
@@ -6127,7 +6152,9 @@ fn process_user_input(
         "hsplit" => return Ok(NavigationAction::HsplitTmux),
         "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
         "--source" => return Ok(NavigationAction::GoToSouceCode),
-        "--line-count" | "--row-count" | "--count-rows" | "--count-lines" => return Ok(NavigationAction::GoToFileLineCountMode),
+        s if get_line_count_options().contains_key(s) => {
+            return Ok(NavigationAction::GoToFileLineCountMode);
+        }
         _ => {}
     }
 
@@ -12248,6 +12275,7 @@ enum HelpSection {
     FileOperations,
     TerminalManagement,
     GetSendModeBlurb,
+    ModularViewModes,
     Configuration,
 }
 
@@ -12344,18 +12372,18 @@ const HELP_SECTION_NAVIGATION: &str = r#"
 const HELP_SECTION_SORTING_FILTERING: &str = r#"
  ═══ SORTING & FILTERING ═══    Press Enter to return to help menu...
 
-One thing that makes raw terminal 'ls' tricky is when there are
-a lot of items, and you are looking for the most recent, or are just
-interested in files. With ff you can have these file-manager features
-in your native terminal. Even with fancy GUI getting a reverse modified
-or size sort can be irksome.
+One thing that makes raw terminal 'ls' tricky is when there are a
+lot of items and you are looking for... the most recent, or want to
+see only files. With ff you can have these file-manager features
+in your native terminal. Getting a reverse 'modified' 'size' 'name'
+sort is easy: toggle! (And use --count-rows to view/sort data-lines!)
 
- SORTING COMMANDS:
+ SORTING COMMANDS:       [row-count: (n)ame sort, (c)ount sort)]
    n                     Sort by name (toggle ascending/descending)
    s                     Sort by size (toggle ascending/descending)
    m                     Sort by last-modified date-time (toggle asc/desc)
 
- FILTERING COMMANDS:
+ FILTERING COMMANDS:     [row-count: (h) to remove headers from counts]
    d                     Show only directories
    f                     Show only files
    [Enter]               Reset filter (show all items)
@@ -12438,6 +12466,30 @@ const HELP_SECTION_GET_SEND_MODE: &str = r#"
    5. View stacks & pocket dimensions
    6. Archive file/directory 'a': zip/timestamp
    7. Clear all stacks"#;
+
+/// Get-Send Mode
+const HELP_SECTION_VIEW_MODES: &str = r#"
+  ═══ ROW-COUNTS & MODULAR VIEW-MODES ═══    Press Enter to return...
+
+  COUNT ROWS / LINES: See how many rows the files in a directory have.
+  Enter mode with '--count-rows' or '--count-lines'
+
+  Commands: (n)ame sort, (c)ount sort, (h)eader, (Enter) reset, (b/q)uit
+  Sort by name or count (toggle to reverse sort), and
+  'h' removes the header from the row count: Count only data rows
+
+
+  MAKE YOUR OWN DIRECTORY-VIEW MODULES:
+    Make your own custom views and add them to FF.
+    1. Modify line-count as an example:
+        NavigationAction::GoToFileLineCountMode => {
+            match show_minimal_linecount_tui(&path) <-(make your own fn)
+
+    2. Add your new NavigationAction:
+    match lowercase_input.as_str() {
+        "vsplit" => return Ok(NavigationAction::VsplitTmux),
+        "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
+   -> ->"--new-stuff" => return OK(NavigationAction::NewStuff),"#;
 
 /// Terminal management help section content
 const HELP_SECTION_TERMINAL: &str = r#"
@@ -12564,18 +12616,22 @@ pub fn display_help_menu_system() -> Result<()> {
             ansi_colors::RESET
         );
         println!(
-            "  {}8.{} Terminal & Display Management",
+            "  {}8.{} See All Files' Row Counts in a Directory (Modular View Modes)",
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
         println!(
-            "  {}9.{} 'Partner Programs' Configuration",
+            "  {}9.{} Terminal & Display Management",
             ansi_colors::MAGENTA,
             ansi_colors::RESET
         );
-        println!();
         println!(
-            "  {}10.{} View complete help in editor (vi/nano)",
+            "  {}10.{} 'Partner Programs' Configuration",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}11.{} View help menu doc in editor (vi/nano)",
             ansi_colors::GREEN,
             ansi_colors::RESET
         );
@@ -12605,9 +12661,10 @@ pub fn display_help_menu_system() -> Result<()> {
             "5" => display_help_section_content(HelpSection::SearchOptions)?,
             "6" => display_help_section_content(HelpSection::FileOperations)?,
             "7" => display_help_section_content(HelpSection::GetSendModeBlurb)?,
-            "8" => display_help_section_content(HelpSection::TerminalManagement)?,
-            "9" => display_help_section_content(HelpSection::Configuration)?,
-            "10" => open_complete_help_in_editor()?,
+            "8" => display_help_section_content(HelpSection::ModularViewModes)?,
+            "9" => display_help_section_content(HelpSection::TerminalManagement)?,
+            "10" => display_help_section_content(HelpSection::Configuration)?,
+            "11" => open_complete_help_in_editor()?,
             "q" | "quit" | "exit" => {
                 println!(
                     "{}Exiting help system...{}",
@@ -12649,8 +12706,9 @@ fn display_help_section_content(section: HelpSection) -> Result<()> {
         HelpSection::SortingFiltering => HELP_SECTION_SORTING_FILTERING,
         HelpSection::SearchOptions => HELP_SECTION_SEARCH,
         HelpSection::FileOperations => HELP_SECTION_FILE_OPERATIONS,
-        HelpSection::TerminalManagement => HELP_SECTION_TERMINAL,
         HelpSection::GetSendModeBlurb => HELP_SECTION_GET_SEND_MODE,
+        HelpSection::ModularViewModes => HELP_SECTION_VIEW_MODES,
+        HelpSection::TerminalManagement => HELP_SECTION_TERMINAL,
         HelpSection::Configuration => HELP_SECTION_CONFIGURATION,
     };
 
@@ -13703,12 +13761,14 @@ pub fn file_fantastic() -> Result<()> {
                                 Err(e) => eprintln!("Failed to extract source: {}", e),
                             }
                         }
-                        NavigationAction::GoToFileLineCountMode => match show_minimal_linecount_tui(&current_directory_path) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                eprintln!("Error with GoToFileLineCountMode: {}", e);
+                        NavigationAction::GoToFileLineCountMode => {
+                            match show_minimal_linecount_tui(&current_directory_path) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    eprintln!("Error with GoToFileLineCountMode: {}", e);
+                                }
                             }
-                        },
+                        }
                         NavigationAction::GetSendMode => {
                             // Enter Get-Send-Mode loop
                             loop {
