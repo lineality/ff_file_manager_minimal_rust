@@ -1,6 +1,32 @@
+
 # ff_file_manager_minimal_rust
 ff is a minimal file manager. It's File Fantastic.
 ...it's a File Fantasy.
+
+```text
+quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
+/home/oops/code/ff_file_manager_minimal_rust
+  #   Name                                                     Size    Modified
+ ------------------------------------------------------------------------------
+  1. .cargo/                                                      - 09-12 23:29
+  2. .git/                                                        -       16:41
+  3. archive/                                                     -       16:41
+  4. executables/                                                 -       16:39
+  5. src/                                                         - 09-27 19:32
+  6. target/                                                      - 09-29 23:17
+  7. test_empty/                                                  - 09-27 19:19
+  8. test_temp/                                                   - 09-27 19:19
+  9. .gitignore                                               908 B 09-29 23:23
+ 10. Cargo.lock                                               146 B 06-16 12:32
+ 11. Cargo.toml                                              2.1 KB 09-12 23:29
+ 12. LICENSE                                                 1.1 KB 02-20 14:19
+ 13. README.md                                               9.6 KB 09-25 11:45
+ 14. build.rs                                                 34 KB 09-29 21:53
+ 15. code_archive.txt                                         66 KB       16:21
+ 16. test.csv                                                 241 B 09-15 12:15
+--- Page 1 of 2: up/down, j/k, </>, w/x, arrows, etc. Size: tall+N wide-N ---
+>>
+```
 
 ```bash
 ff
@@ -15,7 +41,7 @@ ff --source
 ff --help
 ff -h
 ```
-- command inside ff
+- As a command inside of ff:
 ```
 --help
 ```
@@ -168,9 +194,8 @@ or one will be added automatically by ff.
 You can put the paths to local executable files as lines in this file.
 
 
-# ff is a minimal rust file manager
 
-## A very minimal 'file browser/explorer' module, much more minimal than "midnight commander."
+## Module: ff can be used in other cli projects that might need a directory-view & navigation.
 
 ### Sample main file to use this module
 ```rust
@@ -264,6 +289,7 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 22. modular to easy integration into other projects
 23. headless and tmux support: instead of a new terminal emulator, can use -h terminal editor in same terminal, or new tmux split
 24. 'Rows & Columns' -rc to inspect .csv tabular data when opening file
+25. rows-count & custom views: see data file size in a directory
 
 ## Scrolling
 Instructions appear in info-bar:
@@ -328,5 +354,3 @@ ff --source
 ```
 - inspect, modify, make, create
 - https://github.com/lineality/source_it_module
-
-
