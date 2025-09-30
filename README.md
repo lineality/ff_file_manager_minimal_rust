@@ -28,11 +28,13 @@ quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 >>
 ```
 
+## From Terminal
 ```bash
 ff
 ff path/
 ff --help
 ff --source
+ff --version
 ```
 
 ## Help Menu
@@ -41,19 +43,19 @@ ff --source
 ff --help
 ff -h
 ```
-- As a command inside of ff:
+- As a command inside of ff, run:
 ```
 --help
 ```
 
-## Build
-see https://github.com/lineality/rust_compile_optimizations_cheatsheet
+## Build ff
+- See https://github.com/lineality/rust_compile_optimizations_cheatsheet for more details.
 
-#### For smallest size, build (~0.9 mb)
+#### For smallest size, build (~1 mb)
 ```bash
 cargo build --profile release-small
 ```
-#### or for optimal performance (~9 mb)
+#### or for optimal performance (~10 mb)
 ```bash
 cargo build --profile release-performance
 ```
