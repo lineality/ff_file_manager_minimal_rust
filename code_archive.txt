@@ -1665,3 +1665,132 @@ pub fn display_version() -> Result<()> {
         "Failed to write any version information to stdout",
     )))
 }
+
+
+
+/// Scans directory and returns list of supported code/data files with line counts
+///
+/// # Arguments
+/// * `directory_path` - Absolute path to directory to scan
+///
+/// # Returns
+/// * `Vec<FileLineCount>` - List of files with their line counts
+///
+/// # Note
+/// Skips files that cannot be processed (permissions, corruption, etc.)
+/// and continues processing remaining files
+fn get_code_files_with_counts(directory_path: &Path) -> Vec<FileLineCount> {
+    let mut file_counts = Vec::new();
+
+    // Read directory contents with error handling
+    let entries = match fs::read_dir(directory_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!(
+                "Error reading directory {}: {}",
+                directory_path.display(),
+                e
+            );
+            return file_counts;
+        }
+    };
+
+    // Process each entry in the directory
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Error reading directory entry: {}", e);
+                continue; // Skip problematic entries
+            }
+        };
+
+        let file_path = entry.path();
+
+        // Skip directories, only process files
+        if !file_path.is_file() {
+            continue;
+        }
+
+        // Check if file has supported extension
+        if !is_supported_file_type(&file_path) {
+            continue;
+        }
+
+        // Get absolute path
+        let absolute_path = match file_path.canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!(
+                    "Cannot get absolute path for {}: {}",
+                    file_path.display(),
+                    e
+                );
+                continue; // Skip files we can't resolve
+            }
+        };
+
+        // Extract display name (filename only)
+        let display_name = match absolute_path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => {
+                eprintln!("Cannot extract filename from {}", absolute_path.display());
+                continue;
+            }
+        };
+
+        // Count lines in file
+        match count_file_lines_efficiently(&absolute_path) {
+            Ok(line_count) => {
+                file_counts.push(FileLineCount {
+                    file_path: absolute_path,
+                    display_name,
+                    line_count,
+                });
+            }
+            Err(e) => {
+                eprintln!("Skipping file due to error: {}", e);
+                continue; // Skip files we can't count
+            }
+        }
+    }
+
+    file_counts
+}
+
+
+/// Supported file extensions for code and data files
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "csv", "tsv", "py", "rs", "js", "ts", "json", "xml", "yaml", "yml", "toml", "md", "txt", "sql",
+    "sh", "bash", "c", "cpp", "h", "hpp", "java", "go", "rb", "php", "html", "css", "r", "scala",
+    "kt",
+];
+
+
+
+/// Checks if a file has a supported code/data extension
+///
+/// # Arguments
+/// * `file_path` - Path to the file to check
+///
+/// # Returns
+/// * `true` if the file has a supported extension
+/// * `false` otherwise
+///
+/// # Examples
+/// ```
+/// use std::path::Path;
+/// assert!(is_supported_file_type(Path::new("test.rs")));
+/// assert!(!is_supported_file_type(Path::new("test.exe")));
+/// ```
+fn is_supported_file_type(file_path: &Path) -> bool {
+    // Get file extension as lowercase string
+    let extension = match file_path.extension() {
+        Some(ext) => ext.to_string_lossy().to_lowercase(),
+        None => return false,
+    };
+
+    // Create HashSet for O(1) lookup performance
+    let supported_set: HashSet<&str> = SUPPORTED_EXTENSIONS.iter().copied().collect();
+    supported_set.contains(extension.as_str())
+}

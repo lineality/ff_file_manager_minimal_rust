@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Represents a file with its metadata for display
 #[derive(Debug, Clone)]
@@ -13,13 +14,6 @@ struct FileLineCount {
     /// Number of lines in the file
     line_count: usize,
 }
-
-/// Supported file extensions for code and data files
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "csv", "tsv", "py", "rs", "js", "ts", "json", "xml", "yaml", "yml",
-    "toml", "md", "txt", "sql", "sh", "bash", "c", "cpp", "h", "hpp",
-    "java", "go", "rb", "php", "html", "css", "r", "scala", "kt"
-];
 
 /// Sort modes for file display
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +52,486 @@ impl Default for DisplayConfig {
     }
 }
 
+/// Tier 1: Exact filename matches for specific configuration files
+/// Only includes files NOT covered by extension matching in Tier 2
+/// These are typically files without extensions or with extensions we don't want to match broadly
+static EXACT_FILENAME_LOOKUP: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+/// Tier 2: File extension matches for general file types
+/// Extensions are stored lowercase without the leading dot
+/// If an extension is here, ALL files with that extension are included
+static EXTENSION_LOOKUP: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+/// Initializes and returns the exact filename lookup set
+/// Only contains files that aren't covered by extension matching
+///
+/// # Returns
+/// Reference to static HashSet containing exact filenames to match
+fn get_exact_filename_lookup() -> &'static HashSet<&'static str> {
+    EXACT_FILENAME_LOOKUP.get_or_init(|| {
+        HashSet::from([
+            // Shell configuration files (no common extension)
+            ".bashrc",
+            ".bash_profile",
+            ".bash_logout",
+            ".bash_history",
+            ".bash_aliases",
+            ".profile",
+            ".login",
+            ".logout",
+            ".zshrc",
+            ".zprofile",
+            ".zshenv",
+            ".zlogin",
+            ".zlogout",
+            ".fishrc",
+            ".fish_profile",
+            ".kshrc",
+            ".tcshrc",
+            ".cshrc",
+            ".shrc",
+            ".shinit",
+            // Editor configuration files (no common extension)
+            ".vimrc",
+            ".gvimrc",
+            ".viminfo",
+            ".exrc",
+            ".emacs",
+            ".spacemacs",
+            ".nanorc",
+            ".editorconfig",
+            // Git configuration files (no common extension)
+            ".gitconfig",
+            ".gitignore",
+            ".gitattributes",
+            ".gitmodules",
+            ".gitmessage",
+            // Linter/Formatter configuration files (no common extension)
+            ".prettierrc",
+            ".prettierignore",
+            ".eslintrc",
+            ".eslintignore",
+            ".pylintrc",
+            ".flake8",
+            ".stylelintrc",
+            ".stylelintignore",
+            ".coveragerc",
+            ".bandit",
+            ".yapfignore",
+            // Version manager files (no common extension)
+            ".nvmrc",
+            ".node-version",
+            ".python-version",
+            ".ruby-version",
+            ".ruby-gemset",
+            ".rvmrc",
+            ".tool-versions",
+            ".sdkmanrc",
+            ".jvmrc",
+            ".go-version",
+            // Build files without extensions or with non-standard naming
+            "Makefile",
+            "makefile",
+            "GNUmakefile",
+            "BSDmakefile",
+            "Dockerfile",
+            "dockerfile",
+            "Containerfile",
+            "Jenkinsfile",
+            "Vagrantfile",
+            "Brewfile",
+            "Rakefile",
+            "Gulpfile",
+            "Gruntfile",
+            "gradlew", // shell script without extension
+            // Lock files and specific package files not covered by extensions
+            "Gemfile", // no extension
+            "Pipfile", // no extension
+            // Web server configuration
+            ".htaccess",
+            ".htpasswd",
+            "Caddyfile",
+            // Database configuration files with dot prefix
+            ".my.cnf", // dot-prefixed version
+            ".pgpass",
+            // Environment files
+            ".env",
+            ".env.local",
+            ".env.development",
+            ".env.production",
+            ".env.test",
+            ".env.staging",
+            ".env.example",
+            ".env.sample",
+            ".env.template",
+            ".envrc",
+            // Generic config names without extensions
+            "config",
+            "configuration",
+            "settings",
+            "preferences",
+            // RC files and configs without extensions
+            ".babelrc",
+            ".postcssrc",
+            // Package manager configs (no common extension)
+            ".npmrc",
+            ".npmignore",
+            ".yarnrc",
+            ".yarnignore",
+            // Various ignore files (no common extension)
+            ".dockerignore",
+            ".slugignore",
+            ".cfignore",
+            ".eleventyignore",
+            ".vercelignore",
+            ".nowignore",
+            ".claspignore",
+            // Tool configuration files (no common extension)
+            ".huskyrc",
+            ".lintstagedrc",
+            ".commitlintrc",
+            ".czrc",
+            ".releaserc",
+            ".watchmanconfig",
+        ])
+    })
+}
+
+/// Initializes and returns the file extension lookup set
+/// Contains all file extensions we want to include (without leading dot)
+///
+/// # Returns
+/// Reference to static HashSet containing file extensions to match
+fn get_extension_lookup() -> &'static HashSet<&'static str> {
+    EXTENSION_LOOKUP.get_or_init(|| {
+        HashSet::from([
+            // Programming languages
+            "py",
+            "pyw",
+            "pyx",
+            "pyi", // Python
+            "rs",
+            "rlib", // Rust
+            "js",
+            "mjs",
+            "cjs",
+            "jsx", // JavaScript
+            "ts",
+            "tsx",
+            "mts",
+            "cts", // TypeScript
+            "java",
+            "class", // Java
+            "go",    // Go
+            "rb",
+            "erb",
+            "rake", // Ruby
+            "php",
+            "phtml", // PHP
+            "c",
+            "h", // C
+            "cpp",
+            "cc",
+            "cxx",
+            "hpp",
+            "hh",
+            "hxx", // C++
+            "cs",
+            "csx",   // C#
+            "swift", // Swift
+            "kt",
+            "kts", // Kotlin
+            "scala",
+            "sc", // Scala
+            "r",
+            "rdata",
+            "rds",
+            "rda", // R
+            "m",
+            "mm", // Objective-C
+            "f90",
+            "f95",
+            "f03",
+            "f08", // Fortran
+            "lua", // Lua
+            "pl",
+            "pm", // Perl
+            "jl", // Julia
+            "nim",
+            "nims", // Nim
+            "cr",   // Crystal
+            "dart", // Dart
+            "elm",  // Elm
+            "ex",
+            "exs", // Elixir
+            "erl",
+            "hrl", // Erlang
+            "fs",
+            "fsi",
+            "fsx", // F#
+            "ml",
+            "mli", // OCaml
+            "clj",
+            "cljs",
+            "cljc", // Clojure
+            "rkt",  // Racket
+            "scm",
+            "ss", // Scheme
+            "lisp",
+            "lsp",
+            "cl", // Lisp
+            "hs",
+            "lhs", // Haskell
+            "v",   // V/Verilog
+            "vhd",
+            "vhdl", // VHDL
+            "pas",
+            "pp", // Pascal
+            "d",
+            "di",  // D
+            "zig", // Zig
+            "ada",
+            "adb",
+            "ads", // Ada
+            "cob",
+            "cbl", // COBOL
+            "asm",
+            "s", // Assembly
+            "wat",
+            "wasm", // WebAssembly
+            // Web/Markup
+            "html",
+            "htm",
+            "xhtml", // HTML
+            "css",   // CSS
+            "scss",
+            "sass", // Sass
+            "less", // Less
+            "styl",
+            "stylus", // Stylus
+            "vue",    // Vue
+            "svelte", // Svelte
+            // Data/Config formats
+            "json",
+            "jsonc",
+            "json5", // JSON variants
+            "xml",
+            "xsd",
+            "xsl",
+            "xslt", // XML
+            "yaml",
+            "yml", // YAML
+            "toml",
+            "tml", // TOML
+            "ini",
+            "cfg",
+            "cnf",
+            "conf",
+            "config",     // Config files
+            "properties", // Java properties
+            "env",        // Environment files
+            // Shell/Script
+            "sh",
+            "bash",
+            "zsh",
+            "fish",
+            "ksh",
+            "tcsh",
+            "csh", // Shell scripts
+            "ps1",
+            "psm1",
+            "psd1", // PowerShell
+            "bat",
+            "cmd", // Windows batch
+            "awk", // AWK
+            // Editor/IDE
+            "vim",
+            "nvim", // Vim
+            "el",
+            "elc", // Emacs Lisp
+            // Documentation
+            "md",
+            "markdown",
+            "mdown", // Markdown
+            "rst",
+            "rest", // reStructuredText
+            "txt",
+            "text", // Plain text
+            "adoc",
+            "asciidoc", // AsciiDoc
+            "tex",
+            "latex",   // LaTeX
+            "org",     // Org mode
+            "textile", // Textile
+            // Database
+            "sql",
+            "mysql",
+            "psql", // SQL
+            "sqlite",
+            "sqlite3",
+            "db",  // SQLite
+            "cql", // Cassandra
+            // Build/Project files
+            "gradle", // Gradle
+            "sbt",    // SBT
+            "cmake",  // CMake
+            "make",
+            "mak",
+            "mk",    // Make
+            "ninja", // Ninja
+            "bazel",
+            "bzl", // Bazel
+            "pro",
+            "pri", // Qt project
+            // Data files
+            "csv",
+            "tsv",
+            "psv", // Delimited data
+            "log", // Log files
+            // Package/Project files with extensions
+            "csproj",
+            "vbproj",
+            "fsproj", // .NET projects
+            "sln",    // Visual Studio solution
+            "xcodeproj",
+            "xcworkspace", // Xcode
+            "lock",        // Various lock files
+        ])
+    })
+}
+
+/// Checks if a file should be included based on exact name or extension
+///
+/// # Arguments
+/// * `file_path` - Path to the file to check
+///
+/// # Returns
+/// * `true` if the file matches either tier 1 (exact name) or tier 2 (extension)
+/// * `false` otherwise
+///
+/// # Examples
+/// ```
+/// use std::path::Path;
+/// assert!(is_supported_file(Path::new(".bashrc")));       // Exact match
+/// assert!(is_supported_file(Path::new("main.rs")));       // Extension match
+/// assert!(is_supported_file(Path::new("config")));        // Exact match
+/// assert!(!is_supported_file(Path::new("binary.exe")));   // No match
+/// ```
+fn is_supported_file(file_path: &Path) -> bool {
+    // Get the filename for exact matching
+    let filename = match file_path.file_name() {
+        Some(name) => name.to_string_lossy(),
+        None => return false,
+    };
+
+    // Tier 1: Check exact filename match
+    let exact_filenames = get_exact_filename_lookup();
+    if exact_filenames.contains(filename.as_ref()) {
+        return true;
+    }
+
+    // Tier 2: Check extension match
+    if let Some(ext) = file_path.extension() {
+        let extension = ext.to_string_lossy().to_lowercase();
+        let extensions = get_extension_lookup();
+        if extensions.contains(extension.as_str()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Scans directory and returns list of supported code/config files with line counts
+///
+/// # Arguments
+/// * `directory_path` - Absolute path to directory to scan
+///
+/// # Returns
+/// * `Vec<FileLineCount>` - List of files with their line counts
+///
+/// # Note
+/// Skips files that cannot be processed (permissions, corruption, etc.)
+/// and continues processing remaining files
+fn get_code_files_with_counts(directory_path: &Path) -> Vec<FileLineCount> {
+    let mut file_counts = Vec::new();
+
+    // Read directory contents with error handling
+    let entries = match fs::read_dir(directory_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!(
+                "Error reading directory {}: {}",
+                directory_path.display(),
+                e
+            );
+            return file_counts;
+        }
+    };
+
+    // Process each entry in the directory
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Error reading directory entry: {}", e);
+                continue; // Skip problematic entries
+            }
+        };
+
+        let file_path = entry.path();
+
+        // Skip directories, only process files
+        if !file_path.is_file() {
+            continue;
+        }
+
+        // Check if file is supported using two-tier system
+        if !is_supported_file(&file_path) {
+            continue;
+        }
+
+        // Get absolute path
+        let absolute_path = match file_path.canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!(
+                    "Cannot get absolute path for {}: {}",
+                    file_path.display(),
+                    e
+                );
+                continue; // Skip files we can't resolve
+            }
+        };
+
+        // Extract display name (filename only)
+        let display_name = match absolute_path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => {
+                eprintln!("Cannot extract filename from {}", absolute_path.display());
+                continue;
+            }
+        };
+
+        // Count lines in file
+        match count_file_lines_efficiently(&absolute_path) {
+            Ok(line_count) => {
+                file_counts.push(FileLineCount {
+                    file_path: absolute_path,
+                    display_name,
+                    line_count,
+                });
+            }
+            Err(e) => {
+                eprintln!("Skipping file due to error: {}", e);
+                continue; // Skip files we can't count
+            }
+        }
+    }
+
+    file_counts
+}
+
 /// Validates that the given path exists and is a readable directory
 ///
 /// # Arguments
@@ -76,46 +550,29 @@ impl Default for DisplayConfig {
 fn validate_directory_path(directory_path: &Path) -> Result<PathBuf, String> {
     // Check if path exists
     if !directory_path.exists() {
-        return Err(format!("Directory does not exist: {}", directory_path.display()));
+        return Err(format!(
+            "Directory does not exist: {}",
+            directory_path.display()
+        ));
     }
 
     // Check if it's actually a directory
     if !directory_path.is_dir() {
-        return Err(format!("Path is not a directory: {}", directory_path.display()));
+        return Err(format!(
+            "Path is not a directory: {}",
+            directory_path.display()
+        ));
     }
 
     // Convert to absolute path
     match directory_path.canonicalize() {
         Ok(absolute_path) => Ok(absolute_path),
-        Err(e) => Err(format!("Cannot access directory {}: {}", directory_path.display(), e)),
+        Err(e) => Err(format!(
+            "Cannot access directory {}: {}",
+            directory_path.display(),
+            e
+        )),
     }
-}
-
-/// Checks if a file has a supported code/data extension
-///
-/// # Arguments
-/// * `file_path` - Path to the file to check
-///
-/// # Returns
-/// * `true` if the file has a supported extension
-/// * `false` otherwise
-///
-/// # Examples
-/// ```
-/// use std::path::Path;
-/// assert!(is_supported_file_type(Path::new("test.rs")));
-/// assert!(!is_supported_file_type(Path::new("test.exe")));
-/// ```
-fn is_supported_file_type(file_path: &Path) -> bool {
-    // Get file extension as lowercase string
-    let extension = match file_path.extension() {
-        Some(ext) => ext.to_string_lossy().to_lowercase(),
-        None => return false,
-    };
-
-    // Create HashSet for O(1) lookup performance
-    let supported_set: HashSet<&str> = SUPPORTED_EXTENSIONS.iter().copied().collect();
-    supported_set.contains(extension.as_str())
 }
 
 /// Efficiently counts lines in a file without loading entire content into memory
@@ -149,95 +606,17 @@ fn count_file_lines_efficiently(file_path: &Path) -> Result<usize, String> {
             Ok(_) => line_count += 1,
             Err(e) => {
                 // Log error but continue counting what we can
-                eprintln!("Warning: Error reading line in {}: {}", file_path.display(), e);
+                eprintln!(
+                    "Warning: Error reading line in {}: {}",
+                    file_path.display(),
+                    e
+                );
                 continue;
             }
         }
     }
 
     Ok(line_count)
-}
-
-/// Scans directory and returns list of supported code/data files with line counts
-///
-/// # Arguments
-/// * `directory_path` - Absolute path to directory to scan
-///
-/// # Returns
-/// * `Vec<FileLineCount>` - List of files with their line counts
-///
-/// # Note
-/// Skips files that cannot be processed (permissions, corruption, etc.)
-/// and continues processing remaining files
-fn get_code_files_with_counts(directory_path: &Path) -> Vec<FileLineCount> {
-    let mut file_counts = Vec::new();
-
-    // Read directory contents with error handling
-    let entries = match fs::read_dir(directory_path) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("Error reading directory {}: {}", directory_path.display(), e);
-            return file_counts;
-        }
-    };
-
-    // Process each entry in the directory
-    for entry_result in entries {
-        let entry = match entry_result {
-            Ok(entry) => entry,
-            Err(e) => {
-                eprintln!("Error reading directory entry: {}", e);
-                continue; // Skip problematic entries
-            }
-        };
-
-        let file_path = entry.path();
-
-        // Skip directories, only process files
-        if !file_path.is_file() {
-            continue;
-        }
-
-        // Check if file has supported extension
-        if !is_supported_file_type(&file_path) {
-            continue;
-        }
-
-        // Get absolute path
-        let absolute_path = match file_path.canonicalize() {
-            Ok(path) => path,
-            Err(e) => {
-                eprintln!("Cannot get absolute path for {}: {}", file_path.display(), e);
-                continue; // Skip files we can't resolve
-            }
-        };
-
-        // Extract display name (filename only)
-        let display_name = match absolute_path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => {
-                eprintln!("Cannot extract filename from {}", absolute_path.display());
-                continue;
-            }
-        };
-
-        // Count lines in file
-        match count_file_lines_efficiently(&absolute_path) {
-            Ok(line_count) => {
-                file_counts.push(FileLineCount {
-                    file_path: absolute_path,
-                    display_name,
-                    line_count,
-                });
-            }
-            Err(e) => {
-                eprintln!("Skipping file due to error: {}", e);
-                continue; // Skip files we can't count
-            }
-        }
-    }
-
-    file_counts
 }
 
 /// Sorts file list according to specified sort mode
@@ -279,13 +658,20 @@ fn display_file_list_tui(files: &[FileLineCount], config: &DisplayConfig) {
     let _ = io::stdout().flush();
 
     // Display header/legend always
-    println!("# File Name{:width$}Line Count", "", width = config.terminal_width.saturating_sub(25));
+    println!(
+        "# File Name{:width$}Line Count",
+        "",
+        width = config.terminal_width.saturating_sub(25)
+    );
 
     // Display files up to terminal height limit
     for (index, file) in files.iter().enumerate() {
         // Verify file still exists before displaying
         if !file.file_path.exists() {
-            eprintln!("Warning: File no longer exists: {}", file.file_path.display());
+            eprintln!(
+                "Warning: File no longer exists: {}",
+                file.file_path.display()
+            );
             continue;
         }
 
@@ -295,24 +681,34 @@ fn display_file_list_tui(files: &[FileLineCount], config: &DisplayConfig) {
 
         // Truncate filename if necessary to fit terminal width
         let display_name = if file.display_name.len() > available_width {
-            format!("{}...", &file.display_name[..available_width.saturating_sub(3)])
+            format!(
+                "{}...",
+                &file.display_name[..available_width.saturating_sub(3)]
+            )
         } else {
             file.display_name.clone()
         };
 
         // Calculate padding for right-alignment of line count
-        let padding_width = config.terminal_width
+        let padding_width = config
+            .terminal_width
             .saturating_sub(line_number.to_string().len())
             .saturating_sub(2) // "# "
             .saturating_sub(display_name.len())
             .saturating_sub(file.line_count.to_string().len());
 
-        println!("{} {}{:width$}{}",
-                 line_number,
-                 display_name,
-                 "",
-                 if config.show_header_in_line_count { file.line_count } else { file.line_count.saturating_sub(1) },
-                 width = padding_width);
+        println!(
+            "{} {}{:width$}{}",
+            line_number,
+            display_name,
+            "",
+            if config.show_header_in_line_count {
+                file.line_count
+            } else {
+                file.line_count.saturating_sub(1)
+            },
+            width = padding_width
+        );
     }
 
     // Show command prompt
@@ -470,14 +866,23 @@ mod linecount_tui_tests {
         // Define test files with known content and line counts
         // These cover various supported file types and some unsupported ones
         let files_to_create = [
-            ("test.rs", "// Rust file\nfn main() {\n    println!(\"Hello\");\n}"),
+            (
+                "test.rs",
+                "// Rust file\nfn main() {\n    println!(\"Hello\");\n}",
+            ),
             ("data.csv", "name,age\nAlice,25\nBob,30"),
             ("script.py", "print('Python')\nprint('Script')"),
-            ("readme.txt", "This is a readme file.\nSecond line.\nThird line."),
-            ("config.json", "{\n  \"key\": \"value\",\n  \"number\": 42\n}"),
+            (
+                "readme.txt",
+                "This is a readme file.\nSecond line.\nThird line.",
+            ),
+            (
+                "config.json",
+                "{\n  \"key\": \"value\",\n  \"number\": 42\n}",
+            ),
             ("styles.css", "body {\n  margin: 0;\n  padding: 0;\n}"),
-            ("binary.exe", "binary content"),  // Unsupported extension for testing filtering
-            ("no_extension", "content without extension"),  // No extension for testing filtering
+            ("binary.exe", "binary content"), // Unsupported extension for testing filtering
+            ("no_extension", "content without extension"), // No extension for testing filtering
         ];
 
         // Create each test file if it doesn't already exist
@@ -488,15 +893,16 @@ mod linecount_tui_tests {
             // This prevents overwriting files with empty content on repeated test runs
             if !file_path.exists() {
                 // Create and write the file
-                let mut file = fs::File::create(&file_path)
-                    .expect(&format!("Failed to create {}", filename));
+                let mut file =
+                    fs::File::create(&file_path).expect(&format!("Failed to create {}", filename));
                 file.write_all(content.as_bytes())
                     .expect(&format!("Failed to write {}", filename));
             }
         }
 
         // Return absolute path for consistent path handling across tests
-        test_dir.canonicalize()
+        test_dir
+            .canonicalize()
             .expect("Failed to get absolute path for test_temp")
     }
 
@@ -554,8 +960,10 @@ mod linecount_tui_tests {
 
         // Verify appropriate error is returned
         assert!(result.is_err(), "Nonexistent path should fail");
-        assert!(result.unwrap_err().contains("does not exist"),
-                "Error should mention path doesn't exist");
+        assert!(
+            result.unwrap_err().contains("does not exist"),
+            "Error should mention path doesn't exist"
+        );
     }
 
     /// Tests that validate_directory_path rejects file paths (not directories)
@@ -583,9 +991,14 @@ mod linecount_tui_tests {
         let result = validate_directory_path(&file_path);
 
         // Verify appropriate error for file vs directory
-        assert!(result.is_err(), "File path should fail directory validation");
-        assert!(result.unwrap_err().contains("not a directory"),
-                "Error should mention it's not a directory");
+        assert!(
+            result.is_err(),
+            "File path should fail directory validation"
+        );
+        assert!(
+            result.unwrap_err().contains("not a directory"),
+            "Error should mention it's not a directory"
+        );
     }
 
     /// Tests that is_supported_file_type correctly identifies supported file extensions
@@ -607,21 +1020,20 @@ mod linecount_tui_tests {
     fn test_is_supported_file_type_supported_extensions() {
         // Test various supported file extensions
         let supported_files = [
-            "test.rs",      // Rust
-            "data.csv",     // CSV data
-            "script.py",    // Python
-            "config.json",  // JSON
-            "styles.css",   // CSS
-            "readme.txt",   // Text
-            "query.sql",    // SQL
-            "index.html"    // HTML
+            "test.rs",     // Rust
+            "data.csv",    // CSV data
+            "script.py",   // Python
+            "config.json", // JSON
+            "styles.css",  // CSS
+            "readme.txt",  // Text
+            "query.sql",   // SQL
+            "index.html",  // HTML
         ];
 
         // Verify each file type is recognized as supported
         for filename in &supported_files {
             let path = Path::new(filename);
-            assert!(is_supported_file_type(path),
-                   "{} should be supported", filename);
+            assert!(is_supported_file(path), "{} should be supported", filename);
         }
     }
 
@@ -646,18 +1058,21 @@ mod linecount_tui_tests {
     fn test_is_supported_file_type_unsupported_extensions() {
         // Test various unsupported file types
         let unsupported_files = [
-            "binary.exe",    // Windows executable
-            "image.png",     // Image file
-            "video.mp4",     // Video file
-            "no_extension",  // File without extension
-            ".hidden"        // Hidden file
+            "binary.exe",   // Windows executable
+            "image.png",    // Image file
+            "video.mp4",    // Video file
+            "no_extension", // File without extension
+            ".hidden",      // Hidden file
         ];
 
         // Verify each file type is recognized as unsupported
         for filename in &unsupported_files {
             let path = Path::new(filename);
-            assert!(!is_supported_file_type(path),
-                   "{} should not be supported", filename);
+            assert!(
+                !is_supported_file(path),
+                "{} should not be supported",
+                filename
+            );
         }
     }
 
@@ -708,8 +1123,11 @@ mod linecount_tui_tests {
 
             // Verify count matches expected value
             let actual_lines = result.unwrap();
-            assert_eq!(actual_lines, *expected_lines,
-                      "Wrong line count for {}", filename);
+            assert_eq!(
+                actual_lines, *expected_lines,
+                "Wrong line count for {}",
+                filename
+            );
         }
     }
 
@@ -735,8 +1153,10 @@ mod linecount_tui_tests {
 
         // Verify appropriate error handling
         assert!(result.is_err(), "Should fail for nonexistent file");
-        assert!(result.unwrap_err().contains("Cannot open file"),
-                "Error should mention cannot open file");
+        assert!(
+            result.unwrap_err().contains("Cannot open file"),
+            "Error should mention cannot open file"
+        );
     }
 
     /// Tests that get_code_files_with_counts correctly scans directories and counts lines
@@ -773,25 +1193,40 @@ mod linecount_tui_tests {
 
         // Verify all files have positive line counts
         for file in &files {
-            assert!(file.line_count > 0,
-                   "File {} should have positive line count", file.display_name);
+            assert!(
+                file.line_count > 0,
+                "File {} should have positive line count",
+                file.display_name
+            );
         }
 
         // Verify expected files are present
-        let expected_names = ["test.rs", "data.csv", "script.py",
-                             "readme.txt", "config.json", "styles.css"];
+        let expected_names = [
+            "test.rs",
+            "data.csv",
+            "script.py",
+            "readme.txt",
+            "config.json",
+            "styles.css",
+        ];
 
         for expected in &expected_names {
-            assert!(files.iter().any(|f| f.display_name == *expected),
-                   "Should find {}", expected);
+            assert!(
+                files.iter().any(|f| f.display_name == *expected),
+                "Should find {}",
+                expected
+            );
         }
 
         // Verify unsupported files are excluded
         let excluded_names = ["binary.exe", "no_extension"];
 
         for excluded in &excluded_names {
-            assert!(!files.iter().any(|f| f.display_name == *excluded),
-                   "Should not include {}", excluded);
+            assert!(
+                !files.iter().any(|f| f.display_name == *excluded),
+                "Should not include {}",
+                excluded
+            );
         }
     }
 
