@@ -37,6 +37,10 @@ ff --source
 ff --version
 ```
 
+#### Returns: Output path
+- Last navigation current directory path
+- User-Selected file or directory path
+
 ## Help Menu
 - cli, run
 ```bash

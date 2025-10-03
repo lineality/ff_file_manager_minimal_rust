@@ -15,14 +15,25 @@ mod source_it_module;
 // show data & code file line counts
 mod row_line_count_tui_module;
 
-// ff as a module for any project
+// ff as a module for any project, e.g.
 fn main() {
-    // Let's call File Fantastic Go!!
-    if let Err(e) = file_fantastic() {
+    // Let's call File Fantastic
+    match file_fantastic() {
+        Ok(_) => {
+            /* Since ff has a cwd message, we don't need to reprint it
+             * but as a module for another application,
+             * you may want to do something with the output directory path
+             * e.g.
+             * Ok(last_directory) => {
+             * println!("Last directory: {}", last_directory.display());
+             */
+        }
         // Handle errors
-        eprintln!("Error: {}", e);
+        Err(e) => {
+            eprintln!("Error: {}", e);
 
-        // exit code one means ok!
-        std::process::exit(1);
+            // exit code 1 (not zero) means there was an error
+            std::process::exit(1);
+        }
     }
 }

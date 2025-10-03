@@ -13328,7 +13328,7 @@ pub fn display_version() -> Result<()> {
 /// - No background threads or async operations
 /// - Suitable for use in resource-constrained environments
 /// Public entry point for File Fantastic file manager module
-pub fn file_fantastic() -> Result<()> {
+pub fn file_fantastic() -> Result<PathBuf> {
     // Collect command line arguments
     // let args: Vec<String> = env::args().collect();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -13350,7 +13350,10 @@ pub fn file_fantastic() -> Result<()> {
             Ok(path) => println!("Source extracted to: {}", path.display()),
             Err(e) => eprintln!("Failed to extract source: {}", e),
         }
-        return Ok(());
+
+        // since ff returns current path
+        // return blank new path
+        return Ok(PathBuf::new());
     }
 
     // Check if help was requested
@@ -13416,7 +13419,7 @@ pub fn file_fantastic() -> Result<()> {
                         })?;
 
                         if input.trim().eq_ignore_ascii_case("q") {
-                            return Ok(());
+                            return Ok(current_directory_path);
                         }
 
                         // Try to go up one directory
@@ -13427,7 +13430,7 @@ pub fn file_fantastic() -> Result<()> {
                             }
                             None => {
                                 eprintln!("Cannot navigate further up. Exiting.");
-                                return Ok(());
+                                return Ok(current_directory_path);
                             }
                         }
                     }
@@ -13515,7 +13518,7 @@ pub fn file_fantastic() -> Result<()> {
                     })?;
 
                     if input.trim().eq_ignore_ascii_case("q") {
-                        return Ok(());
+                        return Ok(current_directory_path);
                     }
                     continue;
                 }
@@ -13690,7 +13693,7 @@ pub fn file_fantastic() -> Result<()> {
                             );
                             println!("To continue from this location, run:");
                             println!("cd {}", current_directory_path.display());
-                            return Ok(());
+                            return Ok(current_directory_path);
                         }
 
                         NavigationAction::OpenNewTerminal => {
