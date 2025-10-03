@@ -38,8 +38,13 @@ ff --version
 ```
 
 #### Returns: Output path
-- Last navigation current directory path
-- User-Selected file or directory path
+The GUI version of the 'select file' or 'select folder' feature/functionality
+is very frequently used, as with upload, download, open, import, etc.
+File Fantastic can provide this 'select item on your device' functionality
+as a module for any rust cli terminal/headless applications:
+- Last 'navigation current directory' path returned by default on exit
+- User-Selected file or directory path returned by command: {selection number} --return-path
+
 
 ## Help Menu
 - cli, run

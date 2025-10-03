@@ -19,15 +19,28 @@ mod row_line_count_tui_module;
 fn main() {
     // Let's call File Fantastic
     match file_fantastic() {
-        Ok(_) => {
-            /* Since ff has a cwd message, we don't need to reprint it
-             * but as a module for another application,
-             * you may want to do something with the output directory path
-             * e.g.
-             * Ok(last_directory) => {
-             * println!("Last directory: {}", last_directory.display());
-             */
-        }
+        // // For testing
+        // /* Since ff has a cwd message, we don't need to reprint it
+        //  * but as a module for another application,
+        //  * you may want to do something with the output directory path
+        //  * e.g.
+        //  * Ok(returned_directory) => {
+        //  * println!("Last directory: {}", returned_directory.display());
+        //  */
+        // // No need to re-print output
+        // Ok(returned_directory) => {
+        //     println!("Last directory: {}", returned_directory.display());
+        // }
+        // // Handle errors
+        // Err(e) => {
+        //     eprintln!("Error: {}", e);
+
+        //     // exit code 1 (not zero) means there was an error
+        //     std::process::exit(1);
+        // }
+
+        // No need to re-print output
+        Ok(_) => {}
         // Handle errors
         Err(e) => {
             eprintln!("Error: {}", e);
