@@ -19,7 +19,7 @@ mod row_line_count_tui_module;
 fn main() {
     // Let's call File Fantastic
     match file_fantastic() {
-        // // For testing
+        // // For testing / Inspection
         // /* Since ff has a cwd message, we don't need to reprint it
         //  * but as a module for another application,
         //  * you may want to do something with the output directory path

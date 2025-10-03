@@ -252,9 +252,9 @@ RUST_TRACEBACK=full cargo test --profile release-small
 ///
 /// ## Sample main file to use this module
 /// ```rust
-/// // src/main.rs
+/// / src/main.rs
 ///
-/// // import file fantastic module w/ these 2 lines
+/// / import file fantastic module w/ these 2 lines
 /// mod ff_file_fantastic_module;
 /// use ff_file_fantastic_module::file_fantastic;
 ///
@@ -408,14 +408,14 @@ Error Handling section starts
 ///
 /// # Examples
 /// ```rust
-/// // Creating a not found error
+/// / Creating a not found error
 /// let error = FileFantasticError::NotFound(path);
 ///
-/// // Converting an IO error
+/// / Converting an IO error
 /// let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "Access denied");
 /// let error = FileFantasticError::from(io_err);
 ///
-/// // Example error handling
+/// / Example error handling
 /// match operation() {
 ///     Err(FileFantasticError::PermissionDenied(path)) => {
 ///         eprintln!("Cannot access {}: permission denied", path.display());
@@ -1182,16 +1182,16 @@ pub struct StackRetrievalResult {
 ///
 /// # Examples
 /// ```rust
-/// // Default width (no adjustment)
+/// / Default width (no adjustment)
 /// assert_eq!(calculate_name_width(0, true), 55);
 ///
-/// // Increase width by 10
+/// / Increase width by 10
 /// assert_eq!(calculate_name_width(10, true), 65);
 ///
-/// // Decrease width by 50 (hits minimum)
+/// / Decrease width by 50 (hits minimum)
 /// assert_eq!(calculate_name_width(50, false), 8);
 ///
-/// // Maximum possible width
+/// / Maximum possible width
 /// assert_eq!(calculate_name_width(u16::MAX, true), u16::MAX);
 /// ```
 fn calculate_name_width(
@@ -1613,16 +1613,16 @@ mod calculate_name_width_tests {
 ///
 /// # Examples
 /// ```rust
-/// // Default height (no adjustment)
+/// / Default height (no adjustment)
 /// assert_eq!(calculate_items_per_page(0, true), 16);
 ///
-/// // Increase by 10 rows
+/// / Increase by 10 rows
 /// assert_eq!(calculate_items_per_page(10, true), 26);
 ///
-/// // Decrease by 20 rows (goes to 0)
+/// / Decrease by 20 rows (goes to 0)
 /// assert_eq!(calculate_items_per_page(20, false), 0);
 ///
-/// // Maximum possible items
+/// / Maximum possible items
 /// assert_eq!(calculate_items_per_page(u16::MAX, true), u16::MAX);
 /// ```
 fn calculate_items_per_page(
@@ -1861,13 +1861,13 @@ fn calculate_items_per_page_from_state(nav_state: &NavigationState) -> u16 {
 ///
 /// # Example
 /// ```rust
-/// // Basic archive
+/// / Basic archive
 /// let result = create_directory_zip_archive(&source, &dest, None);
-/// // Creates: my_project_2025_01_15_14_30_45.zip
+/// / Creates: my_project_2025_01_15_14_30_45.zip
 ///
-/// // Custom named archive
+/// / Custom named archive
 /// let result = create_directory_zip_archive(&source, &dest, Some("backup"));
-/// // Creates: my_project_backup_2025_01_15_14_30_45.zip
+/// / Creates: my_project_backup_2025_01_15_14_30_45.zip
 /// ```
 fn create_directory_zip_archive(
     source_directory_path: &PathBuf,
@@ -2288,7 +2288,7 @@ impl SavedNavigationState {
     ///
     /// # Example
     /// ```rust
-    /// // Save current state as a pocket dimension with custom display size
+    /// / Save current state as a pocket dimension with custom display size
     /// let saved_state = SavedNavigationState::new(
     ///     current_directory_path.clone(),
     ///     &nav_state, // Contains TUI adjustments like wide+10 tall+5
@@ -2577,7 +2577,7 @@ impl NavigationStateManager {
     /// # Example
     /// ```rust
     /// let mut state_manager = NavigationStateManager::new();
-    /// // Ready to use for collecting paths and saving states
+    /// / Ready to use for collecting paths and saving states
     /// ```
     pub fn new() -> Self {
         NavigationStateManager {
@@ -2620,7 +2620,7 @@ impl NavigationStateManager {
     ///
     /// # Example
     /// ```rust
-    /// // Save current state with custom nickname
+    /// / Save current state with custom nickname
     /// match state_manager.save_pocket_dimension(
     ///     current_path.clone(),
     ///     &nav_state,
@@ -2904,7 +2904,7 @@ impl NavigationStateManager {
     ///
     /// # Example
     /// ```rust
-    /// // Clear everything after user confirmation
+    /// / Clear everything after user confirmation
     /// if user_confirms_clear() {
     ///     state_manager.clear_all();
     ///     println!("All stacks and pocket dimensions cleared");
@@ -4157,9 +4157,9 @@ End Of Pocket-Dimensions
 /// # Example
 /// ```rust
 /// let timestamp = generate_archive_timestamp();
-/// // Returns something like: "2025_01_15_14_30_45"
+/// / Returns something like: "2025_01_15_14_30_45"
 ///
-/// // Used in archive filename: "cats_2025_01_15_14_30_45.toml"
+/// / Used in archive filename: "cats_2025_01_15_14_30_45.toml"
 /// ```
 fn generate_archive_timestamp() -> String {
     let now = SystemTime::now();
@@ -4213,7 +4213,7 @@ fn generate_archive_timestamp() -> String {
 ///
 /// # Example
 /// ```rust
-/// // Normal case - creates archive subdirectory
+/// / Normal case - creates archive subdirectory
 /// let current_dir = PathBuf::from("/home/user/documents");
 /// match ensure_archive_directory_exists(&current_dir) {
 ///     Ok(archive_path) => {
@@ -4223,7 +4223,7 @@ fn generate_archive_timestamp() -> String {
 ///     Err(e) => eprintln!("Failed to create archive directory: {}", e),
 /// }
 ///
-/// // Already in archive - returns same directory
+/// / Already in archive - returns same directory
 /// let archive_dir = PathBuf::from("/home/user/documents/archive");
 /// match ensure_archive_directory_exists(&archive_dir) {
 ///     Ok(archive_path) => {
@@ -4725,24 +4725,24 @@ fn copy_file_with_archive_handling(
 ///
 /// # Usage
 /// ```rust
-/// // Create a paginated view of directory entries
+/// / Create a paginated view of directory entries
 /// let mut dir_view = DirectoryView::new(&directory_entries);
 ///
-/// // Display current page
+/// / Display current page
 /// let current_page_entries = dir_view.current_page_entries();
 /// display_directory_contents(current_page_entries, &current_path)?;
 ///
-/// // Navigate to next page if user presses 's'
+/// / Navigate to next page if user presses 's'
 /// if user_input == "s" {
 ///     dir_view.next_page();
 /// }
 ///
-/// // Navigate to previous page if user presses 'w'
+/// / Navigate to previous page if user presses 'w'
 /// if user_input == "w" {
 ///     dir_view.prev_page();
 /// }
 ///
-/// // Convert a display index to actual index in the full list
+/// / Convert a display index to actual index in the full list
 /// if let Some(actual_index) = dir_view.get_actual_index(selected_number) {
 ///     // Use the entry at the actual index
 ///     let selected_entry = &directory_entries[actual_index];
@@ -4848,7 +4848,7 @@ impl<'a> DirectoryView<'a> {
     ///
     /// # Example
     /// ```rust
-    /// // Set to page 3 (0-based = page 4 in display)
+    /// / Set to page 3 (0-based = page 4 in display)
     /// if dir_view.set_current_page(3) {
     ///     println!("Set to page 4 successfully");
     /// } else {
@@ -4924,7 +4924,7 @@ impl<'a> DirectoryView<'a> {
 ///
 /// # Example
 /// ```rust
-/// // Example search results for query "doc"
+/// / Example search results for query "doc"
 /// let results = vec![
 ///     SearchResult {
 ///         item_name: "document.txt".to_string(),
@@ -4940,10 +4940,10 @@ impl<'a> DirectoryView<'a> {
 ///     },
 /// ];
 ///
-/// // Sort results by distance (best matches first)
+/// / Sort results by distance (best matches first)
 /// results.sort_by_key(|r| r.distance);
 ///
-/// // Display to user for selection
+/// / Display to user for selection
 /// display_search_results(&results)?;
 /// ```
 #[derive(Debug, Clone)]
@@ -5013,7 +5013,7 @@ pub enum UnifiedSearchResult {
 ///
 /// # Example
 /// ```rust
-/// // A grep result for finding "TODO" in a source file
+/// / A grep result for finding "TODO" in a source file
 /// GrepSearchResult {
 ///     file_name: "main.rs".to_string(),
 ///     file_path: PathBuf::from("/home/user/project/src/main.rs"),
@@ -5464,13 +5464,13 @@ fn seconds_to_ymd(secs: u64) -> (u32, u32, u32) {
 ///
 /// # Examples
 /// ```rust
-/// // Sort by name ascending
+/// / Sort by name ascending
 /// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Name(true));
 ///
-/// // Sort by size descending
+/// / Sort by size descending
 /// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Size(false));
 ///
-/// // Sort by modification time ascending
+/// / Sort by modification time ascending
 /// sort_directory_entries(&mut entries, DirectorySortingMethodEnum::Modified(true));
 /// ```
 ///
@@ -5571,7 +5571,7 @@ fn sort_directory_entries(
 ///
 /// # Examples
 /// ```rust
-/// // When user presses 't' to open terminal at current location
+/// / When user presses 't' to open terminal at current location
 /// match open_new_terminal(&current_directory) {
 ///     Ok(_) => println!("Terminal opened successfully"),
 ///     Err(FileFantasticError::NoTerminalFound) => {
@@ -5877,12 +5877,12 @@ struct TuiAdjustmentAction {
 ///
 /// # Examples
 /// ```rust
-/// // Valid commands
+/// / Valid commands
 /// assert!(parse_tui_adjustment_command("tall+5").is_some());
 /// assert!(parse_tui_adjustment_command("wide-10").is_some());
 /// assert!(parse_tui_adjustment_command("tall+65535").is_some());
 ///
-/// // Invalid commands
+/// / Invalid commands
 /// assert!(parse_tui_adjustment_command("tall+0").is_none()); // Zero not allowed
 /// assert!(parse_tui_adjustment_command("TALL+5").is_none()); // Wrong case
 /// assert!(parse_tui_adjustment_command("tall +5").is_none()); // Space not allowed
@@ -5946,16 +5946,16 @@ fn parse_tui_adjustment_command(input: &str) -> Option<TuiAdjustmentAction> {
 ///
 /// # Examples
 /// ```rust
-/// // User enters "tall+5"
+/// / User enters "tall+5"
 /// let action = TuiAdjustmentAction {
 ///     adjustment_type_true_is_tall_false_is_wide: true,
 ///     adjustment_magnitude: 5,
 ///     adjustment_direction_true_is_positive_false_is_negative: true,
 /// };
 /// apply_tui_adjustment(&mut nav_state, &action);
-/// // Result: nav_state.tui_tall_adjustment = 5
-/// //         nav_state.tui_tall_direction_sign = true
-/// //         nav_state.current_page_index = 0
+/// / Result: nav_state.tui_tall_adjustment = 5
+/// /         nav_state.tui_tall_direction_sign = true
+/// /         nav_state.current_page_index = 0
 /// ```
 fn apply_tui_adjustment(nav_state: &mut NavigationState, adjustment_action: &TuiAdjustmentAction) {
     if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
@@ -6097,7 +6097,7 @@ fn get_line_count_options() -> &'static HashMap<&'static str, ()> {
 ///
 /// # Examples
 /// ```rust
-/// // Process user input and take appropriate action
+/// / Process user input and take appropriate action
 /// match process_user_input(&input, &nav_state, &all_entries)? {
 ///     NavigationAction::Quit => break,
 ///     NavigationAction::ChangeDirectory(path) => current_directory = path,
@@ -6159,30 +6159,6 @@ fn process_user_input(
         }
         _ => {}
     }
-
-    // // if selection number + --return-path
-    // if lowercase_input.contains("--return-path") {
-
-    //     TODO code to exract item number form input
-
-    //     /* 1. Start with selection number
-    //       * 2. ook up path of selection number
-    //       * 3. handle path of selection: exit with path
-    //       */
-    //     // Handle number input directly to account for pagination
-    //     if let Ok(number) = ???? {
-    //         if let Some(actual_index) = dir_view.get_actual_index(number) {
-    //             // Only process if within range of full directory listing
-    //             if actual_index < directory_entries.len() {
-    //                 let entry = &directory_entries[actual_index];
-    //                 // Update selected item in nav_state
-    //                 nav_state.set_selected_item(Some(number));
-
-    //                 if entry.is_directory {
-    //                     selected_path = entry.file_system_item_path.clone();
-    //                     // IMPORTANT: Clear the selected item when changing directories
-    //     return Ok(NavigationAction::ReturnPathExitFF(selected_path));
-    // }
 
     // if selection number + --return-path
     if lowercase_input.contains("--return-path") {
@@ -6939,7 +6915,7 @@ fn format_file_size(size_in_bytes: u64) -> String {
 ///
 /// # Examples
 /// ```rust
-/// // Determine action based on item type
+/// / Determine action based on item type
 /// match item_info.item_type {
 ///     FileSystemItemType::Directory => {
 ///         // Navigate into directory
@@ -6979,7 +6955,7 @@ enum FileSystemItemType {
 ///
 /// # Example
 /// ```rust
-/// // When user enters a number
+/// / When user enters a number
 /// if let Ok(number) = input.parse::<usize>() {
 ///     if let Some(item_info) = nav_state.lookup_item(number) {
 ///         match item_info.item_type {
@@ -7036,7 +7012,7 @@ struct DisplayedItemInfo {
 ///
 /// # Example
 /// ```rust
-/// // Creating a FileSystemEntry from directory read results
+/// / Creating a FileSystemEntry from directory read results
 /// let entry = FileSystemEntry {
 ///     file_system_item_name: dir_entry.file_name().to_string_lossy().to_string(),
 ///     file_system_item_path: dir_entry.path(),
@@ -7561,10 +7537,10 @@ impl SearchConfig {
     ///
     /// # Example
     /// ```rust
-    /// // Create a simple filename search configuration
+    /// / Create a simple filename search configuration
     /// let config = SearchConfig::new("document".to_string());
     ///
-    /// // Create and customize with builder methods
+    /// / Create and customize with builder methods
     /// let config = SearchConfig::new("TODO".to_string())
     ///     .with_recursive(true)
     ///     .with_grep(true);
@@ -7599,11 +7575,11 @@ impl SearchConfig {
     ///
     /// # Example
     /// ```rust
-    /// // Search only in current directory (default)
+    /// / Search only in current directory (default)
     /// let config = SearchConfig::new("test".to_string())
     ///     .with_recursive(false);
     ///
-    /// // Search current directory and all subdirectories
+    /// / Search current directory and all subdirectories
     /// let config = SearchConfig::new("test".to_string())
     ///     .with_recursive(true);
     /// ```
@@ -7633,11 +7609,11 @@ impl SearchConfig {
     ///
     /// # Example
     /// ```rust
-    /// // Search for "TODO" in filenames (fuzzy match)
+    /// / Search for "TODO" in filenames (fuzzy match)
     /// let config = SearchConfig::new("TODO".to_string())
     ///     .with_grep(false);
     ///
-    /// // Search for "TODO" inside file contents
+    /// / Search for "TODO" inside file contents
     /// let config = SearchConfig::new("TODO".to_string())
     ///     .with_grep(true);
     /// ```
@@ -7672,12 +7648,12 @@ impl SearchConfig {
     ///
     /// # Example
     /// ```rust
-    /// // Case-insensitive grep search (default) - finds "todo", "TODO", "ToDo"
+    /// / Case-insensitive grep search (default) - finds "todo", "TODO", "ToDo"
     /// let config = SearchConfig::new("todo".to_string())
     ///     .with_grep(true)
     ///     .with_case_sensitive(false);
     ///
-    /// // Case-sensitive grep search - only finds exact "TODO"
+    /// / Case-sensitive grep search - only finds exact "TODO"
     /// let config = SearchConfig::new("TODO".to_string())
     ///     .with_grep(true)
     ///     .with_case_sensitive(true);
@@ -8013,8 +7989,8 @@ impl NavigationState {
     /// # Example
     /// ```
     /// let nav_state = NavigationState::new();
-    /// // nav_state is ready to be used with initial directory read
-    /// // Display will use default sizes until user adjusts
+    /// / nav_state is ready to be used with initial directory read
+    /// / Display will use default sizes until user adjusts
     /// ```
     fn new() -> Self {
         // Detect if running on Android platform
@@ -8069,10 +8045,10 @@ impl NavigationState {
     ///
     /// # Example
     /// ```rust
-    /// // User has filtered to files only, on page 3, with item 5 selected
-    /// // User presses Enter to reset
+    /// / User has filtered to files only, on page 3, with item 5 selected
+    /// / User presses Enter to reset
     /// nav_state.reset_to_clean_state();
-    /// // Now: no filter, page 1, no selection, no search, same sort method
+    /// / Now: no filter, page 1, no selection, no search, same sort method
     /// ```
     fn reset_to_clean_state(&mut self) {
         // Clear filter (show all items)
@@ -8289,13 +8265,13 @@ impl NavigationState {
     ///
     /// # Example
     /// ```
-    /// // Show only directories
+    /// / Show only directories
     /// nav_state.set_filter('d');
     ///
-    /// // Show only files
+    /// / Show only files
     /// nav_state.set_filter('f');
     ///
-    /// // Toggle directories filter off (if currently showing only directories)
+    /// / Toggle directories filter off (if currently showing only directories)
     /// nav_state.set_filter('d');
     /// ```
     fn set_filter(&mut self, filter_char: char) {
@@ -8348,7 +8324,7 @@ impl NavigationState {
     ///
     /// # Example
     /// ```
-    /// // Apply current filter and get filtered entries to display
+    /// / Apply current filter and get filtered entries to display
     /// let filtered_entries = nav_state.apply_filter(&all_entries);
     /// display_directory_contents(&filtered_entries, &current_directory)?;
     /// ```
@@ -8654,7 +8630,7 @@ impl NavigationState {
     ///
     /// ### Incorrect Implementation (DO NOT DO THIS)
     /// ```rust
-    /// // WRONG: Using enumeration index from original entries
+    /// / WRONG: Using enumeration index from original entries
     /// for (idx, entry) in entries.iter().enumerate() {
     ///     if matches_search {
     ///         results.push(FuzzySearchResult {
@@ -8670,7 +8646,7 @@ impl NavigationState {
     ///
     /// ### Correct Implementation (ALWAYS DO THIS)
     /// ```rust
-    /// // Step 1: Collect all matches with placeholder indices
+    /// / Step 1: Collect all matches with placeholder indices
     /// for entry in entries.iter() {
     ///     if matches_search {
     ///         results.push(FuzzySearchResult {
@@ -8680,10 +8656,10 @@ impl NavigationState {
     ///     }
     /// }
     ///
-    /// // Step 2: Sort by relevance
+    /// / Step 2: Sort by relevance
     /// results.sort_by(|a, b| { ... });
     ///
-    /// // Step 3: Assign sequential indices after sorting
+    /// / Step 3: Assign sequential indices after sorting
     /// for (idx, result) in results.iter_mut().enumerate() {
     ///     result.display_index = idx + 1;  // Sequential: 1, 2, 3...
     /// }
@@ -8780,8 +8756,8 @@ impl NavigationState {
     /// ```rust
     /// let config = SearchConfig::new("ducment".to_string()); // Note the typo
     /// let results = nav_state.fuzzy_search_entries(&config, &entries);
-    /// // Might find "document.txt" with distance 1 (one character substitution)
-    /// // Results will have display_index values: 1, 2, 3, etc.
+    /// / Might find "document.txt" with distance 1 (one character substitution)
+    /// / Results will have display_index values: 1, 2, 3, etc.
     /// ```
     fn fuzzy_search_entries(
         &self,
@@ -8829,11 +8805,6 @@ impl NavigationState {
                 .chars()
                 .take(search_len)
                 .collect();
-
-            // // Step 3: Calculate Levenshtein distances for both versions
-            // // This measures how many single-character edits are needed
-            // let distance_with_ext = levenshtein_distance(&full_name_truncated, &search_term);
-            // let distance_without_ext = levenshtein_distance(&no_ext_truncated, &search_term);
 
             // Step 3: Calculate Levenshtein distances for both versions
             // This measures how many single-character edits are needed
@@ -8949,7 +8920,7 @@ impl NavigationState {
     ///     .with_case_sensitive(false);
     ///
     /// let results = nav_state.grep_search_files(&config, &entries)?;
-    /// // Results contain file path, line number, and context for each match
+    /// / Results contain file path, line number, and context for each match
     /// ```
     fn grep_search_files(
         &self,
@@ -9407,14 +9378,14 @@ mod tests_formatting {
 /// # Examples
 /// ```rust
 /// let long_name = "really_long_filename_that_exceeds_the_maximum_length_for_display.txt";
-/// // With max_name_width = 20
+/// / With max_name_width = 20
 /// assert_eq!(
 ///     truncate_filename_for_display(long_name.to_string(), 20),
 ///     "really_long...y.txt"
 /// );
 ///
 /// let short_name = "short.txt";
-/// // With max_name_width = 20
+/// / With max_name_width = 20
 /// assert_eq!(
 ///     truncate_filename_for_display(short_name.to_string(), 20),
 ///     "short.txt"
@@ -13245,7 +13216,7 @@ const FALLBACK_VERSION: &str = "version unknown";
 ///     Ok(version) => println!("{}", version),
 ///     Err(e) => eprintln!("Error: {}", e),
 /// }
-/// // Output: my-app 1.0.0
+/// / Output: my-app 1.0.0
 /// ```
 pub fn backup_get_version_statement() -> Result<String> {
     // Return whatever we have - this is a BACKUP!
@@ -13337,7 +13308,7 @@ pub fn display_version() -> Result<()> {
 /// # Usage as a Module
 /// This function is designed to be imported and called from a main program:
 /// ```rust
-/// // src/main.rs
+/// / src/main.rs
 /// mod ff_file_fantastic_module;
 /// use ff_file_fantastic_module::file_fantastic;
 ///
