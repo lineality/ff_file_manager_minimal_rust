@@ -9423,6 +9423,105 @@ fn truncate_filename_for_display(formatted_name: String, max_name_width: usize) 
     format!("{}{}{}", prefix, ellipsis, suffix)
 }
 
+/// Formats the navigation legend with color-coded keyboard shortcuts
+///
+/// # Purpose
+/// Creates a formatted legend string showing all available keyboard commands
+/// with color highlighting (RED for command keys, YELLOW for descriptions).
+///
+/// # Returns
+/// * `Ok(String)` - The formatted legend string with ANSI color codes
+/// * `Err(FileFantasticError)` - If string formatting fails (defensive programming)
+///
+/// # Color Scheme
+/// - RED: Single letter command keys (q, b, t, d, f, n, s, m, g, v, y, p)
+/// - YELLOW: Command descriptions and separators
+/// - RESET: Applied at end to restore terminal defaults
+///
+/// # Legend Commands
+/// - q: quit the application
+/// - b: navigate back/parent directory
+/// - t: open terminal in current directory
+/// - d: filter to show directories only
+/// - f: filter to show files only
+/// - n: sort by name
+/// - s: sort by size
+/// - m: sort by modified date
+/// - g: get-send file operations
+/// - v,y,p: additional file operations
+/// - str: search functionality
+/// - enter: reset filters/search
+///
+/// # Example
+/// ```rust
+/// match format_navigation_legend() {
+///     Ok(legend) => println!("{}", legend),
+///     Err(e) => eprintln!("Failed to format legend: {}", e),
+/// }
+/// ```
+fn format_navigation_legend() -> Result<String> {
+    // Pre-allocate string capacity based on expected legend size
+    // Legend is approximately 200 characters plus color codes
+    let mut legend = String::with_capacity(300);
+
+    // Build the legend string with error handling for format operations
+    let formatted = format!(
+        "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}",
+        YELLOW, // Overall legend color
+        RED,
+        YELLOW, // RED q + YELLOW uit
+        RED,
+        YELLOW, // RED b + YELLOW ack
+        RED,
+        YELLOW, // RED t + YELLOW erm
+        RED,
+        YELLOW, // RED d + YELLOW ir
+        RED,
+        YELLOW, // RED f + YELLOW ile
+        RED,
+        YELLOW, // RED n + YELLOW ame
+        RED,
+        YELLOW, // RED s + YELLOW ize
+        RED,
+        YELLOW, // RED m + YELLOW od
+        RED,
+        YELLOW, // RED g + YELLOW et
+        RED,
+        YELLOW, // RED v + YELLOW ,
+        RED,
+        YELLOW, // RED y + YELLOW ,
+        RED,
+        YELLOW, // RED p + YELLOW ,
+        RED,
+        YELLOW, // RED str + YELLOW ...
+        RED,
+        YELLOW, // RED enter + YELLOW ...
+        RESET
+    );
+
+    // Check if the formatted string is reasonable
+    // (defensive programming against format! macro issues)
+    if formatted.is_empty() {
+        return Err(FileFantasticError::InvalidName(String::from(
+            "Legend formatting produced empty string",
+        )));
+    }
+
+    // Verify the string doesn't exceed reasonable bounds
+    // Terminal width is typically 80-200 chars, legend should fit
+    const MAX_LEGEND_LENGTH: usize = 500;
+    if formatted.len() > MAX_LEGEND_LENGTH {
+        return Err(FileFantasticError::InvalidName(format!(
+            "Legend too long: {} chars (max {})",
+            formatted.len(),
+            MAX_LEGEND_LENGTH
+        )));
+    }
+
+    legend.push_str(&formatted);
+    Ok(legend)
+}
+
 /// Formats and displays directory contents as a numbered list with columns
 ///
 /// # Purpose
@@ -9465,39 +9564,16 @@ fn display_directory_contents(
         _ => "",
     };
 
-    let legend = format!(
-        "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}",
-        YELLOW, // Overall legend color
-        RED,
-        YELLOW, // RED q + YELLOW uit
-        RED,
-        YELLOW, // RED b + YELLOW ack
-        RED,
-        YELLOW, // RED t + YELLOW erm
-        RED,
-        YELLOW, // RED d + YELLOW ir
-        RED,
-        YELLOW, // RED f + YELLOW ile
-        RED,
-        YELLOW, // RED n + YELLOW ame
-        RED,
-        YELLOW, // RED s + YELLOW ize
-        RED,
-        YELLOW, // RED m + YELLOW od
-        RED,
-        YELLOW, // RED g + YELLOW et
-        RED,
-        YELLOW, // RED v + YELLOW ,
-        RED,
-        YELLOW, // RED y + YELLOW ,
-        RED,
-        YELLOW, // RED p + YELLOW ,
-        RED,
-        YELLOW, // RED str + YELLOW ...
-        RED,
-        YELLOW, // RED enter + YELLOW ...
-        RESET
-    );
+    // Format the navigation legend with error handling
+    let legend = match format_navigation_legend() {
+        Ok(legend_text) => legend_text,
+        Err(e) => {
+            // Fall back to a simple legend without colors if formatting fails
+            // This ensures the UI remains functional even if legend formatting has issues
+            eprintln!("Warning: Legend formatting failed: {}", e);
+            String::from("quit|back|term|dir|file|name|size|mod|get|search|reset")
+        }
+    };
 
     // Directory/file mode on path-display line
     let path_display = format!("{}", current_directory_path.display());
