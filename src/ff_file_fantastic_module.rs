@@ -9659,9 +9659,19 @@ fn count_directory_items(path: &PathBuf) -> (String, String, String) {
         // They increment all_count but not file_count or dir_count
     }
 
-    // Assertion: Sanity check on counts (defensive programming)
-    // Error handling: If this assertion fails, there's a logic bug
-    if file_count + dir_count > all_count {
+    // Error handling: Logic consistency check with overflow protection
+    // Use checked_add to prevent overflow in the comparison itself
+    let files_plus_dirs = match file_count.checked_add(dir_count) {
+        Some(sum) => sum,
+        None => {
+            // Overflow when adding file_count + dir_count
+            // This means the counts are corrupted somehow
+            return (String::from("?"), String::from("?"), String::from("?"));
+        }
+    };
+
+    // Safely check if files + dirs exceeds all_count
+    if files_plus_dirs > all_count {
         // Logic error detected - counts are inconsistent
         // This should never happen, but if it does, return error indicators
         return (String::from("?"), String::from("?"), String::from("?"));
