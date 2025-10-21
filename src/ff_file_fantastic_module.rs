@@ -9541,6 +9541,8 @@ fn format_navigation_legend() -> Result<String> {
 /// Returns ("?", "?", "?") if any error occurs:
 /// - Directory cannot be read (permissions, doesn't exist, etc.)
 /// - Metadata cannot be accessed for items
+/// - Counter overflow (practically impossible with u128)
+/// - String conversion fails
 /// - Any other I/O error
 ///
 /// This fail-safe approach ensures the TUI continues to function even if
@@ -9557,6 +9559,11 @@ fn format_navigation_legend() -> Result<String> {
 /// - Directories: Directories only
 /// - All: Everything else goes into 'all' count only (symlinks, FIFOs, etc.)
 ///
+/// # Loop Safety
+/// The iterator from fs::read_dir() is naturally bounded by the number of
+/// entries in the directory. This is not an unbounded loop - it will terminate
+/// when the directory runs out of entries, similar to iterating over an array.
+///
 /// # Examples
 /// ```rust
 /// let path = PathBuf::from("/home/user/documents");
@@ -9570,19 +9577,20 @@ fn format_navigation_legend() -> Result<String> {
 /// // Returns: ("?", "?", "?")
 /// ```
 fn count_directory_items(path: &PathBuf) -> (String, String, String) {
-    // Assertion: Path should not be empty (defensive check)
-    assert!(!path.as_os_str().is_empty(), "Path should not be empty");
+    // Error handling: Path validation (defensive check)
+    // Check if path is empty - could indicate an error condition
+    if path.as_os_str().is_empty() {
+        // Path is empty - return error indicators
+        return (String::from("?"), String::from("?"), String::from("?"));
+    }
 
-    // Initialize counters
-    let mut all_count: u32 = 0;
-    let mut file_count: u32 = 0;
-    let mut dir_count: u32 = 0;
-
-    // Maximum reasonable directory size to prevent infinite loops
-    // Most directories have < 10,000 items; set upper bound for safety
-    const MAX_DIRECTORY_ITEMS: u32 = 100_000;
+    // Initialize counters with u128 for maximum range
+    let mut all_count: u128 = 0;
+    let mut file_count: u128 = 0;
+    let mut dir_count: u128 = 0;
 
     // Attempt to read directory contents
+    // Error handling: Cannot read directory
     let directory_reader = match fs::read_dir(path) {
         Ok(reader) => reader,
         Err(_) => {
@@ -9593,9 +9601,10 @@ fn count_directory_items(path: &PathBuf) -> (String, String, String) {
     };
 
     // Iterate through directory entries
-    // Upper bound on loop iterations for safety (NASA Power of 10, Rule 2)
-    for entry_result in directory_reader.take(MAX_DIRECTORY_ITEMS as usize) {
-        // Check each entry
+    // The iterator is naturally bounded by the filesystem - it will terminate
+    // when the directory runs out of entries (not an infinite loop)
+    for entry_result in directory_reader {
+        // Error handling: Reading directory entry
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => {
@@ -9605,7 +9614,7 @@ fn count_directory_items(path: &PathBuf) -> (String, String, String) {
             }
         };
 
-        // Get metadata for the entry
+        // Error handling: Getting metadata for entry
         let metadata = match entry.metadata() {
             Ok(meta) => meta,
             Err(_) => {
@@ -9615,38 +9624,60 @@ fn count_directory_items(path: &PathBuf) -> (String, String, String) {
             }
         };
 
-        // Count this item in 'all'
-        all_count += 1;
+        // Error handling: Counter overflow protection
+        // Count this item in 'all' using checked arithmetic
+        all_count = match all_count.checked_add(1) {
+            Some(count) => count,
+            None => {
+                // Overflow detected - directory has > 340 undecillion items
+                // This should never happen in practice, but handle it anyway
+                return (String::from("?"), String::from("?"), String::from("?"));
+            }
+        };
 
         // Classify the item type
         if metadata.is_file() {
-            // Regular file
-            file_count += 1;
+            // Error handling: File counter overflow
+            file_count = match file_count.checked_add(1) {
+                Some(count) => count,
+                None => {
+                    // Overflow on file count
+                    return (String::from("?"), String::from("?"), String::from("?"));
+                }
+            };
         } else if metadata.is_dir() {
-            // Directory
-            dir_count += 1;
+            // Error handling: Directory counter overflow
+            dir_count = match dir_count.checked_add(1) {
+                Some(count) => count,
+                None => {
+                    // Overflow on directory count
+                    return (String::from("?"), String::from("?"), String::from("?"));
+                }
+            };
         }
         // Note: Symlinks, FIFOs, sockets, etc. are counted only in 'all'
         // They increment all_count but not file_count or dir_count
-
-        // Safety check: prevent overflow (cosmic ray protection)
-        if all_count >= MAX_DIRECTORY_ITEMS {
-            // Directory is extremely large - stop counting
-            // This prevents potential infinite loops or memory issues
-            break;
-        }
     }
 
     // Assertion: Sanity check on counts (defensive programming)
-    assert!(
-        file_count + dir_count <= all_count,
-        "Files + Directories should not exceed total count"
-    );
+    // Error handling: If this assertion fails, there's a logic bug
+    if file_count + dir_count > all_count {
+        // Logic error detected - counts are inconsistent
+        // This should never happen, but if it does, return error indicators
+        return (String::from("?"), String::from("?"), String::from("?"));
+    }
 
     // Convert counts to strings
+    // Note: to_string() on integers is infallible, but we're defensive
     let all_str = all_count.to_string();
     let file_str = file_count.to_string();
     let dir_str = dir_count.to_string();
+
+    // Final sanity check: Ensure strings are valid
+    // This is defensive - to_string() on integers should never fail
+    if all_str.is_empty() || file_str.is_empty() || dir_str.is_empty() {
+        return (String::from("?"), String::from("?"), String::from("?"));
+    }
 
     (all_str, file_str, dir_str)
 }
@@ -9712,10 +9743,6 @@ fn display_directory_contents(
             String::from("quit|back|term|dir|file|name|size|mod|get|search|reset")
         }
     };
-
-    // // Directory/file mode on path-display line
-    // let path_display = format!("{}", current_directory_path.display());
-    // println!("{}\n{}{}", legend, filter_status, path_display);
 
     // Get directory summary counts (flat, non-recursive)
     // Returns ("?", "?", "?") if counting fails for any reason

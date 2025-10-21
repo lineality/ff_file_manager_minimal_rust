@@ -1813,3 +1813,145 @@ opt-level = 3
 debug = 1
 # Enable more aggressive optimizations
 overflow-checks = false
+
+
+    // // Directory/file mode on path-display line
+    // let path_display = format!("{}", current_directory_path.display());
+    // println!("{}\n{}{}", legend, filter_status, path_display);
+
+
+
+/// Counts all items in a directory (flat, non-recursive, including hidden)
+///
+/// # Purpose
+/// Provides summary statistics for directory contents to help users understand
+/// the total scope of a directory when only a subset is displayed on screen.
+///
+/// # Arguments
+/// * `path` - Reference to PathBuf of the directory to count
+///
+/// # Returns
+/// A tuple of three Strings: (all_count, file_count, dir_count)
+/// - `all_count`: Total number of items (files + dirs + symlinks + special files)
+/// - `file_count`: Number of regular files only
+/// - `dir_count`: Number of directories only
+///
+/// # Error Handling
+/// Returns ("?", "?", "?") if any error occurs:
+/// - Directory cannot be read (permissions, doesn't exist, etc.)
+/// - Metadata cannot be accessed for items
+/// - Directory has unreasonably large number of items (safety limit)
+/// - Any other I/O error
+///
+/// This fail-safe approach ensures the TUI continues to function even if
+/// counting fails, displaying "?" to indicate unknown counts.
+///
+/// # Scope
+/// - Counts ONLY items in the specified directory (flat, non-recursive)
+/// - Includes hidden files and directories (those starting with '.')
+/// - Includes ALL item types (files, dirs, symlinks, FIFOs, sockets, etc.)
+/// - Does NOT follow symlinks or recurse into subdirectories
+///
+/// # Item Classification
+/// - Files: Regular files only
+/// - Directories: Directories only
+/// - All: Everything else goes into 'all' count only (symlinks, FIFOs, etc.)
+///
+/// # Safety
+/// Uses a safety limit (1 million items) to prevent issues with corrupted
+/// filesystems or unexpected conditions. If exceeded, returns "?" to indicate
+/// an error condition rather than potentially incorrect counts.
+///
+/// # Examples
+/// ```rust
+/// let path = PathBuf::from("/home/user/documents");
+/// let (all, files, dirs) = count_directory_items(&path);
+/// println!("Total: {}, Files: {}, Directories: {}", all, files, dirs);
+/// // Output: "Total: 42, Files: 35, Directories: 7"
+///
+/// // On error:
+/// let bad_path = PathBuf::from("/nonexistent");
+/// let (all, files, dirs) = count_directory_items(&bad_path);
+/// // Returns: ("?", "?", "?")
+/// ```
+fn count_directory_items(path: &PathBuf) -> (String, String, String) {
+    // Assertion: Path should not be empty (defensive check)
+    assert!(!path.as_os_str().is_empty(), "Path should not be empty");
+
+    // Initialize counters
+    let mut all_count: u128 = 0;
+    let mut file_count: u128 = 0;
+    let mut dir_count: u128 = 0;
+
+    // Safety limit: size of data type
+    const MAX_DIRECTORY_ITEMS: u128 = u128::MAX;
+
+    // Attempt to read directory contents
+    let directory_reader = match fs::read_dir(path) {
+        Ok(reader) => reader,
+        Err(_) => {
+            // Cannot read directory - return unknowns
+            // Common causes: permission denied, path doesn't exist, not a directory
+            return (String::from("?"), String::from("?"), String::from("?"));
+        }
+    };
+
+    // Iterate through directory entries
+    // Note: NOT using .take() - we count all items up to the safety limit
+    for entry_result in directory_reader {
+        // Safety check: prevent counting beyond reasonable limit
+        // If we hit this, something is wrong (corrupted filesystem, bug, etc.)
+        if all_count >= MAX_DIRECTORY_ITEMS {
+            // Directory is unreasonably large - return error indicators
+            // This is a safety mechanism, not a normal operating condition
+            return (String::from("?"), String::from("?"), String::from("?"));
+        }
+
+        // Check each entry
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => {
+                // Error reading this specific entry - skip it
+                // This can happen with corrupted entries or permission issues
+                continue;
+            }
+        };
+
+        // Get metadata for the entry
+        let metadata = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => {
+                // Cannot read metadata for this entry - skip it
+                // Can occur with broken symlinks or permission issues
+                continue;
+            }
+        };
+
+        // Count this item in 'all'
+        all_count += 1;
+
+        // Classify the item type
+        if metadata.is_file() {
+            // Regular file
+            file_count += 1;
+        } else if metadata.is_dir() {
+            // Directory
+            dir_count += 1;
+        }
+        // Note: Symlinks, FIFOs, sockets, etc. are counted only in 'all'
+        // They increment all_count but not file_count or dir_count
+    }
+
+    // Assertion: Sanity check on counts (defensive programming)
+    assert!(
+        file_count + dir_count <= all_count,
+        "Files + Directories should not exceed total count"
+    );
+
+    // Convert counts to strings
+    let all_str = all_count.to_string();
+    let file_str = file_count.to_string();
+    let dir_str = dir_count.to_string();
+
+    (all_str, file_str, dir_str)
+}
