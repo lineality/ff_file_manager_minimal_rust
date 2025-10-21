@@ -9522,6 +9522,135 @@ fn format_navigation_legend() -> Result<String> {
     Ok(legend)
 }
 
+/// Counts all items in a directory (flat, non-recursive, including hidden)
+///
+/// # Purpose
+/// Provides summary statistics for directory contents to help users understand
+/// the total scope of a directory when only a subset is displayed on screen.
+///
+/// # Arguments
+/// * `path` - Reference to PathBuf of the directory to count
+///
+/// # Returns
+/// A tuple of three Strings: (all_count, file_count, dir_count)
+/// - `all_count`: Total number of items (files + dirs + symlinks + special files)
+/// - `file_count`: Number of regular files only
+/// - `dir_count`: Number of directories only
+///
+/// # Error Handling
+/// Returns ("?", "?", "?") if any error occurs:
+/// - Directory cannot be read (permissions, doesn't exist, etc.)
+/// - Metadata cannot be accessed for items
+/// - Any other I/O error
+///
+/// This fail-safe approach ensures the TUI continues to function even if
+/// counting fails, displaying "?" to indicate unknown counts.
+///
+/// # Scope
+/// - Counts ONLY items in the specified directory (flat, non-recursive)
+/// - Includes hidden files and directories (those starting with '.')
+/// - Includes ALL item types (files, dirs, symlinks, FIFOs, sockets, etc.)
+/// - Does NOT follow symlinks or recurse into subdirectories
+///
+/// # Item Classification
+/// - Files: Regular files only
+/// - Directories: Directories only
+/// - All: Everything else goes into 'all' count only (symlinks, FIFOs, etc.)
+///
+/// # Examples
+/// ```rust
+/// let path = PathBuf::from("/home/user/documents");
+/// let (all, files, dirs) = count_directory_items(&path);
+/// println!("Total: {}, Files: {}, Directories: {}", all, files, dirs);
+/// // Output: "Total: 42, Files: 35, Directories: 7"
+///
+/// // On error:
+/// let bad_path = PathBuf::from("/nonexistent");
+/// let (all, files, dirs) = count_directory_items(&bad_path);
+/// // Returns: ("?", "?", "?")
+/// ```
+fn count_directory_items(path: &PathBuf) -> (String, String, String) {
+    // Assertion: Path should not be empty (defensive check)
+    assert!(!path.as_os_str().is_empty(), "Path should not be empty");
+
+    // Initialize counters
+    let mut all_count: u32 = 0;
+    let mut file_count: u32 = 0;
+    let mut dir_count: u32 = 0;
+
+    // Maximum reasonable directory size to prevent infinite loops
+    // Most directories have < 10,000 items; set upper bound for safety
+    const MAX_DIRECTORY_ITEMS: u32 = 100_000;
+
+    // Attempt to read directory contents
+    let directory_reader = match fs::read_dir(path) {
+        Ok(reader) => reader,
+        Err(_) => {
+            // Cannot read directory - return unknowns
+            // Common causes: permission denied, path doesn't exist, not a directory
+            return (String::from("?"), String::from("?"), String::from("?"));
+        }
+    };
+
+    // Iterate through directory entries
+    // Upper bound on loop iterations for safety (NASA Power of 10, Rule 2)
+    for entry_result in directory_reader.take(MAX_DIRECTORY_ITEMS as usize) {
+        // Check each entry
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => {
+                // Error reading this specific entry - skip it
+                // This can happen with corrupted entries or permission issues
+                continue;
+            }
+        };
+
+        // Get metadata for the entry
+        let metadata = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => {
+                // Cannot read metadata for this entry - skip it
+                // Can occur with broken symlinks or permission issues
+                continue;
+            }
+        };
+
+        // Count this item in 'all'
+        all_count += 1;
+
+        // Classify the item type
+        if metadata.is_file() {
+            // Regular file
+            file_count += 1;
+        } else if metadata.is_dir() {
+            // Directory
+            dir_count += 1;
+        }
+        // Note: Symlinks, FIFOs, sockets, etc. are counted only in 'all'
+        // They increment all_count but not file_count or dir_count
+
+        // Safety check: prevent overflow (cosmic ray protection)
+        if all_count >= MAX_DIRECTORY_ITEMS {
+            // Directory is extremely large - stop counting
+            // This prevents potential infinite loops or memory issues
+            break;
+        }
+    }
+
+    // Assertion: Sanity check on counts (defensive programming)
+    assert!(
+        file_count + dir_count <= all_count,
+        "Files + Directories should not exceed total count"
+    );
+
+    // Convert counts to strings
+    let all_str = all_count.to_string();
+    let file_str = file_count.to_string();
+    let dir_str = dir_count.to_string();
+
+    (all_str, file_str, dir_str)
+}
+
 /// Formats and displays directory contents as a numbered list with columns
 ///
 /// # Purpose
@@ -9539,12 +9668,21 @@ fn format_navigation_legend() -> Result<String> {
 /// - Name column width adjusts based on nav_state TUI settings
 /// - Number of items shown determined by TUI height settings
 /// - Other columns (Size, Modified) remain fixed width
+/// - Summary line shows total counts: a{all} f{files} d{dirs} {path}
 ///
 /// # Layout Calculation
 /// The name column width is calculated dynamically:
 /// - Base width: 55 characters (MAX_NAME_LENGTH_DEFAULT)
 /// - Adjusted by user's wide+N or wide-N settings
 /// - Minimum width: 8 characters (for "...suffix" display)
+///
+/// # Summary Counts
+/// The path line includes directory summary statistics:
+/// - a{N}: Total count of ALL items (files + dirs + symlinks + special files)
+/// - f{N}: Count of regular files only
+/// - d{N}: Count of directories only
+/// - These are flat counts (non-recursive, current directory only)
+/// - Shows "?" if counting fails (permissions, errors, etc.)
 fn display_directory_contents(
     directory_entries: &[FileSystemEntry],
     current_directory_path: &PathBuf,
@@ -9575,8 +9713,32 @@ fn display_directory_contents(
         }
     };
 
-    // Directory/file mode on path-display line
-    let path_display = format!("{}", current_directory_path.display());
+    // // Directory/file mode on path-display line
+    // let path_display = format!("{}", current_directory_path.display());
+    // println!("{}\n{}{}", legend, filter_status, path_display);
+
+    // Get directory summary counts (flat, non-recursive)
+    // Returns ("?", "?", "?") if counting fails for any reason
+    let (all_count, file_count, dir_count) = count_directory_items(current_directory_path);
+
+    // Format path display with summary counts
+    // Format: a{all} f{files} d{dirs} {path}
+    // Letters are colored YELLOW for visibility
+    let path_display = format!(
+        "{}f{}{} {}d{}{} {}a{}{} {}",
+        YELLOW,
+        RESET,
+        file_count, // total file count file_count
+        YELLOW,
+        RESET,
+        dir_count, // total directory count dir_count
+        YELLOW,
+        RESET,
+        all_count, // all items of any kind all_count
+        current_directory_path.display()
+    );
+
+    // Display legend and path with counts
     println!("{}\n{}{}", legend, filter_status, path_display);
 
     // Column headers with dynamic name width
@@ -9648,6 +9810,94 @@ fn display_directory_contents(
 
     io::stdout().flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod displaytests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Test counting items in a directory
+    ///
+    /// # Note
+    /// This test uses the current directory as a test case, which should
+    /// always exist and be readable during testing.
+    #[test]
+    fn test_count_directory_items_current_dir() {
+        // Test with current directory (should always work)
+        let current_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(_) => {
+                // Skip test if we can't get current directory
+                return;
+            }
+        };
+
+        let (all, files, dirs) = count_directory_items(&current_dir);
+
+        // Should not return error markers
+        assert_ne!(all, "?", "Should be able to count current directory");
+        assert_ne!(files, "?", "Should be able to count files");
+        assert_ne!(dirs, "?", "Should be able to count directories");
+
+        // Counts should be valid numbers
+        let all_num: u32 = all.parse().expect("all should be a number");
+        let files_num: u32 = files.parse().expect("files should be a number");
+        let dirs_num: u32 = dirs.parse().expect("dirs should be a number");
+
+        // Logical assertions
+        assert!(
+            files_num + dirs_num <= all_num,
+            "Files + dirs should not exceed total"
+        );
+    }
+
+    /// Test counting with a nonexistent directory
+    ///
+    /// # Expected Behavior
+    /// Should return ("?", "?", "?") without crashing
+    #[test]
+    fn test_count_directory_items_nonexistent() {
+        let nonexistent = PathBuf::from("/this/path/should/not/exist/hopefully/12345");
+        let (all, files, dirs) = count_directory_items(&nonexistent);
+
+        // Should return error markers
+        assert_eq!(all, "?", "Should return ? for nonexistent path");
+        assert_eq!(files, "?", "Should return ? for nonexistent path");
+        assert_eq!(dirs, "?", "Should return ? for nonexistent path");
+    }
+
+    /// Test that counts are internally consistent
+    ///
+    /// # Logic Test
+    /// The sum of files and directories should never exceed the total count
+    /// since 'all' includes files, directories, AND other items (symlinks, etc.)
+    #[test]
+    fn test_count_consistency() {
+        let test_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(_) => return, // Skip if can't get directory
+        };
+
+        let (all_str, files_str, dirs_str) = count_directory_items(&test_dir);
+
+        // Skip if we got error markers
+        if all_str == "?" {
+            return;
+        }
+
+        let all: u32 = all_str.parse().unwrap_or(0);
+        let files: u32 = files_str.parse().unwrap_or(0);
+        let dirs: u32 = dirs_str.parse().unwrap_or(0);
+
+        assert!(
+            files + dirs <= all,
+            "Internal consistency: files({}) + dirs({}) should not exceed all({})",
+            files,
+            dirs,
+            all
+        );
+    }
 }
 
 /// Name of the data directory that contains File Fantastic configuration files
