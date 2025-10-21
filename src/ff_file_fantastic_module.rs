@@ -11874,7 +11874,7 @@ fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
 fn is_pagination_up_command(input: &str) -> bool {
     matches!(
         input,
-        "w" | "j" | "<" | "[" | "up" | "prev" | "," | "+" | "\x1b[A"
+        "w" | "k" | "<" | "[" | "up" | "prev" | "," | "+" | "\x1b[A"
     )
 }
 
@@ -11883,7 +11883,7 @@ fn is_pagination_up_command(input: &str) -> bool {
 fn is_pagination_down_command(input: &str) -> bool {
     matches!(
         input,
-        "x" | "k" | ">" | "]" | "down" | "next" | "." | "-" | "\x1b[B"
+        "x" | "j" | ">" | "]" | "down" | "next" | "." | "-" | "\x1b[B"
     )
 }
 
