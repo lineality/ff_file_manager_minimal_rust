@@ -7,6 +7,7 @@ use ff_file_fantastic_module::file_fantastic;
 // import rows and columns helper module w/ these 3 lines
 mod csv_processor_module;
 mod error_types_module;
+mod ribbon_external_counter_module;
 mod rows_and_columns_module;
 
 // Share Source
