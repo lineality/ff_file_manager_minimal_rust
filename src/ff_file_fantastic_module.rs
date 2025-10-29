@@ -9664,17 +9664,17 @@ fn count_directoryitems_ribbon(path: &PathBuf) -> (String, String, String) {
         }
     };
 
-    // // diagnostics demo
-    // let hex_len = all_counter.to_hex(&mut decimal_buffer);
-    // let hex_str = std::str::from_utf8(&decimal_buffer[..hex_len]);
-    // println!(" all_counter Hex representation: 0x{}", hex_str);
-    let reset_result = all_counter.reset();
-    println!(
-        "  After reset: tier={}, digits={} reset_result={:?}",
-        all_counter.current_tier(),
-        all_counter.digit_count(),
-        reset_result,
-    );
+    // // // diagnostics demo
+    // // let hex_len = all_counter.to_hex(&mut decimal_buffer);
+    // // let hex_str = std::str::from_utf8(&decimal_buffer[..hex_len]);
+    // // println!(" all_counter Hex representation: 0x{}", hex_str);
+    // let reset_result = all_counter.reset();
+    // println!(
+    //     "  Ribbon Diagnostic After reset: tier={}, digits={} reset_result={:?}",
+    //     all_counter.current_tier(),
+    //     all_counter.digit_count(),
+    //     reset_result,
+    // );
 
     // Convert file_counter to decimal string
     // Error handling: Counter-to-decimal conversion
@@ -9723,177 +9723,6 @@ fn count_directoryitems_ribbon(path: &PathBuf) -> (String, String, String) {
 
     (all_str, file_str, dir_str)
 }
-
-// works perfectly well, replaced with 'ribbon' external array variable
-// /// Counts all items in a directory (flat, non-recursive, including hidden)
-// ///
-// /// # Purpose
-// /// Provides summary statistics for directory contents to help users understand
-// /// the total scope of a directory when only a subset is displayed on screen.
-// ///
-// /// # Arguments
-// /// * `path` - Reference to PathBuf of the directory to count
-// ///
-// /// # Returns
-// /// A tuple of three Strings: (all_count, file_count, dir_count)
-// /// - `all_count`: Total number of items (files + dirs + symlinks + special files)
-// /// - `file_count`: Number of regular files only
-// /// - `dir_count`: Number of directories only
-// ///
-// /// # Error Handling
-// /// Returns ("?", "?", "?") if any error occurs:
-// /// - Directory cannot be read (permissions, doesn't exist, etc.)
-// /// - Metadata cannot be accessed for items
-// /// - Counter overflow (practically impossible with u128)
-// /// - String conversion fails
-// /// - Any other I/O error
-// ///
-// /// This fail-safe approach ensures the TUI continues to function even if
-// /// counting fails, displaying "?" to indicate unknown counts.
-// ///
-// /// # Scope
-// /// - Counts ONLY items in the specified directory (flat, non-recursive)
-// /// - Includes hidden files and directories (those starting with '.')
-// /// - Includes ALL item types (files, dirs, symlinks, FIFOs, sockets, etc.)
-// /// - Does NOT follow symlinks or recurse into subdirectories
-// ///
-// /// # Item Classification
-// /// - Files: Regular files only
-// /// - Directories: Directories only
-// /// - All: Everything else goes into 'all' count only (symlinks, FIFOs, etc.)
-// ///
-// /// # Loop Safety
-// /// The iterator from fs::read_dir() is naturally bounded by the number of
-// /// entries in the directory. This is not an unbounded loop - it will terminate
-// /// when the directory runs out of entries, similar to iterating over an array.
-// ///
-// /// # Examples
-// /// ```rust
-// /// let path = PathBuf::from("/home/user/documents");
-// /// let (all, files, dirs) = count_directory_items(&path);
-// /// println!("Total: {}, Files: {}, Directories: {}", all, files, dirs);
-// /// // Output: "Total: 42, Files: 35, Directories: 7"
-// ///
-// /// // On error:
-// /// let bad_path = PathBuf::from("/nonexistent");
-// /// let (all, files, dirs) = count_directory_items(&bad_path);
-// /// // Returns: ("?", "?", "?")
-// /// ```
-// fn count_directory_items(path: &PathBuf) -> (String, String, String) {
-//     // Error handling: Path validation (defensive check)
-//     // Check if path is empty - could indicate an error condition
-//     if path.as_os_str().is_empty() {
-//         // Path is empty - return error indicators
-//         return (String::from("?"), String::from("?"), String::from("?"));
-//     }
-
-//     // Initialize counters with u128 for maximum range
-//     let mut all_count: u128 = 0;
-//     let mut file_count: u128 = 0;
-//     let mut dir_count: u128 = 0;
-
-//     // Attempt to read directory contents
-//     // Error handling: Cannot read directory
-//     let directory_reader = match fs::read_dir(path) {
-//         Ok(reader) => reader,
-//         Err(_) => {
-//             // Cannot read directory - return unknowns
-//             // Common causes: permission denied, path doesn't exist, not a directory
-//             return (String::from("?"), String::from("?"), String::from("?"));
-//         }
-//     };
-
-//     // Iterate through directory entries
-//     // The iterator is naturally bounded by the filesystem - it will terminate
-//     // when the directory runs out of entries (not an infinite loop)
-//     for entry_result in directory_reader {
-//         // Error handling: Reading directory entry
-//         let entry = match entry_result {
-//             Ok(e) => e,
-//             Err(_) => {
-//                 // Error reading this specific entry - skip it
-//                 // This can happen with corrupted entries or permission issues
-//                 continue;
-//             }
-//         };
-
-//         // Error handling: Getting metadata for entry
-//         let metadata = match entry.metadata() {
-//             Ok(meta) => meta,
-//             Err(_) => {
-//                 // Cannot read metadata for this entry - skip it
-//                 // Can occur with broken symlinks or permission issues
-//                 continue;
-//             }
-//         };
-
-//         // Error handling: Counter overflow protection
-//         // Count this item in 'all' using checked arithmetic
-//         all_count = match all_count.checked_add(1) {
-//             Some(count) => count,
-//             None => {
-//                 // Overflow detected - directory has > 340 undecillion items
-//                 // This should never happen in practice, but handle it anyway
-//                 return (String::from("?"), String::from("?"), String::from("?"));
-//             }
-//         };
-
-//         // Classify the item type
-//         if metadata.is_file() {
-//             // Error handling: File counter overflow
-//             file_count = match file_count.checked_add(1) {
-//                 Some(count) => count,
-//                 None => {
-//                     // Overflow on file count
-//                     return (String::from("?"), String::from("?"), String::from("?"));
-//                 }
-//             };
-//         } else if metadata.is_dir() {
-//             // Error handling: Directory counter overflow
-//             dir_count = match dir_count.checked_add(1) {
-//                 Some(count) => count,
-//                 None => {
-//                     // Overflow on directory count
-//                     return (String::from("?"), String::from("?"), String::from("?"));
-//                 }
-//             };
-//         }
-//         // Note: Symlinks, FIFOs, sockets, etc. are counted only in 'all'
-//         // They increment all_count but not file_count or dir_count
-//     }
-
-//     // Error handling: Logic consistency check with overflow protection
-//     // Use checked_add to prevent overflow in the comparison itself
-//     let files_plus_dirs = match file_count.checked_add(dir_count) {
-//         Some(sum) => sum,
-//         None => {
-//             // Overflow when adding file_count + dir_count
-//             // This means the counts are corrupted somehow
-//             return (String::from("?"), String::from("?"), String::from("?"));
-//         }
-//     };
-
-//     // Safely check if files + dirs exceeds all_count
-//     if files_plus_dirs > all_count {
-//         // Logic error detected - counts are inconsistent
-//         // This should never happen, but if it does, return error indicators
-//         return (String::from("?"), String::from("?"), String::from("?"));
-//     }
-
-//     // Convert counts to strings
-//     // Note: to_string() on integers is infallible, but we're defensive
-//     let all_str = all_count.to_string();
-//     let file_str = file_count.to_string();
-//     let dir_str = dir_count.to_string();
-
-//     // Final sanity check: Ensure strings are valid
-//     // This is defensive - to_string() on integers should never fail
-//     if all_str.is_empty() || file_str.is_empty() || dir_str.is_empty() {
-//         return (String::from("?"), String::from("?"), String::from("?"));
-//     }
-
-//     (all_str, file_str, dir_str)
-// }
 
 /// Formats and displays directory contents as a numbered list with columns
 ///
