@@ -957,7 +957,7 @@ impl CascadingHexCounter {
     /// let len = counter.to_decimal(&mut buf)?;
     /// assert_eq!(&buf[..len], b"0");
     /// ```
-    pub fn reset(&mut self) -> Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.buffer_tier_0 = [0u8; TIER_0_CAPACITY];
         self.buffer_tier_0[TIER_0_CAPACITY - 1] = b'0';
         self.current_tier = ActiveTier::Tier0;
@@ -978,7 +978,7 @@ impl CascadingHexCounter {
     ///
     /// # Returns
     /// Tier number: 0, 1, 2, 3, or 4
-    pub fn current_tier(&self) -> u8 {
+    fn current_tier(&self) -> u8 {
         self.current_tier.tier_number()
     }
 
@@ -986,7 +986,7 @@ impl CascadingHexCounter {
     ///
     /// # Returns
     /// Number of hex digits representing current value
-    pub fn digit_count(&self) -> usize {
+    fn digit_count(&self) -> usize {
         self.digit_count
     }
 }

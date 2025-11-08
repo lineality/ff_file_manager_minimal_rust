@@ -12352,7 +12352,7 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 fn handle_file_open(path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
     match open_file(path, lines_editor_session_path) {
         Ok(_) => {
-            println!("Opening File");
+            println!("Opened File");
             println!(" Tip: Add partner programs (for processing files) to this config file");
             println!(" /path/to/executable/");
             println!(" └── ff_data/                            <- Created if doesn't exist");
