@@ -10,6 +10,11 @@ mod error_types_module;
 mod ribbon_external_counter_module;
 mod rows_and_columns_module;
 
+// lines
+mod buttons_reversible_edit_changelog_module;
+mod lines_editor_module;
+mod toggle_comment_indent_module;
+
 // Share Source
 mod source_it_module;
 

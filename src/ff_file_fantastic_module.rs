@@ -20,6 +20,8 @@ use super::row_line_count_tui_module::show_minimal_linecount_tui;
 // mod ribbon_external_counter_module;
 use super::ribbon_external_counter_module::CascadingHexCounter;
 
+use super::lines_editor_module::{LinesError, lines_full_file_editor};
+
 /// ff - A minimal file manager in Rust
 /// use -> cargo build --profile release-performance
 /// or, use -> cargo build --profile release-small
@@ -388,6 +390,7 @@ const YELLOW: &str = "\x1b[33m";
 
 /*
 Error Handling section starts
+error section
 */
 
 /// Custom error type for the file manager that provides specific error contexts
@@ -492,6 +495,13 @@ pub enum FileFantasticError {
     /// }
     /// ```
     AlreadyExists(PathBuf),
+
+    /// Wraps a LinesError from the lines editor module
+    ///
+    /// # Usage
+    /// When operations delegate to the lines_full_file_editor and need
+    /// to convert its errors into the FileFantasticError type
+    LinesError(LinesError),
 }
 
 impl std::fmt::Display for FileFantasticError {
@@ -526,6 +536,7 @@ impl std::fmt::Display for FileFantasticError {
                     path.display()
                 )
             }
+            Self::LinesError(err) => write!(f, "Lines editor error: {}", err),
         }
     }
 }
@@ -543,6 +554,7 @@ impl std::error::Error for FileFantasticError {
             Self::EditorLaunchFailed(_) => None,
             Self::UnsupportedPlatform => None,
             Self::LevenshteinError { .. } => None,
+            Self::LinesError(err) => Some(err),
             // _ => None,
         }
     }
@@ -566,7 +578,534 @@ impl From<io::Error> for FileFantasticError {
     }
 }
 
+impl From<LinesError> for FileFantasticError {
+    fn from(err: LinesError) -> Self {
+        Self::LinesError(err)
+    }
+}
 // end of error section
+
+// =========
+// Utilities
+// =========
+
+// experimental formatting... e.g. :<3
+/// Formats a message with placeholders supporting alignment and width specifiers.
+///
+/// ## Project Context
+/// Provides string formatting for UI messages, tables, and aligned output using
+/// stack-allocated buffers. Supports basic format specifiers for padding and
+/// alignment without heap allocation.
+///
+/// ## Supported Format Specifiers
+/// - `{}` - Plain replacement
+/// - `{:<N}` - Left-align with width N (pad right with spaces)
+/// - `{:>N}` - Right-align with width N (pad left with spaces)
+/// - `{:^N}` - Center-align with width N (pad both sides with spaces)
+/// - `{:N}` - Default right-align with width N
+///
+/// Examples:
+/// - ("ID: {:<5}", &["42"]) -> "ID: 42   " (left-align, width 5)
+/// - ("ID: {:>5}", &["42"]) -> "ID:    42" (right-align, width 5)
+/// - ("ID: {:^5}", &["42"]) -> "ID:  42  " (center-align, width 5)
+///
+/// ## Safety & Error Handling
+/// - No panic: Always returns valid string or fallback
+/// - No unwrap: All error paths return fallback
+/// - Uses 256-byte stack buffer
+/// - Returns fallback if result exceeds buffer
+/// - Returns fallback if format specifiers are invalid
+/// - Maximum 8 inserts supported
+///
+/// ## Parameters
+/// - `template`: String with format placeholders
+/// - `inserts`: Slice of strings to insert
+/// - `fallback`: Message to return if formatting fails
+///
+/// ## Returns
+/// Formatted string on success, fallback string on any error
+///
+/// ## Use Examples:
+/// ```rust
+/// // Table-like alignment
+/// let id = "42";
+/// let name = "Alice";
+/// let row = stack_format_it(
+///     "ID: {:<5} Name: {:<10}",
+///     &[id, name],
+///     "Data unavailable"
+/// );
+/// // Result: "ID: 42    Name: Alice     "
+/// ```
+///
+///
+/// ```rust
+/// let bytes = total_bytes_written.saturating_sub(1);
+/// let num_str = bytes.to_string();
+/// let message = stack_format_it("inserted {} bytes", &[&num_str], "inserted data");
+/// ```
+///
+/// Error Formatting:
+/// ```
+/// io::stdout().flush().map_err(|e| {
+///     LinesError::DisplayError(stack_format_it(
+///         "Failed to flush stdout: {}",
+///         &[&e.to_string()],
+///         "Failed to flush stdout",
+///     ))
+/// })?;
+/// ```
+///
+/// ```rust
+/// let num_1 = start_byte.to_string();
+/// let num_2 = end_byte.to_string();
+/// let formatted_string = stack_format_it(
+///     "Invalid byte range: start={} > end={}",
+///     &[&num_1, &num_2],
+///     "Invalid byte range"
+/// );
+/// ```
+fn stack_format_it(template: &str, inserts: &[&str], fallback: &str) -> String {
+    // Internal stack buffer for result
+    let mut buf = [0u8; 512];
+
+    // Maximum number of inserts to prevent abuse
+    const MAX_INSERTS: usize = 128;
+
+    // Check insert count
+    if inserts.is_empty() {
+        #[cfg(debug_assertions)]
+        eprintln!("stack_format_it: No inserts provided");
+        return fallback.to_string();
+    }
+
+    if inserts.len() > MAX_INSERTS {
+        #[cfg(debug_assertions)]
+        eprintln!("stack_format_it: Too many inserts (max {})", MAX_INSERTS);
+        return fallback.to_string();
+    }
+
+    // Parse format specifiers and validate
+    let format_specs = match parse_format_specs(template, inserts.len()) {
+        Some(specs) => specs,
+        None => {
+            #[cfg(debug_assertions)]
+            eprintln!("stack_format_it: Failed to parse format specifiers");
+            return fallback.to_string();
+        }
+    };
+
+    // Build the result
+    let mut pos = 0;
+    let mut insert_idx = 0;
+    let mut search_start = 0;
+
+    while insert_idx < inserts.len() {
+        // Find next placeholder
+        let placeholder_start = match template[search_start..].find('{') {
+            Some(offset) => search_start + offset,
+            None => break,
+        };
+
+        let placeholder_end = match template[placeholder_start..].find('}') {
+            Some(offset) => placeholder_start + offset + 1,
+            None => {
+                #[cfg(debug_assertions)]
+                eprintln!("stack_format_it: Unclosed placeholder");
+                return fallback.to_string();
+            }
+        };
+
+        // Copy text before placeholder
+        let before = &template[search_start..placeholder_start];
+        if pos + before.len() > buf.len() {
+            #[cfg(debug_assertions)]
+            eprintln!("stack_format_it: Buffer overflow");
+            return fallback.to_string();
+        }
+        buf[pos..pos + before.len()].copy_from_slice(before.as_bytes());
+        pos += before.len();
+
+        // Apply format specifier and insert
+        let spec = &format_specs[insert_idx];
+        let insert = inserts[insert_idx];
+
+        let formatted = apply_format_spec(insert, spec);
+
+        if pos + formatted.len() > buf.len() {
+            #[cfg(debug_assertions)]
+            eprintln!("stack_format_it: Buffer overflow during insert");
+            return fallback.to_string();
+        }
+        buf[pos..pos + formatted.len()].copy_from_slice(formatted.as_bytes());
+        pos += formatted.len();
+
+        search_start = placeholder_end;
+        insert_idx += 1;
+    }
+
+    // Copy remaining text after last placeholder
+    let remaining = &template[search_start..];
+    if pos + remaining.len() > buf.len() {
+        #[cfg(debug_assertions)]
+        eprintln!("stack_format_it: Buffer overflow during final copy");
+        return fallback.to_string();
+    }
+    buf[pos..pos + remaining.len()].copy_from_slice(remaining.as_bytes());
+    pos += remaining.len();
+
+    // Validate UTF-8 and return
+    match std::str::from_utf8(&buf[..pos]) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            #[cfg(debug_assertions)]
+            eprintln!("stack_format_it: Invalid UTF-8 in result");
+            fallback.to_string()
+        }
+    }
+}
+
+/// Format specifier parsed from placeholder
+#[derive(Debug, Clone, Copy)]
+enum Alignment {
+    Left,
+    Right,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FormatSpec {
+    alignment: Alignment,
+    width: Option<usize>,
+}
+
+/// Parse format specifiers from template
+/// Returns None if parsing fails or placeholder count doesn't match insert count
+fn parse_format_specs(template: &str, expected_count: usize) -> Option<Vec<FormatSpec>> {
+    let mut specs = Vec::new();
+    let mut remaining = template;
+
+    while let Some(start) = remaining.find('{') {
+        let end = remaining[start..].find('}')?;
+        let placeholder = &remaining[start + 1..start + end];
+
+        let spec = if placeholder.is_empty() {
+            // Plain {} placeholder
+            FormatSpec {
+                alignment: Alignment::Left,
+                width: None,
+            }
+        } else if placeholder.starts_with(':') {
+            // Format specifier like {:<5} or {:>10}
+            parse_single_spec(&placeholder[1..])?
+        } else {
+            // Invalid format
+            return None;
+        };
+
+        specs.push(spec);
+        remaining = &remaining[start + end + 1..];
+    }
+
+    if specs.len() == expected_count {
+        Some(specs)
+    } else {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "parse_format_specs: Placeholder count ({}) doesn't match insert count ({})",
+            specs.len(),
+            expected_count
+        );
+        None
+    }
+}
+
+/// Parse a single format specifier like "<5" or ">10" or "^8"
+fn parse_single_spec(spec: &str) -> Option<FormatSpec> {
+    if spec.is_empty() {
+        return Some(FormatSpec {
+            alignment: Alignment::Right,
+            width: None,
+        });
+    }
+
+    let (alignment, width_str) = if spec.starts_with('<') {
+        (Alignment::Left, &spec[1..])
+    } else if spec.starts_with('>') {
+        (Alignment::Right, &spec[1..])
+    } else if spec.starts_with('^') {
+        (Alignment::Center, &spec[1..])
+    } else if spec.chars().next()?.is_ascii_digit() {
+        // No alignment character means right-align
+        (Alignment::Right, spec)
+    } else {
+        return None;
+    };
+
+    let width = if width_str.is_empty() {
+        None
+    } else {
+        match width_str.parse::<usize>() {
+            Ok(w) if w <= 64 => Some(w), // Reasonable width limit
+            _ => return None,
+        }
+    };
+
+    Some(FormatSpec { alignment, width })
+}
+
+/// Apply format specifier to a string value
+fn apply_format_spec(value: &str, spec: &FormatSpec) -> String {
+    let width = match spec.width {
+        Some(w) => w,
+        None => return value.to_string(), // No width, return as-is
+    };
+
+    let value_len = value.len();
+
+    if value_len >= width {
+        // Value already meets or exceeds width
+        return value.to_string();
+    }
+
+    let padding = width - value_len;
+
+    match spec.alignment {
+        Alignment::Left => {
+            // Pad right: "42   "
+            let mut result = String::with_capacity(width);
+            result.push_str(value);
+            for _ in 0..padding {
+                result.push(' ');
+            }
+            result
+        }
+        Alignment::Right => {
+            // Pad left: "   42"
+            let mut result = String::with_capacity(width);
+            for _ in 0..padding {
+                result.push(' ');
+            }
+            result.push_str(value);
+            result
+        }
+        Alignment::Center => {
+            // Pad both sides: " 42  "
+            let left_pad = padding / 2;
+            let right_pad = padding - left_pad;
+            let mut result = String::with_capacity(width);
+            for _ in 0..left_pad {
+                result.push(' ');
+            }
+            result.push_str(value);
+            for _ in 0..right_pad {
+                result.push(' ');
+            }
+            result
+        }
+    }
+}
+
+/// Makes, verifies, or creates a directory path relative to the executable directory location.
+///
+/// This function performs the following sequential steps:
+/// 1. Converts the provided directory path string to an absolute path relative to the executable directory
+/// 2. Checks if the directory exists at the calculated absolute path location
+/// 3. If the directory does not exist, creates it and all necessary parent directories
+/// 4. Returns the canonicalized (absolute path with all symlinks resolved) path to the directory
+///
+/// # Arguments
+///
+/// * `dir_path_string` - A string representing the directory path relative to the executable directory
+///
+/// # Returns
+///
+/// * `Result<PathBuf, std::io::Error>` - The canonicalized absolute path to the directory if successful,
+///   or an error if any step fails (executable path determination, directory creation, or canonicalization)
+///
+/// # Errors
+///
+/// This function may return an error in the following situations:
+/// - If the executable's directory cannot be determined
+/// - If directory creation fails due to permissions or other I/O errors
+/// - If path canonicalization fails
+///
+/// use example:
+/// // Ensure the project graph data directory exists relative to the executable
+/// let project_graph_directory_result = make_verify_or_create_executabledirectoryrelative_canonicalized_dir_path("project_graph_data");
+
+/// // Handle any errors that might occur during directory creation or verification
+/// let project_graph_directory = match project_graph_directory_result {
+///     Ok(directory_path) => directory_path,
+///     Err(io_error) => {
+///         // Log the error and handle appropriately for your application
+///         return Err(format!("Failed to ensure project graph directory exists: {}", io_error).into());
+///     }
+/// };
+///
+pub fn make_verify_or_create_executabledirectoryrelative_canonicalized_dir_path(
+    dir_path_string: &str,
+) -> Result<PathBuf> {
+    // Step 1: Convert the provided directory path to an absolute path relative to the executable
+    let absolute_dir_path =
+        make_input_path_name_abs_executabledirectoryrelative_nocheck(dir_path_string)?;
+
+    // Step 2: Check if the directory exists at the calculated absolute path
+    let directory_exists = abs_executable_directory_relative_exists(&absolute_dir_path)?;
+
+    if !directory_exists {
+        // Step 3: Directory doesn't exist, create it and all parent directories
+        // Note: mkdir_new_abs_executabledirectoryrelative_canonicalized will also canonicalize the path
+        mkdir_new_abs_executabledirectoryrelative_canonicalized(dir_path_string)
+    } else {
+        absolute_dir_path
+            .canonicalize()
+            .map_err(|canonicalization_error| {
+                FileFantasticError::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!(
+                        "Failed to canonicalize existing directory path: {}",
+                        canonicalization_error
+                    ),
+                ))
+            })
+    }
+}
+
+/// Creates a new directory at the specified path relative to the executable directory.
+/// Returns an error if the directory already exists.
+///
+/// # Arguments
+///
+/// * `dir_path` - The directory path relative to the executable directory
+///
+/// # Returns
+///
+/// * `Result<PathBuf, io::Error>` - The absolute, canonicalized path to the newly created directory
+pub fn mkdir_new_abs_executabledirectoryrelative_canonicalized<P: AsRef<Path>>(
+    dir_path: P,
+) -> Result<PathBuf> {
+    // Get the absolute path without checking existence
+    let abs_path = make_input_path_name_abs_executabledirectoryrelative_nocheck(dir_path)?;
+
+    // Check if the directory already exists
+    if abs_executable_directory_relative_exists(&abs_path)? {
+        return Err(FileFantasticError::Io(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Directory already exists",
+        )));
+    }
+
+    // Create the directory and all parent directories
+    std::fs::create_dir_all(&abs_path).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to create directory: {}", e),
+        )
+    })?;
+
+    // Canonicalize the path (should succeed because we just created it)
+    abs_path.canonicalize().map_err(|e| {
+        FileFantasticError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to canonicalize newly created directory path: {}", e),
+        ))
+    })
+}
+
+/// Converts a path to an absolute path based on the executable's directory location.
+/// Does NOT check if the path exists or attempt to create anything.
+///
+/// # Arguments
+///
+/// * `path_to_make_absolute` - A path to convert to an absolute path relative to
+///   the executable's directory location.
+///
+/// # Returns
+///
+/// * `Result<PathBuf, io::Error>` - The absolute path based on the executable's directory or an error
+///   if the executable's path cannot be determined or if the path cannot be resolved.
+///
+/// # Examples
+///
+/// ```
+/// use manage_absolute_executable_directory_relative_paths::make_input_path_name_abs_executabledirectoryrelative_nocheck;
+///
+/// // Get an absolute path for "data/config.json" relative to the executable directory
+/// let abs_path = make_input_path_name_abs_executabledirectoryrelative_nocheck("data/config.json").unwrap();
+/// println!("Absolute path: {}", abs_path.display());
+/// ```
+pub fn make_input_path_name_abs_executabledirectoryrelative_nocheck<P: AsRef<Path>>(
+    path_to_make_absolute: P,
+) -> Result<PathBuf> {
+    // Get the directory where the executable is located
+    let executable_directory = get_absolute_path_to_executable_parentdirectory()?;
+
+    // Create a path by joining the executable directory with the provided path
+    let target_path = executable_directory.join(path_to_make_absolute);
+
+    // If the path doesn't exist, we still return the absolute path without trying to canonicalize
+    if !abs_executable_directory_relative_exists(&target_path)? {
+        // Ensure the path is absolute (it should be since we joined with executable_directory)
+        if target_path.is_absolute() {
+            return Ok(target_path);
+        } else {
+            // Wrap io::Error in LinesError::Io
+            return Err(FileFantasticError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Failed to create absolute path",
+            )));
+        }
+    }
+
+    // Path exists, so we can canonicalize it to resolve any ".." or "." segments
+    target_path.canonicalize().map_err(|e| {
+        // Wrap in LinesError::Io
+        FileFantasticError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to canonicalize path: {}", e),
+        ))
+    })
+}
+
+/// Gets the directory where the current executable is located.
+///
+/// # Returns
+///
+/// * `Result<PathBuf, io::Error>` - The absolute directory path containing the executable or an error
+///   if it cannot be determined.
+pub fn get_absolute_path_to_executable_parentdirectory() -> Result<PathBuf> {
+    // Get the path to the current executable
+    let executable_path = std::env::current_exe().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Failed to determine current executable path: {}", e),
+        )
+    })?;
+
+    // Get the directory containing the executable
+    let executable_directory = executable_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Failed to determine parent directory of executable",
+        )
+    })?;
+
+    Ok(executable_directory.to_path_buf())
+}
+/// Checks if a path exists (either as a file or directory).
+///
+/// # Arguments
+///
+/// * `path_to_check` - The path to check for existence
+///
+/// # Returns
+///
+/// * `Result<bool, io::Error>` - Whether the path exists or an error
+pub fn abs_executable_directory_relative_exists<P: AsRef<Path>>(path_to_check: P) -> Result<bool> {
+    let path = path_to_check.as_ref();
+    Ok(path.exists())
+}
 
 /// Represents the type of file system item retrieved from stack
 ///
@@ -7692,6 +8231,7 @@ mod tests_iterative_crawl {
             tui_wide_adjustment: 0,
             tui_wide_direction_sign: true,
             current_page_index: 0,
+            lines_editor_session_path: PathBuf::new(),
         }
     }
 
@@ -7952,6 +8492,9 @@ pub struct NavigationState {
 
     /// Current page index (0-based) - what page we're currently viewing
     current_page_index: usize,
+
+    /// for default file editor
+    lines_editor_session_path: PathBuf,
 }
 
 fn detect_android() -> bool {
@@ -8022,6 +8565,7 @@ impl NavigationState {
             tui_wide_adjustment: width_adjustment,    // No width adjustment
             tui_wide_direction_sign: width_direction, // Positive direction by default
             current_page_index: 0,                    // Always start at page 0
+            lines_editor_session_path: PathBuf::new(),
         }
     }
 
@@ -11019,7 +11563,7 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
 /// User input: [Enter]
 /// Result: Opens with system default application
 /// ```
-fn open_file(file_path: &PathBuf) -> Result<()> {
+fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
     // Read partner programs configuration (gracefully handles all errors)
     let partner_programs = read_partner_programs_file();
 
@@ -11080,7 +11624,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 eprintln!("Failed to read input: {}", e);
                 FileFantasticError::Io(e)
             })?;
-            return open_file(file_path); // Re-prompt
+            return open_file(file_path, lines_editor_session_path); // Re-prompt
         }
 
         // Check if -rc flag is present and file is CSV
@@ -11104,7 +11648,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                             eprintln!("Failed to read input: {}", e);
                             FileFantasticError::Io(e)
                         })?;
-                        return open_file(file_path); // Re-prompt
+                        return open_file(file_path, lines_editor_session_path); // Re-prompt
                     }
                 }
             } else {
@@ -11152,7 +11696,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
             }
             "" if !editor.is_empty() => {
                 // Just -rc flag or no special terminal flag, open normally
-                // Continue to the regular editor opening logic below
+                //  Continue to the regular editor opening logic below
                 // by falling through to the standard editor handling
 
                 // Check if it's a GUI editor
@@ -11403,111 +11947,126 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to read input: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-                return open_file(file_path); // Re-prompt for new selection
+                return open_file(file_path, &lines_editor_session_path); // Re-prompt for new selection
             }
         }
     }
 
-    // Handle empty input - use system default (existing functionality)
-    if user_input.is_empty() {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with default application: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("xdg-open")
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with xdg-open: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        #[cfg(any(
-            target_os = "freebsd",
-            target_os = "openbsd",
-            target_os = "netbsd",
-            target_os = "dragonfly",
-        ))]
-        {
-            // BSD systems typically use xdg-open if available, otherwise try direct opening
-            let result = std::process::Command::new("xdg-open")
-                .arg(file_path)
-                .spawn();
+    // // ==================
+    // // Handle empty input - use system default (existing functionality)
+    // // ==================
+    // if user_input.is_empty() {
+    //     #[cfg(target_os = "macos")]
+    //     {
+    //         std::process::Command::new("open")
+    //             .arg(file_path)
+    //             .spawn()
+    //             .map_err(|e| {
+    //                 eprintln!("Failed to open file with default application: {}", e);
+    //                 FileFantasticError::Io(e)
+    //             })?;
+    //     }
+    //     #[cfg(target_os = "linux")]
+    //     {
+    //         std::process::Command::new("xdg-open")
+    //             .arg(file_path)
+    //             .spawn()
+    //             .map_err(|e| {
+    //                 eprintln!("Failed to open file with xdg-open: {}", e);
+    //                 FileFantasticError::Io(e)
+    //             })?;
+    //     }
+    //     #[cfg(any(
+    //         target_os = "freebsd",
+    //         target_os = "openbsd",
+    //         target_os = "netbsd",
+    //         target_os = "dragonfly",
+    //     ))]
+    //     {
+    //         // BSD systems typically use xdg-open if available, otherwise try direct opening
+    //         let result = std::process::Command::new("xdg-open")
+    //             .arg(file_path)
+    //             .spawn();
 
-            if result.is_err() {
-                // Fallback: try to open with a common editor
-                std::process::Command::new("vi")
-                    .arg(file_path)
-                    .spawn()
-                    .map_err(|e| {
-                        eprintln!("Failed to open file on BSD system: {}", e);
-                        FileFantasticError::Io(e)
-                    })?;
-            } else {
-                result.map_err(|e| {
-                    eprintln!("Failed to open file with xdg-open on BSD: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-            }
-        }
-        #[cfg(target_os = "redox")]
-        {
-            // Redox OS uses 'open' command for default file associations
-            // Similar to macOS but it's a different implementation
-            std::process::Command::new("open")
-                .arg(file_path)
-                .spawn()
-                .or_else(|_| {
-                    // Fallback: try 'orbital-open' if available
-                    std::process::Command::new("orbital-open")
-                        .arg(file_path)
-                        .spawn()
-                })
-                .map_err(|e| {
-                    eprintln!(
-                        "Failed to open file with default application on Redox OS: {}",
-                        e
-                    );
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", ""])
-                .arg(file_path)
-                .spawn()
-                .map_err(|e| {
-                    eprintln!("Failed to open file with default application: {}", e);
-                    FileFantasticError::Io(e)
-                })?;
-        }
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android",
-            target_os = "windows",
-            target_os = "freebsd",
-            target_os = "openbsd",
-            target_os = "netbsd",
-            target_os = "dragonfly",
-            target_os = "redox",
-        )))]
-        {
-            // Fallback for unsupported platforms
-            eprintln!("Platform not supported for default file opening");
-            return Err(FileFantasticError::EditorLaunchFailed(
-                "Platform not supported for default file opening".to_string(),
-            ));
-        }
+    //         if result.is_err() {
+    //             // Fallback: try to open with a common editor
+    //             std::process::Command::new("vi")
+    //                 .arg(file_path)
+    //                 .spawn()
+    //                 .map_err(|e| {
+    //                     eprintln!("Failed to open file on BSD system: {}", e);
+    //                     FileFantasticError::Io(e)
+    //                 })?;
+    //         } else {
+    //             result.map_err(|e| {
+    //                 eprintln!("Failed to open file with xdg-open on BSD: {}", e);
+    //                 FileFantasticError::Io(e)
+    //             })?;
+    //         }
+    //     }
+    //     #[cfg(target_os = "redox")]
+    //     {
+    //         // Redox OS uses 'open' command for default file associations
+    //         // Similar to macOS but it's a different implementation
+    //         std::process::Command::new("open")
+    //             .arg(file_path)
+    //             .spawn()
+    //             .or_else(|_| {
+    //                 // Fallback: try 'orbital-open' if available
+    //                 std::process::Command::new("orbital-open")
+    //                     .arg(file_path)
+    //                     .spawn()
+    //             })
+    //             .map_err(|e| {
+    //                 eprintln!(
+    //                     "Failed to open file with default application on Redox OS: {}",
+    //                     e
+    //                 );
+    //                 FileFantasticError::Io(e)
+    //             })?;
+    //     }
+    //     #[cfg(target_os = "windows")]
+    //     {
+    //         std::process::Command::new("cmd")
+    //             .args(["/C", "start", ""])
+    //             .arg(file_path)
+    //             .spawn()
+    //             .map_err(|e| {
+    //                 eprintln!("Failed to open file with default application: {}", e);
+    //                 FileFantasticError::Io(e)
+    //             })?;
+    //     }
+    //     #[cfg(not(any(
+    //         target_os = "macos",
+    //         target_os = "linux",
+    //         target_os = "android",
+    //         target_os = "windows",
+    //         target_os = "freebsd",
+    //         target_os = "openbsd",
+    //         target_os = "netbsd",
+    //         target_os = "dragonfly",
+    //         target_os = "redox",
+    //     )))]
+    //     {
+    //         // Fallback for unsupported platforms
+    //         eprintln!("Platform not supported for default file opening");
+    //         return Err(FileFantasticError::EditorLaunchFailed(
+    //             "Platform not supported for default file opening".to_string(),
+    //         ));
+    //     }
+    //     return Ok(());
+    // }
+
+    // ==================
+    // Handle empty input - use custom editor
+    // ==================
+    if user_input.is_empty() {
+        lines_full_file_editor(
+            Some(file_path.clone()),
+            None,
+            Some(lines_editor_session_path.clone()),
+            true,
+        )?; // The ? will use From<LinesError> to convert
         return Ok(());
     }
 
@@ -11537,7 +12096,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 
                     // After user acknowledgment, fall back to asking again
                     println!("Falling back to system default...");
-                    return open_file(file_path); // Recursive call for new selection
+                    return open_file(file_path, &lines_editor_session_path); // Recursive call for new selection
                 }
             }
         } else if !partner_programs.is_empty() {
@@ -11551,7 +12110,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                 eprintln!("Failed to read input: {}", e);
                 FileFantasticError::Io(e)
             })?;
-            return open_file(file_path); // Ask again
+            return open_file(file_path, &lines_editor_session_path); // Ask again
         }
         // If no partner programs configured, fall through to treat as program name
     }
@@ -11579,7 +12138,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to read input: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-                return open_file(file_path); // Ask again
+                return open_file(file_path, &lines_editor_session_path); // Ask again
             }
         }
     } else {
@@ -11633,7 +12192,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                     eprintln!("Failed to read input: {}", e);
                     FileFantasticError::Io(e)
                 })?;
-                return open_file(file_path); // Ask again
+                return open_file(file_path, &lines_editor_session_path); // Ask again
             }
         }
         #[cfg(target_os = "android")]
@@ -11699,7 +12258,7 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
                         eprintln!("Failed to read input: {}", e);
                         FileFantasticError::Io(e)
                     })?;
-                    return open_file(file_path); // Ask again
+                    return open_file(file_path, &lines_editor_session_path); // Ask again
                 }
             }
         }
@@ -11790,8 +12349,8 @@ fn open_file(file_path: &PathBuf) -> Result<()> {
 /// - Catches and displays errors from open_file()
 /// - Handles input/output errors during user prompts
 /// - Ensures user is informed of all outcomes
-fn handle_file_open(path: &PathBuf) -> Result<()> {
-    match open_file(path) {
+fn handle_file_open(path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
+    match open_file(path, lines_editor_session_path) {
         Ok(_) => {
             println!("Opening File");
             println!(" Tip: Add partner programs (for processing files) to this config file");
@@ -13702,6 +14261,168 @@ pub fn display_version() -> Result<()> {
     )))
 }
 
+/// Creates a new session directory and returns its path
+///
+/// # Purpose
+/// Simple session directory creation for wrappers and tools that don't need
+/// full EditorState infrastructure. Creates timestamped session directory
+/// in standard location and returns absolute path.
+///
+/// # Project Context
+/// Provides session isolation for draft copies without requiring EditorState.
+/// Useful for:
+/// - Wrappers around lines_core that need session directories
+/// - Tools that want session isolation without full editor state
+/// - Testing and utilities that need temporary organized workspaces
+///
+/// # Directory Structure Created
+/// ```text
+/// {executable_dir}/
+///   lines_data/
+///     sessions/
+///       {timestamp}/          <- Created directory (returned)
+/// ```
+///
+/// # Arguments
+/// * `session_time_stamp` - Timestamp string for directory name (e.g., "2025_01_15_14_30_45")
+///
+/// # Returns
+/// * `Ok(PathBuf)` - Absolute path to newly created session directory
+/// * `Err(io::Error)` - Directory creation or validation failed
+///
+/// # Behavior
+/// - Creates base infrastructure (lines_data/sessions/) if needed
+/// - Creates new timestamped session directory
+/// - Returns absolute canonicalized path
+/// - Idempotent: Returns path if directory already exists with this timestamp
+///
+/// # Design Notes
+/// - Does NOT use or require EditorState (no phantom state memory)
+/// - Does NOT support recovery mode (use full version for that)
+/// - Always creates new directory (or validates existing)
+/// - Simpler alternative to initialize_session_directory for basic use cases
+///
+/// # Example
+/// ```rust
+/// let timestamp = "2025_01_15_14_30_45".to_string();
+/// let session_path = simple_make_lines_editor_session_directory(timestamp)?;
+/// // session_path is now: "/path/to/exe/lines_data/sessions/2025_01_15_14_30_45"
+/// ```
+pub fn simple_make_lines_editor_session_directory(
+    session_time_stamp: String,
+) -> io::Result<PathBuf> {
+    // =================================================
+    // Debug-Assert, Test-Assert, Production-Catch-Handle
+    // =================================================
+
+    // Defensive: Validate timestamp is not empty
+    debug_assert!(
+        !session_time_stamp.is_empty(),
+        "Session timestamp should not be empty"
+    );
+
+    #[cfg(test)]
+    assert!(
+        !session_time_stamp.is_empty(),
+        "Session timestamp should not be empty"
+    );
+
+    // Production catch: Handle empty timestamp
+    if session_time_stamp.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "simple_make_lines_editor_session_directory: Empty timestamp provided",
+        ));
+    }
+
+    // ===================================================================
+    // STEP 1: Ensure base directory structure exists
+    // ===================================================================
+    // Creates: {executable_dir}/lines_data/sessions/
+    let base_sessions_path = "lines_data/sessions";
+
+    let sessions_dir = make_verify_or_create_executabledirectoryrelative_canonicalized_dir_path(
+        base_sessions_path,
+    )
+    .map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            stack_format_it(
+                "simple_make_lines_editor_session_directory: Failed to create sessions structure: {}",
+                &[&e.to_string()],
+                "simple_make_lines_editor_session_directory: Failed to create sessions structure",
+            ),
+        )
+    })?;
+
+    // Defensive: Verify the path is a directory
+    if !sessions_dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "simple_make_lines_editor_session_directory: Sessions path exists but is not a directory",
+        ));
+    }
+
+    // ===================================================================
+    // STEP 2: Create timestamped session directory
+    // ===================================================================
+    let session_path = sessions_dir.join(&session_time_stamp);
+
+    // Check if directory already exists (idempotent)
+    if session_path.exists() {
+        // Defensive: Verify it's actually a directory
+        if !session_path.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "simple_make_lines_editor_session_directory: Path exists but is not a directory",
+            ));
+        }
+
+        // Already exists as directory - return it (idempotent)
+        debug_assert!(
+            session_path.is_absolute(),
+            "Session path should be absolute"
+        );
+
+        return Ok(session_path);
+    }
+
+    // Create the session directory
+    fs::create_dir(&session_path).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            stack_format_it(
+                "simple_make_lines_editor_session_directory: Failed to create directory: {}",
+                &[&e.to_string()],
+                "simple_make_lines_editor_session_directory: Failed to create directory",
+            ),
+        )
+    })?;
+
+    // Defensive: Verify creation succeeded
+    if !session_path.exists() || !session_path.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "simple_make_lines_editor_session_directory: Creation reported success but directory not found",
+        ));
+    }
+
+    // Assertion: Verify path is absolute
+    debug_assert!(
+        session_path.is_absolute(),
+        "Session path should be absolute"
+    );
+
+    // Test assertion: Verify path is absolute
+    #[cfg(test)]
+    assert!(
+        session_path.is_absolute(),
+        "Session path should be absolute"
+    );
+
+    Ok(session_path)
+}
+
 /// Public entry point for File Fantastic file manager module
 ///
 /// # Usage as a Module
@@ -13819,6 +14540,13 @@ pub fn file_fantastic() -> Result<PathBuf> {
 
     let mut nav_state = NavigationState::new();
     let mut state_manager = NavigationStateManager::new(); // Initialize here at the top
+
+    //  ========================================
+    //  Set Up & Build The Path for Lines Editor
+    //  ========================================
+    let session_time_base = createarchive_timestamp_with_precision(SystemTime::now(), true);
+    nav_state.lines_editor_session_path =
+        simple_make_lines_editor_session_directory(session_time_base)?;
 
     loop {
         // Read directory contents with proper error handling
@@ -14001,7 +14729,10 @@ pub fn file_fantastic() -> Result<PathBuf> {
                             nav_state.selected_item_index = None;
                             break; // Break inner loop to read new directory
                         } else {
-                            match handle_file_open(&entry.file_system_item_path) {
+                            match handle_file_open(
+                                &entry.file_system_item_path,
+                                &nav_state.lines_editor_session_path,
+                            ) {
                                 Ok(_) => {}
                                 Err(e) => {
                                     eprintln!("Error opening file: {}", e);
@@ -14101,14 +14832,16 @@ pub fn file_fantastic() -> Result<PathBuf> {
                                 }
                             }
                         }
-                        NavigationAction::OpenFile(ref path) => match handle_file_open(path) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                eprintln!("Error opening file: {}", e);
-                                println!("Press Enter to continue...");
-                                let _ = io::stdin().read_line(&mut String::new());
+                        NavigationAction::OpenFile(ref path) => {
+                            match handle_file_open(path, &nav_state.lines_editor_session_path) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    eprintln!("Error opening file: {}", e);
+                                    println!("Press Enter to continue...");
+                                    let _ = io::stdin().read_line(&mut String::new());
+                                }
                             }
-                        },
+                        }
 
                         // give path blurb
                         NavigationAction::Quit => {

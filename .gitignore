@@ -9,6 +9,25 @@ logs/
 test_empty/
 test_temp/
 
+tmp/
+test/
+testing/
+tests/
+test_files/
+
+test_empty/
+test_temp/
+
+.env
+source_crate_*
+test_analysis_report_*
+backup_toggle_comment_*
+code_archive.txt
+
+source_crate_lines_editor_*
+
+test.csv_metadata.toml
+
 .env
 source_crate_*
 test_analysis_report_*
