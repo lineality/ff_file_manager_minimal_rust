@@ -18565,37 +18565,37 @@ fn create_new_draft_copy(
     Ok(draft_path)
 }
 
-/// Prints help message to stdout
-///
-/// # Purpose
-/// Displays usage information and available commands.
-/// Called when user runs `lines --help`.
-pub fn print_help() {
-    println!("About Lines Editor: (note: ctrl+s can block terminal, ctrl+z unblocks)");
-    println!("USAGE:");
-    println!("    lines [FILE]");
-    println!("    lines FILE:LINE          # Open at : specific line");
-    println!("OPTIONS:");
-    println!("    --help, -h      Show this help message");
-    println!("    --version, -v   Show version information");
-    println!("MODES:");
-    println!("    Memo Mode:      Run from home directory, Append-only quickie");
-    println!("                    Creates dated files in ~/Documents/lines_editor/");
-    println!("    Full Editor:    Run from any other directory");
-    println!("DELETE: d");
-    println!("    Normal Mode: 'd' delete a line");
-    println!("    Visual Mode  'd'/ Insert Mode '-d': Backspace-Style Delete");
-    println!("NAVIGATION:");
-    println!("    hjkl            Move cursor");
-    println!("    5j, 10l         Move with repeat count");
-    println!("    [Empty Enter]   Repeat last command (Normal/Visual/ ...?)");
-    println!("-n -v -wq -q -s -d  Insert Mode: Flag style commands");
-    println!("Examples in terminal/shell:");
-    println!("  lines                Memo mode (if in home)");
-    println!("  lines notes.txt      Create/open notes.txt");
-    println!("  lines notes.txt:42    # Open to line 42");
-    println!("  lines mydir/ Create new file in directory");
-}
+// /// Prints help message to stdout
+// ///
+// /// # Purpose
+// /// Displays usage information and available commands.
+// /// Called when user runs `lines --help`.
+// pub fn print_help() {
+//     println!("About Lines Editor: (note: ctrl+s can block terminal, ctrl+z unblocks)");
+//     println!("USAGE:");
+//     println!("    lines [FILE]");
+//     println!("    lines FILE:LINE          # Open at : specific line");
+//     println!("OPTIONS:");
+//     println!("    --help, -h      Show this help message");
+//     println!("    --version, -v   Show version information");
+//     println!("MODES:");
+//     println!("    Memo Mode:      Run from home directory, Append-only quickie");
+//     println!("                    Creates dated files in ~/Documents/lines_editor/");
+//     println!("    Full Editor:    Run from any other directory");
+//     println!("DELETE: d");
+//     println!("    Normal Mode: 'd' delete a line");
+//     println!("    Visual Mode  'd'/ Insert Mode '-d': Backspace-Style Delete");
+//     println!("NAVIGATION:");
+//     println!("    hjkl            Move cursor");
+//     println!("    5j, 10l         Move with repeat count");
+//     println!("    [Empty Enter]   Repeat last command (Normal/Visual/ ...?)");
+//     println!("-n -v -wq -q -s -d  Insert Mode: Flag style commands");
+//     println!("Examples in terminal/shell:");
+//     println!("  lines                Memo mode (if in home)");
+//     println!("  lines notes.txt      Create/open notes.txt");
+//     println!("  lines notes.txt:42    # Open to line 42");
+//     println!("  lines mydir/ Create new file in directory");
+// }
 
 /// Formats the bottom info bar with current editor state
 ///

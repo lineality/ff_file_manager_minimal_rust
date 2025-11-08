@@ -93,6 +93,7 @@ enum ActiveTier {
     Tier4,
 }
 
+#[allow(dead_code)]
 impl ActiveTier {
     /// Get capacity in bytes for this tier
     ///
@@ -124,6 +125,7 @@ impl ActiveTier {
     }
 
     /// Get tier number for logging and diagnostics
+    ///
     fn tier_number(&self) -> u8 {
         match self {
             ActiveTier::Tier0 => 0,
@@ -936,6 +938,7 @@ impl CascadingHexCounter {
         Ok(count)
     }
 
+    #[allow(dead_code)]
     /// Reset counter to zero
     ///
     /// # Effects
@@ -974,6 +977,7 @@ impl CascadingHexCounter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     /// Get current active tier number (for diagnostics)
     ///
     /// # Returns
@@ -982,6 +986,7 @@ impl CascadingHexCounter {
         self.current_tier.tier_number()
     }
 
+    #[allow(dead_code)]
     /// Get current digit count (for diagnostics)
     ///
     /// # Returns
