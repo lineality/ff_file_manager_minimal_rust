@@ -14091,6 +14091,18 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
             "../testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest.txt"
         ),
     ),
+    SourcedFile::new(
+        "src/buttons_reversible_edit_changelog_module.rs",
+        include_str!("buttons_reversible_edit_changelog_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/lines_editor_module.rs",
+        include_str!("lines_editor_module.rs"),
+    ),
+    SourcedFile::new(
+        "src/toggle_comment_indent_module.rs",
+        include_str!("toggle_comment_indent_module.rs"),
+    ),
     SourcedFile::new("test.csv", include_str!("../test.csv")),
     SourcedFile::new(".gitignore", include_str!("../.gitignore")),
 ];
