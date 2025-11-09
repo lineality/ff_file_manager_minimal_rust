@@ -6692,11 +6692,11 @@ fn process_user_input(
 
     // command flags that are more than one character long
     match lowercase_input.as_str() {
-        "vsplit" => return Ok(NavigationAction::VsplitTmux),
-        "hsplit" => return Ok(NavigationAction::HsplitTmux),
+        "vsplit" | "-vsplit" => return Ok(NavigationAction::VsplitTmux),
+        "hsplit" | "-hsplit" => return Ok(NavigationAction::HsplitTmux),
         "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
         "--source" => return Ok(NavigationAction::GoToSouceCode),
-        s if get_line_count_options().contains_key(s) => {
+        scurvy_curr if get_line_count_options().contains_key(scurvy_curr) => {
             return Ok(NavigationAction::GoToFileLineCountMode);
         }
         _ => {}
@@ -11610,6 +11610,188 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
     })?;
     let user_input = user_input.trim();
 
+    // ==========================================
+    // === MVP: Tmux splits for lines editor ===
+    // ==========================================
+    // === MVP: Tmux splits for lines editor ===
+    if user_input == "-vsplit" || user_input == "vsplit" {
+        // Check if in tmux
+        if std::env::var("TMUX").is_err() {
+            println!("{}Error: -vsplit requires tmux{}", RED, RESET);
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        // Get the path to the current executable
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Build the command as a single string with full binary path
+        let editor_command = format!(
+            "{} {} --session {}",
+            exe_path.to_string_lossy(),
+            file_path.to_string_lossy(),
+            lines_editor_session_path.to_string_lossy()
+        );
+
+        // Create vertical split (tmux -v = vertical split = horizontal panes)
+        let output = std::process::Command::new("tmux")
+            .args(["split-window", "-v", &editor_command])
+            .output()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        if !output.status.success() {
+            println!(
+                "{}Failed to create tmux split: {}{}",
+                RED,
+                String::from_utf8_lossy(&output.stderr),
+                RESET
+            );
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        return Ok(());
+    }
+
+    if user_input == "-hsplit" || user_input == "hsplit" {
+        // Check if in tmux
+        if std::env::var("TMUX").is_err() {
+            println!("{}Error: -hsplit requires tmux{}", RED, RESET);
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        // Get the path to the current executable
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Build the command as a single string with full binary path
+        let editor_command = format!(
+            "{} {} --session {}",
+            exe_path.to_string_lossy(),
+            file_path.to_string_lossy(),
+            lines_editor_session_path.to_string_lossy()
+        );
+
+        // Create horizontal split (tmux -h = horizontal split = vertical panes)
+        let output = std::process::Command::new("tmux")
+            .args(["split-window", "-h", &editor_command])
+            .output()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        if !output.status.success() {
+            println!(
+                "{}Failed to create tmux split: {}{}",
+                RED,
+                String::from_utf8_lossy(&output.stderr),
+                RESET
+            );
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        return Ok(());
+    }
+
+    // === Handle "lines" keyword - open in new terminal ===
+    // === Handle "lines" keyword - open in new terminal ===
+    if user_input == "lines" {
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Launch in new terminal (platform-specific)
+        #[cfg(target_os = "macos")]
+        {
+            // macOS needs the command as a single string for Terminal.app
+            let lines_command = format!(
+                "{} {} --session {}; exit",
+                exe_path.to_string_lossy(),
+                file_path.to_string_lossy(),
+                lines_editor_session_path.to_string_lossy()
+            );
+
+            std::process::Command::new("open")
+                .args(["-a", "Terminal"])
+                .arg(&lines_command)
+                .spawn()
+                .map_err(|e| FileFantasticError::EditorLaunchFailed(format!("lines: {}", e)))?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let terminal_commands = [
+                ("gnome-terminal", vec!["--"]),
+                ("ptyxis", vec!["--"]),
+                ("konsole", vec!["-e"]),
+                ("xfce4-terminal", vec!["-e"]),
+                ("terminator", vec!["-e"]),
+                ("tilix", vec!["-e"]),
+                ("kitty", vec!["-e"]),
+                ("alacritty", vec!["-e"]),
+                ("xterm", vec!["-e"]),
+            ];
+
+            let mut success = false;
+            for (terminal, args) in terminal_commands.iter() {
+                let mut cmd = std::process::Command::new(terminal);
+                cmd.args(args)
+                    .arg(&exe_path) // Separate arg: executable
+                    .arg(file_path) // Separate arg: file path
+                    .arg("--session") // Separate arg: flag
+                    .arg(lines_editor_session_path); // Separate arg: session path
+
+                if cmd.spawn().is_ok() {
+                    success = true;
+                    break;
+                }
+            }
+
+            if !success {
+                println!(
+                    "{}No terminal available. Press Enter to continue...{}",
+                    RED, RESET
+                );
+                let mut buf = String::new();
+                io::stdin()
+                    .read_line(&mut buf)
+                    .map_err(|e| FileFantasticError::Io(e))?;
+                return open_file(file_path, lines_editor_session_path);
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let lines_command = format!(
+                "{} {} --session {} && pause",
+                exe_path.to_string_lossy(),
+                file_path.to_string_lossy(),
+                lines_editor_session_path.to_string_lossy()
+            );
+
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "cmd", "/C"])
+                .arg(&lines_command)
+                .spawn()
+                .map_err(|e| FileFantasticError::EditorLaunchFailed(format!("lines: {}", e)))?;
+        }
+
+        return Ok(());
+    }
+
     // Check for special flags (headless, tmux splits, and CSV analysis)
     if let Some((editor, flags)) = parse_special_flags(user_input) {
         // User must provide an editor with these flags
@@ -12360,7 +12542,7 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 fn handle_file_open(path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
     match open_file(path, lines_editor_session_path) {
         Ok(_) => {
-            println!("Opened File");
+            println!("Opened File: For Tmux toggle windows with: ctrl b -> o ");
             println!(" Tip: Add partner programs (for processing files) to this config file");
             println!(" /path/to/executable/");
             println!(" └── ff_data/                            <- Created if doesn't exist");
@@ -12661,99 +12843,6 @@ mod levenshtein_tests {
         assert!(result.is_err());
     }
 }
-
-// /// Determines the starting directory path from command line arguments
-// ///
-// /// # Returns
-// /// * `Result<PathBuf>` - The absolute path to start in or error with context
-// ///
-// /// # Behavior
-// /// - If a valid path is provided as first argument, uses that
-// /// - If a file path is provided, uses its parent directory
-// /// - If path doesn't exist or no args provided, uses current directory
-// /// - Converts all paths to absolute paths for clarity
-// ///
-// /// # Error Handling
-// /// - Validates path existence and type
-// /// - Provides clear error messages for invalid paths
-// /// - Falls back to current directory when appropriate
-// /// - Handles failures to determine current or parent directories
-// fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
-//     // Get command line arguments
-//     let args: Vec<String> = std::env::args().skip(1).collect();
-
-//     if args.is_empty() {
-//         // No arguments provided, use current directory
-//         return std::env::current_dir().map_err(|e| {
-//             eprintln!("Failed to get current directory: {}", e);
-//             FileFantasticError::Io(e)
-//         });
-//     }
-
-//     // Use first argument as path
-//     let path_arg = PathBuf::from(&args[0]);
-
-//     // Convert to absolute path if possible
-//     let absolute_path = if path_arg.is_relative() {
-//         // Join with current directory to make absolute
-//         match std::env::current_dir() {
-//             Ok(current_dir) => current_dir.join(&path_arg),
-//             Err(e) => {
-//                 eprintln!("Failed to get current directory: {}", e);
-//                 return Err(FileFantasticError::Io(e));
-//             }
-//         }
-//     } else {
-//         path_arg
-//     };
-
-//     if absolute_path.exists() {
-//         if absolute_path.is_dir() {
-//             // Path is a directory, use it directly
-//             Ok(absolute_path)
-//         } else {
-//             // Path is a file, use its parent directory
-//             match absolute_path.parent() {
-//                 Some(parent) => {
-//                     // Print notice about using parent directory
-//                     println!(
-//                         "Note: Using parent directory of file: {}",
-//                         absolute_path.display()
-//                     );
-//                     println!("Directory: {}", parent.display());
-//                     println!("Press Enter to continue...");
-//                     let mut input = String::new();
-//                     io::stdin().read_line(&mut input).map_err(|e| {
-//                         eprintln!("Failed to read input: {}", e);
-//                         FileFantasticError::Io(e)
-//                     })?;
-
-//                     Ok(PathBuf::from(parent))
-//                 }
-//                 None => {
-//                     // This should rarely happen (e.g., with root files on Windows)
-//                     eprintln!(
-//                         "Cannot determine parent directory of '{}'",
-//                         absolute_path.display()
-//                     );
-//                     Err(FileFantasticError::InvalidName(
-//                         absolute_path.display().to_string(),
-//                     ))
-//                 }
-//             }
-//         }
-//     } else {
-//         // Path doesn't exist, notify user and fall back to current directory
-//         eprintln!(
-//             "Warning: Path '{}' does not exist. Starting in current directory.",
-//             absolute_path.display()
-//         );
-//         std::env::current_dir().map_err(|e| {
-//             eprintln!("Failed to get current directory: {}", e);
-//             FileFantasticError::Io(e)
-//         })
-//     }
-// }
 
 // =================================================
 // Data Structures for Command-Line Arguments
@@ -14030,9 +14119,7 @@ const HELP_MENU_HEADER: &str = r#"
 /// Quick start and examples help section content
 const HELP_SECTION_QUICK_START: &str = r#"
 ═══ QUICK START & EXAMPLES ═══     Press Enter to return to help menu
-
  USAGE in terminal:      ff [OPTIONS] [DIRECTORY]
-
  OPTIONS:
    -h, --help            Show this help menu
    --source              Get ff source code, Rust 'crate'
@@ -14043,6 +14130,8 @@ const HELP_SECTION_QUICK_START: &str = r#"
    ff ~/Documents        Open ff in Documents folder
    ff -h                 View ff help menu
    ff --help             View ff help menu (Alternative)
+   ff /path/to/file.txt --line 42    Open file (to line, optional)
+   ff --session /path/to/session     User existing Lines-Session
 
  BASIC WORKFLOW:
    1. Launch ff in/to any directory
@@ -14673,17 +14762,16 @@ pub fn display_quick_usage_info() -> Result<()> {
         ansi_colors::CYAN,
         ansi_colors::RESET
     );
-    println!();
     println!("{}OPTIONS:{}", ansi_colors::CYAN, ansi_colors::RESET);
     println!("  -h, --help    Show complete help menu.");
     println!("  -v, --version Show build version info.");
     println!("  --source      Get ff source code.");
     println!();
     println!("{}EXAMPLES:{}", ansi_colors::GREEN, ansi_colors::RESET);
-    println!("  ff            Open in current directory");
-    println!("  ff ~/Documents Open in Documents folder");
-    println!("  ff --help     Show help menu");
-    println!("  ff --source   Get crate of source code.");
+    println!("  ff            Open in current directory.");
+    println!("  ff ~/Path     Open dir or open file. ");
+    println!("  ff ~/Path --line       Go to line of file.");
+    println!("  ff ~/Path --session    Use existing lines session. ");
     println!();
     println!("  '--help' and '--source' are commands inside ff too.");
 

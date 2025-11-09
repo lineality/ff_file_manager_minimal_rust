@@ -2574,3 +2574,96 @@ mod tests_starting_location {
         assert!(true); // Placeholder
     }
 }
+
+// /// Determines the starting directory path from command line arguments
+// ///
+// /// # Returns
+// /// * `Result<PathBuf>` - The absolute path to start in or error with context
+// ///
+// /// # Behavior
+// /// - If a valid path is provided as first argument, uses that
+// /// - If a file path is provided, uses its parent directory
+// /// - If path doesn't exist or no args provided, uses current directory
+// /// - Converts all paths to absolute paths for clarity
+// ///
+// /// # Error Handling
+// /// - Validates path existence and type
+// /// - Provides clear error messages for invalid paths
+// /// - Falls back to current directory when appropriate
+// /// - Handles failures to determine current or parent directories
+// fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
+//     // Get command line arguments
+//     let args: Vec<String> = std::env::args().skip(1).collect();
+
+//     if args.is_empty() {
+//         // No arguments provided, use current directory
+//         return std::env::current_dir().map_err(|e| {
+//             eprintln!("Failed to get current directory: {}", e);
+//             FileFantasticError::Io(e)
+//         });
+//     }
+
+//     // Use first argument as path
+//     let path_arg = PathBuf::from(&args[0]);
+
+//     // Convert to absolute path if possible
+//     let absolute_path = if path_arg.is_relative() {
+//         // Join with current directory to make absolute
+//         match std::env::current_dir() {
+//             Ok(current_dir) => current_dir.join(&path_arg),
+//             Err(e) => {
+//                 eprintln!("Failed to get current directory: {}", e);
+//                 return Err(FileFantasticError::Io(e));
+//             }
+//         }
+//     } else {
+//         path_arg
+//     };
+
+//     if absolute_path.exists() {
+//         if absolute_path.is_dir() {
+//             // Path is a directory, use it directly
+//             Ok(absolute_path)
+//         } else {
+//             // Path is a file, use its parent directory
+//             match absolute_path.parent() {
+//                 Some(parent) => {
+//                     // Print notice about using parent directory
+//                     println!(
+//                         "Note: Using parent directory of file: {}",
+//                         absolute_path.display()
+//                     );
+//                     println!("Directory: {}", parent.display());
+//                     println!("Press Enter to continue...");
+//                     let mut input = String::new();
+//                     io::stdin().read_line(&mut input).map_err(|e| {
+//                         eprintln!("Failed to read input: {}", e);
+//                         FileFantasticError::Io(e)
+//                     })?;
+
+//                     Ok(PathBuf::from(parent))
+//                 }
+//                 None => {
+//                     // This should rarely happen (e.g., with root files on Windows)
+//                     eprintln!(
+//                         "Cannot determine parent directory of '{}'",
+//                         absolute_path.display()
+//                     );
+//                     Err(FileFantasticError::InvalidName(
+//                         absolute_path.display().to_string(),
+//                     ))
+//                 }
+//             }
+//         }
+//     } else {
+//         // Path doesn't exist, notify user and fall back to current directory
+//         eprintln!(
+//             "Warning: Path '{}' does not exist. Starting in current directory.",
+//             absolute_path.display()
+//         );
+//         std::env::current_dir().map_err(|e| {
+//             eprintln!("Failed to get current directory: {}", e);
+//             FileFantasticError::Io(e)
+//         })
+//     }
+// }
