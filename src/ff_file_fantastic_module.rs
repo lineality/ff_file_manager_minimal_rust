@@ -12060,6 +12060,14 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
     // ==================
     // Handle empty input - use custom editor
     // ==================
+    /*
+    pub fn lines_full_file_editor(
+        original_file_path: Option<PathBuf>,
+        starting_line: Option<usize>,
+        use_this_session: Option<PathBuf>,
+        state_persists: bool, // if you want to keep session files.
+    ) -> Result<()> {
+    */
     if user_input.is_empty() {
         lines_full_file_editor(
             Some(file_path.clone()),
@@ -12654,97 +12662,846 @@ mod levenshtein_tests {
     }
 }
 
-/// Determines the starting directory path from command line arguments
+// /// Determines the starting directory path from command line arguments
+// ///
+// /// # Returns
+// /// * `Result<PathBuf>` - The absolute path to start in or error with context
+// ///
+// /// # Behavior
+// /// - If a valid path is provided as first argument, uses that
+// /// - If a file path is provided, uses its parent directory
+// /// - If path doesn't exist or no args provided, uses current directory
+// /// - Converts all paths to absolute paths for clarity
+// ///
+// /// # Error Handling
+// /// - Validates path existence and type
+// /// - Provides clear error messages for invalid paths
+// /// - Falls back to current directory when appropriate
+// /// - Handles failures to determine current or parent directories
+// fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
+//     // Get command line arguments
+//     let args: Vec<String> = std::env::args().skip(1).collect();
+
+//     if args.is_empty() {
+//         // No arguments provided, use current directory
+//         return std::env::current_dir().map_err(|e| {
+//             eprintln!("Failed to get current directory: {}", e);
+//             FileFantasticError::Io(e)
+//         });
+//     }
+
+//     // Use first argument as path
+//     let path_arg = PathBuf::from(&args[0]);
+
+//     // Convert to absolute path if possible
+//     let absolute_path = if path_arg.is_relative() {
+//         // Join with current directory to make absolute
+//         match std::env::current_dir() {
+//             Ok(current_dir) => current_dir.join(&path_arg),
+//             Err(e) => {
+//                 eprintln!("Failed to get current directory: {}", e);
+//                 return Err(FileFantasticError::Io(e));
+//             }
+//         }
+//     } else {
+//         path_arg
+//     };
+
+//     if absolute_path.exists() {
+//         if absolute_path.is_dir() {
+//             // Path is a directory, use it directly
+//             Ok(absolute_path)
+//         } else {
+//             // Path is a file, use its parent directory
+//             match absolute_path.parent() {
+//                 Some(parent) => {
+//                     // Print notice about using parent directory
+//                     println!(
+//                         "Note: Using parent directory of file: {}",
+//                         absolute_path.display()
+//                     );
+//                     println!("Directory: {}", parent.display());
+//                     println!("Press Enter to continue...");
+//                     let mut input = String::new();
+//                     io::stdin().read_line(&mut input).map_err(|e| {
+//                         eprintln!("Failed to read input: {}", e);
+//                         FileFantasticError::Io(e)
+//                     })?;
+
+//                     Ok(PathBuf::from(parent))
+//                 }
+//                 None => {
+//                     // This should rarely happen (e.g., with root files on Windows)
+//                     eprintln!(
+//                         "Cannot determine parent directory of '{}'",
+//                         absolute_path.display()
+//                     );
+//                     Err(FileFantasticError::InvalidName(
+//                         absolute_path.display().to_string(),
+//                     ))
+//                 }
+//             }
+//         }
+//     } else {
+//         // Path doesn't exist, notify user and fall back to current directory
+//         eprintln!(
+//             "Warning: Path '{}' does not exist. Starting in current directory.",
+//             absolute_path.display()
+//         );
+//         std::env::current_dir().map_err(|e| {
+//             eprintln!("Failed to get current directory: {}", e);
+//             FileFantasticError::Io(e)
+//         })
+//     }
+// }
+
+// =================================================
+// Data Structures for Command-Line Arguments
+// =================================================
+
+/// Optional command-line flags for Lines editor configuration
+///
+/// # Project Context
+/// File Fantastic can optionally enhance Lines editor launch with:
+/// - Session persistence: Reuse previous editor state from session directory
+/// - Line jumping: Open file at specific line number
+///
+/// These are optional enhancements - Lines editor works without them
+///
+/// # Fields
+/// * `session_path` - Directory containing Lines session files
+///   - None if --session flag not provided or path invalid
+///   - Validated to exist and be a directory
+///
+/// * `starting_line` - Line number to jump to when opening file
+///   - None if --line flag not provided or value invalid
+///   - Any usize value accepted (Lines validates practical range)
+struct OptionalFlags {
+    /// Directory path for Lines session files (--session flag)
+    /// None if flag not provided or path invalid
+    session_path: Option<PathBuf>,
+
+    /// Starting line number for Lines editor (--line flag)
+    /// None if flag not provided or value invalid
+    starting_line: Option<usize>,
+}
+
+/// Complete parsed command-line arguments for File Fantastic
+///
+/// # Project Context
+/// Combines all CLI inputs needed to launch FF with optional Lines editor:
+/// 1. Starting location (file + directory) from positional argument
+/// 2. Optional Lines editor configuration from flags
+///
+/// This allows flexible launch patterns:
+/// - Browse only: `ff` or `ff /path/to/dir`
+/// - Edit + browse: `ff /path/to/file.txt`
+/// - Edit with session: `ff /path/to/file.txt --session /sess`
+/// - Edit at line: `ff /path/to/file.txt --line 42`
+/// - All options: `ff /path/to/file.txt --session /sess --line 42`
+///
+/// # Guarantees
+/// - `starting_location` always present with valid directory
+/// - Optional fields are None if not provided or invalid
+/// - All paths are absolute
+/// - All values validated before inclusion
+struct CommandLineArgs {
+    /// File and directory paths from positional argument
+    /// Always present - contains directory even if no file
+    starting_location: StartingLocation,
+
+    /// Optional Lines editor session directory (--session)
+    /// None if not specified or invalid path
+    session_path: Option<PathBuf>,
+
+    /// Optional starting line number for file editing (--line)
+    /// None if not specified or invalid number
+    starting_line: Option<usize>,
+}
+
+// =================================================
+// Helper: String Trimming for Flag Values
+// =================================================
+
+/// Trims quote characters from start and end of string
+///
+/// # Project Context
+/// Command-line arguments may include quotes for paths with spaces:
+/// `ff --session "/path with spaces/session"`
+///
+/// This helper removes surrounding quotes while preserving internal quotes:
+/// - `"/path/to/file"` → `/path/to/file`
+/// - `'/path/to/file'` → `/path/to/file`
+/// - `"path"with"quotes"` → `path"with"quotes` (keeps internal quotes)
+///
+/// # Arguments
+/// * `value` - String slice to trim
 ///
 /// # Returns
-/// * `Result<PathBuf>` - The absolute path to start in or error with context
+/// * String with leading/trailing quotes removed
+///
+/// # Safety
+/// - Handles both single and double quotes
+/// - Does not modify string if no quotes present
+/// - Preserves internal quotes
+fn trim_quotes(value: &str) -> String {
+    value.trim_matches(|c| c == '"' || c == '\'').to_string()
+}
+
+// =================================================
+// Function 1: Parse Positional Path Argument
+// =================================================
+
+/// Extracts the positional path argument from command line
+///
+/// # Project Context
+/// File Fantastic accepts one positional argument - the path to browse/edit:
+/// - Directory: Start browsing that directory
+/// - File: Open in Lines, then browse parent directory
+/// - No argument: Use current directory
+///
+/// This function ignores all flag arguments (--anything) and extracts
+/// only the first non-flag argument as the path.
+///
+/// # Returns
+/// * `Ok(Option<String>)` - The path argument if found, None if no positional arg
+/// * `Err(FileFantasticError)` - Only on critical failures (should not happen)
 ///
 /// # Behavior
-/// - If a valid path is provided as first argument, uses that
-/// - If a file path is provided, uses its parent directory
-/// - If path doesn't exist or no args provided, uses current directory
-/// - Converts all paths to absolute paths for clarity
+/// - Scans args for first argument NOT starting with `-` or `--`
+/// - Ignores all flag arguments and their values
+/// - Returns None if no positional argument found
+/// - Trims quotes from path if present
+///
+/// # Examples
+/// ```rust,ignore
+/// // ff /path/file.txt --session /sess
+/// // Returns: Some("/path/file.txt")
+///
+/// // ff --session /sess /path/file.txt
+/// // Returns: Some("/path/file.txt")
+///
+/// // ff --session /sess --line 42
+/// // Returns: None (no positional arg)
+///
+/// // ff
+/// // Returns: None (no args)
+/// ```
 ///
 /// # Error Handling
-/// - Validates path existence and type
-/// - Provides clear error messages for invalid paths
-/// - Falls back to current directory when appropriate
-/// - Handles failures to determine current or parent directories
-fn get_starting_path_from_args_or_cwd_default() -> Result<PathBuf> {
-    // Get command line arguments
+/// - Never panics
+/// - Returns None for invalid scenarios (caller handles)
+/// - No side effects (pure function for parsing)
+fn parse_positional_path_arg() -> Result<Option<String>> {
+    // =================================================
+    // Debug-Assert: Validate std::env::args exists
+    // =================================================
+    debug_assert!(
+        std::env::args().len() >= 1,
+        "std::env::args() should always have at least program name"
+    );
+
+    // Get command line arguments (skip program name)
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.is_empty() {
-        // No arguments provided, use current directory
-        return std::env::current_dir().map_err(|e| {
-            eprintln!("Failed to get current directory: {}", e);
-            FileFantasticError::Io(e)
-        });
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[DEBUG] Parsing positional path arg from {} arguments",
+        args.len()
+    );
+
+    // Scan for first non-flag argument
+    for arg in args.iter() {
+        // Skip flag arguments (start with - or --)
+        if arg.starts_with('-') {
+            #[cfg(debug_assertions)]
+            eprintln!("[DEBUG] Skipping flag: {}", arg);
+            continue;
+        }
+
+        // Found positional argument
+        let trimmed_path = trim_quotes(arg);
+
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Found positional path argument: {}", trimmed_path);
+
+        return Ok(Some(trimmed_path));
     }
 
-    // Use first argument as path
-    let path_arg = PathBuf::from(&args[0]);
+    // No positional argument found
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] No positional path argument found");
 
-    // Convert to absolute path if possible
-    let absolute_path = if path_arg.is_relative() {
-        // Join with current directory to make absolute
-        match std::env::current_dir() {
-            Ok(current_dir) => current_dir.join(&path_arg),
-            Err(e) => {
-                eprintln!("Failed to get current directory: {}", e);
-                return Err(FileFantasticError::Io(e));
+    Ok(None)
+}
+
+// =================================================
+// Function 2: Parse Optional Flags
+// =================================================
+
+/// Extracts optional flags (--session, --line) from command line
+///
+/// # Project Context
+/// File Fantastic supports optional flags to enhance Lines editor:
+/// - `--session <path>`: Directory for Lines session persistence
+/// - `--line <number>`: Line number to jump to when opening file
+///
+/// Both flags are optional and independent. Invalid values result in
+/// warnings and fallback to None (non-critical).
+///
+/// # Returns
+/// * `Ok(OptionalFlags)` - Always succeeds, fields are None if invalid/missing
+///
+/// # Behavior
+/// - Scans all arguments for `--session` and `--line` flags
+/// - First occurrence of each flag wins (ignores duplicates)
+/// - Validates session path exists and is directory
+/// - Validates line number is valid usize
+/// - Warns user (println) for invalid values
+/// - Trims quotes from flag values
+/// - Unknown flags are silently ignored
+///
+/// # Examples
+/// ```rust,ignore
+/// // ff --session /valid/path
+/// // Returns: OptionalFlags { session_path: Some("/valid/path"), starting_line: None }
+///
+/// // ff --line 42
+/// // Returns: OptionalFlags { session_path: None, starting_line: Some(42) }
+///
+/// // ff --session /invalid --line abc
+/// // Returns: OptionalFlags { session_path: None, starting_line: None }
+/// // Prints: "Warning: Session path does not exist..."
+/// // Prints: "Warning: Invalid line number..."
+///
+/// // ff --line 10 --line 20
+/// // Returns: OptionalFlags { ..., starting_line: Some(10) } (first wins)
+/// ```
+///
+/// # Error Handling
+/// - Never returns Err (always succeeds with None fallbacks)
+/// - Invalid values produce user warnings (println)
+/// - Debug builds show detailed diagnostics
+/// - Missing flag values handled gracefully
+fn parse_optional_flags() -> Result<OptionalFlags> {
+    // =================================================
+    // Debug-Assert: Validate std::env::args exists
+    // =================================================
+    debug_assert!(
+        std::env::args().len() >= 1,
+        "std::env::args() should always have at least program name"
+    );
+
+    // Get command line arguments (skip program name)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[DEBUG] Parsing optional flags from {} arguments",
+        args.len()
+    );
+
+    let mut session_path: Option<PathBuf> = None;
+    let mut starting_line: Option<usize> = None;
+
+    // Scan arguments for flags
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // =================================================
+        // Parse --session flag
+        // =================================================
+        if arg == "--session" {
+            // Check if already found (first wins)
+            if session_path.is_some() {
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Duplicate --session flag, ignoring");
+                i += 2; // Skip flag and value
+                continue;
+            }
+
+            // Check if value exists (next argument)
+            if i + 1 < args.len() {
+                let session_value = trim_quotes(&args[i + 1]);
+
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Found --session flag with value: {}", session_value);
+
+                // Validate session path
+                let session_pathbuf = PathBuf::from(&session_value);
+
+                if session_pathbuf.exists() && session_pathbuf.is_dir() {
+                    // Valid session directory
+                    session_path = Some(session_pathbuf);
+
+                    #[cfg(debug_assertions)]
+                    eprintln!("[DEBUG] Session path validated successfully");
+                } else {
+                    // Invalid session path
+                    println!(
+                        "Warning: Session path '{}' does not exist or is not a directory.",
+                        session_value
+                    );
+                    println!("Starting without session.");
+
+                    #[cfg(debug_assertions)]
+                    eprintln!("[DEBUG] Session path validation failed");
+                }
+
+                i += 2; // Skip flag and value
+                continue;
+            } else {
+                // Missing value for --session
+                println!("Warning: --session flag provided without path value.");
+                println!("Starting without session.");
+
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] --session flag missing value");
+
+                i += 1; // Skip flag only
+                continue;
             }
         }
-    } else {
-        path_arg
+
+        // =================================================
+        // Parse --line flag
+        // =================================================
+        if arg == "--line" {
+            // Check if already found (first wins)
+            if starting_line.is_some() {
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Duplicate --line flag, ignoring");
+                i += 2; // Skip flag and value
+                continue;
+            }
+
+            // Check if value exists (next argument)
+            if i + 1 < args.len() {
+                let line_value = trim_quotes(&args[i + 1]);
+
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Found --line flag with value: {}", line_value);
+
+                // Parse line number
+                match line_value.parse::<usize>() {
+                    Ok(line_num) => {
+                        // Valid line number
+                        starting_line = Some(line_num);
+
+                        #[cfg(debug_assertions)]
+                        eprintln!("[DEBUG] Line number parsed successfully: {}", line_num);
+                    }
+                    Err(_) => {
+                        // Invalid line number
+                        println!(
+                            "Warning: Invalid line number '{}'. Must be a positive integer.",
+                            line_value
+                        );
+                        println!("Starting at beginning of file.");
+
+                        #[cfg(debug_assertions)]
+                        eprintln!("[DEBUG] Failed to parse line number");
+                    }
+                }
+
+                i += 2; // Skip flag and value
+                continue;
+            } else {
+                // Missing value for --line
+                println!("Warning: --line flag provided without number value.");
+                println!("Starting at beginning of file.");
+
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] --line flag missing value");
+
+                i += 1; // Skip flag only
+                continue;
+            }
+        }
+
+        // Unknown flag or positional argument - ignore and move on
+        i += 1;
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("[DEBUG] Optional flags parsed:");
+        eprintln!("[DEBUG]   session_path: {:?}", session_path);
+        eprintln!("[DEBUG]   starting_line: {:?}", starting_line);
+    }
+
+    Ok(OptionalFlags {
+        session_path,
+        starting_line,
+    })
+}
+
+// =================================================
+// Refactored: Determine Starting Location from Path
+// =================================================
+
+/// Determines starting location (file and/or directory) from a path string
+///
+/// # Project Context
+/// File Fantastic needs to convert a user-provided path into:
+/// 1. Optional file to open in Lines editor
+/// 2. Required directory to browse in FF
+///
+/// This is the core path resolution logic, refactored to accept
+/// a path parameter instead of parsing args internally.
+///
+/// # Arguments
+/// * `path_arg` - Optional path string from command line
+///   - None: Use current directory
+///   - Some(path): Validate and determine type (file vs directory)
+///
+/// # Returns
+/// * `Ok(StartingLocation)` - Success with optional file and required directory
+/// * `Err(FileFantasticError)` - Only if current directory cannot be determined
+///
+/// # Behavior by Input
+/// | Input | `file_to_open` | `directory_to_browse` | Notes |
+/// |-------|----------------|----------------------|--------|
+/// | None | `None` | Current directory | No argument provided |
+/// | Some(dir) | `None` | That directory (absolute) | Valid directory path |
+/// | Some(file) | `Some(file)` | Parent directory (absolute) | Valid file path |
+/// | Some(invalid) | `None` | Current directory | Fallback with warning |
+///
+/// # Path Handling
+/// - Converts all relative paths to absolute
+/// - Validates existence before accepting
+/// - Extracts parent directory for files
+/// - Falls back to current directory on errors
+///
+/// # Error Handling
+/// - Only fails if current directory cannot be determined (critical)
+/// - All other issues result in fallback to current directory
+/// - User-facing warnings for invalid paths
+/// - Debug diagnostics for troubleshooting
+///
+/// # Examples
+/// ```rust,ignore
+/// // No path - use current directory
+/// let loc = determine_starting_location_from_path(None)?;
+///
+/// // Directory path
+/// let loc = determine_starting_location_from_path(Some("/home/user".to_string()))?;
+///
+/// // File path
+/// let loc = determine_starting_location_from_path(Some("/home/user/file.txt".to_string()))?;
+/// ```
+fn determine_starting_location_from_path(path_arg: Option<String>) -> Result<StartingLocation> {
+    // =================================================
+    // Case 1: No Path Argument Provided
+    // =================================================
+    let Some(path_string) = path_arg else {
+        // No argument - use current directory, no file to open
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] No path argument provided, using current directory");
+
+        let current_dir = std::env::current_dir().map_err(|e| {
+            // Critical failure - cannot determine current directory
+            #[cfg(debug_assertions)]
+            eprintln!("[DEBUG] Failed to get current directory: {}", e);
+
+            FileFantasticError::Io(e)
+        })?;
+
+        return Ok(StartingLocation {
+            file_to_open: None,
+            directory_to_browse: current_dir,
+        });
     };
 
-    if absolute_path.exists() {
-        if absolute_path.is_dir() {
-            // Path is a directory, use it directly
-            Ok(absolute_path)
-        } else {
-            // Path is a file, use its parent directory
-            match absolute_path.parent() {
-                Some(parent) => {
-                    // Print notice about using parent directory
-                    println!(
-                        "Note: Using parent directory of file: {}",
-                        absolute_path.display()
-                    );
-                    println!("Directory: {}", parent.display());
-                    println!("Press Enter to continue...");
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input).map_err(|e| {
-                        eprintln!("Failed to read input: {}", e);
-                        FileFantasticError::Io(e)
-                    })?;
+    // =================================================
+    // Case 2: Path Argument Provided - Parse
+    // =================================================
+    let path_buf = PathBuf::from(&path_string);
 
-                    Ok(PathBuf::from(parent))
-                }
-                None => {
-                    // This should rarely happen (e.g., with root files on Windows)
-                    eprintln!(
-                        "Cannot determine parent directory of '{}'",
-                        absolute_path.display()
-                    );
-                    Err(FileFantasticError::InvalidName(
-                        absolute_path.display().to_string(),
-                    ))
-                }
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] Path argument provided: {}", path_buf.display());
+
+    // =================================================
+    // Convert to Absolute Path
+    // =================================================
+    let absolute_path = if path_buf.is_relative() {
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Path is relative, converting to absolute");
+
+        // Get current directory to resolve relative path
+        let current_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                // Cannot determine current directory - critical failure
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[DEBUG] Failed to get current directory for relative path resolution: {}",
+                    e
+                );
+
+                return Err(FileFantasticError::Io(e));
             }
-        }
+        };
+
+        // Join current directory with relative path
+        current_dir.join(&path_buf)
     } else {
-        // Path doesn't exist, notify user and fall back to current directory
-        eprintln!(
+        // Already absolute, use as-is
+        path_buf
+    };
+
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] Absolute path: {}", absolute_path.display());
+
+    // =================================================
+    // Case 3: Check if Path Exists
+    // =================================================
+    if !absolute_path.exists() {
+        // Path doesn't exist - fall back to current directory
+        println!(
             "Warning: Path '{}' does not exist. Starting in current directory.",
             absolute_path.display()
         );
-        std::env::current_dir().map_err(|e| {
-            eprintln!("Failed to get current directory: {}", e);
-            FileFantasticError::Io(e)
-        })
+
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Path does not exist, falling back to current directory");
+
+        // Get current directory as fallback
+        let fallback_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                // Cannot get current directory - critical failure
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[DEBUG] Failed to get current directory for fallback: {}",
+                    e
+                );
+
+                return Err(FileFantasticError::Io(e));
+            }
+        };
+
+        return Ok(StartingLocation {
+            file_to_open: None,
+            directory_to_browse: fallback_dir,
+        });
     }
+
+    // =================================================
+    // Case 4: Path Exists - Determine Type
+    // =================================================
+
+    if absolute_path.is_dir() {
+        // =================================================
+        // Case 4a: Path is a Directory
+        // =================================================
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Path is a directory");
+
+        return Ok(StartingLocation {
+            file_to_open: None,
+            directory_to_browse: absolute_path,
+        });
+    } else {
+        // =================================================
+        // Case 4b: Path is a File
+        // =================================================
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Path is a file");
+
+        // Notify user about file opening and directory
+        println!("Opening file: {}", absolute_path.display());
+
+        // Extract parent directory for browsing
+        match absolute_path.parent() {
+            Some(parent) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Using parent directory: {}", parent.display());
+
+                println!("Starting directory: {}", parent.display());
+
+                // Return file to open and parent directory to browse
+                Ok(StartingLocation {
+                    file_to_open: Some(absolute_path.clone()),
+                    directory_to_browse: PathBuf::from(parent),
+                })
+            }
+            None => {
+                // No parent directory (rare edge case)
+                println!(
+                    "Warning: Cannot determine parent directory of '{}'. Starting in current directory.",
+                    absolute_path.display()
+                );
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[DEBUG] Cannot determine parent directory, falling back to current directory"
+                );
+
+                // Get current directory as fallback
+                let fallback_dir = match std::env::current_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        // Cannot get current directory - critical failure
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[DEBUG] Failed to get current directory for fallback: {}",
+                            e
+                        );
+
+                        return Err(FileFantasticError::Io(e));
+                    }
+                };
+
+                // File exists but no parent - cannot use file
+                Ok(StartingLocation {
+                    file_to_open: None,
+                    directory_to_browse: fallback_dir,
+                })
+            }
+        }
+    }
+}
+
+// =================================================
+// Function 3: Orchestrator - Parse All Arguments
+// =================================================
+
+/// Parses all command-line arguments for File Fantastic
+///
+/// # Project Context
+/// File Fantastic launches with flexible command-line options:
+/// - Positional argument: Path to file or directory
+/// - Optional --session flag: Lines editor session directory
+/// - Optional --line flag: Starting line number for file editing
+///
+/// This orchestrator combines all parsing logic:
+/// 1. Extract positional path argument
+/// 2. Extract optional flags (--session, --line)
+/// 3. Validate and combine into unified structure
+///
+/// # Returns
+/// * `Ok(CommandLineArgs)` - Success with all parsed arguments
+/// * `Err(FileFantasticError)` - Only on critical failures (cannot determine directory)
+///
+/// # Behavior
+/// - Delegates positional parsing to `parse_positional_path_arg()`
+/// - Delegates flag parsing to `parse_optional_flags()`
+/// - Delegates location resolution to `determine_starting_location_from_path()`
+/// - Combines results into unified `CommandLineArgs` structure
+/// - Only fails if starting directory cannot be determined
+///
+/// # Error Handling
+/// - Critical: Cannot determine starting directory → Err
+/// - Non-critical: Invalid flags → None with warnings
+/// - Non-critical: Invalid path → Fallback to current directory
+///
+/// # Examples
+/// ```rust,ignore
+/// // Parse all arguments
+/// let args = parse_all_command_line_args()?;
+///
+/// // Access parsed values
+/// if let Some(file) = args.starting_location.file_to_open {
+///     // Open file in Lines editor
+/// }
+/// let dir = args.starting_location.directory_to_browse;
+/// // Start FF in directory
+/// ```
+fn parse_all_command_line_args() -> Result<CommandLineArgs> {
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] === Parsing all command-line arguments ===");
+
+    // =================================================
+    // Step 1: Parse Positional Path Argument
+    // =================================================
+    let path_arg = parse_positional_path_arg()?;
+
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] Positional path: {:?}", path_arg);
+
+    // =================================================
+    // Step 2: Determine Starting Location
+    // =================================================
+    let starting_location = determine_starting_location_from_path(path_arg)?;
+
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("[DEBUG] Starting location determined:");
+        eprintln!(
+            "[DEBUG]   file_to_open: {:?}",
+            starting_location.file_to_open
+        );
+        eprintln!(
+            "[DEBUG]   directory_to_browse: {}",
+            starting_location.directory_to_browse.display()
+        );
+    }
+
+    // =================================================
+    // Step 3: Parse Optional Flags
+    // =================================================
+    let optional_flags = parse_optional_flags()?;
+
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("[DEBUG] Optional flags parsed:");
+        eprintln!("[DEBUG]   session_path: {:?}", optional_flags.session_path);
+        eprintln!(
+            "[DEBUG]   starting_line: {:?}",
+            optional_flags.starting_line
+        );
+    }
+
+    // =================================================
+    // Step 4: Combine into CommandLineArgs
+    // =================================================
+    let cli_args = CommandLineArgs {
+        starting_location,
+        session_path: optional_flags.session_path,
+        starting_line: optional_flags.starting_line,
+    };
+
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] === Command-line arguments parsed successfully ===");
+
+    Ok(cli_args)
+}
+
+/// Represents the starting location for File Fantastic application
+///
+/// # Project Context
+/// File Fantastic (FF) has dual modes:
+/// 1. File editing - Opens Lines editor for a specific file
+/// 2. Directory navigation - Browses and manages files in a directory
+///
+/// This struct separates these concerns, allowing FF to:
+/// - Open a file in Lines editor first (if user provided a file path)
+/// - Then start FF navigation in the appropriate directory
+///
+/// # Fields
+/// * `file_to_open` - Optional file path to open in Lines editor before starting FF
+///   - `Some(path)` when user provides a file path as argument
+///   - `None` when user provides a directory or no argument
+///
+/// * `directory_to_browse` - Directory where FF will start browsing
+///   - Guaranteed to be a valid, absolute, accessible directory path
+///   - Never None - always falls back to current directory if needed
+///   - If user provides a file, this is the file's parent directory
+///   - If user provides a directory, this is that directory
+///   - If no args or invalid args, this is the current working directory
+///
+/// # Guarantees
+/// - All paths are absolute (never relative)
+/// - `directory_to_browse` always exists and is accessible
+/// - `file_to_open` exists if `Some` (but may not be readable - caller's responsibility)
+struct StartingLocation {
+    /// Optional file path to open in Lines editor before starting FF
+    file_to_open: Option<PathBuf>,
+
+    /// Directory where FF will start browsing (guaranteed valid)
+    directory_to_browse: PathBuf,
 }
 
 /// Checks if input is a "previous page" command
@@ -14536,16 +15293,71 @@ pub fn file_fantastic() -> Result<PathBuf> {
             }
         }
     }
-    // Get starting directory from args or default to current directory
-    let mut current_directory_path = match get_starting_path_from_args_or_cwd_default() {
-        Ok(path) => path,
+
+    // // Get starting directory from args or default to current directory
+    // let mut current_directory_path = match get_starting_path_from_args_or_cwd_default() {
+    //     Ok(path) => path,
+    //     Err(e) => {
+    //         // Critical failure - unable to determine any starting directory
+    //         eprintln!("Unable to determine starting directory: {}", e);
+    //         eprintln!("This may be due to permission issues or missing directories.");
+    //         return Err(e);
+    //     }
+    // };
+
+    // =================================================
+    // Parse All Command-Line Arguments
+    // =================================================
+    let cli_args = match parse_all_command_line_args() {
+        Ok(args) => args,
         Err(e) => {
-            // Critical failure - unable to determine any starting directory
-            eprintln!("Unable to determine starting directory: {}", e);
-            eprintln!("This may be due to permission issues or missing directories.");
+            // Critical failure - cannot determine starting location
+            println!("Unable to determine starting location.");
+
+            #[cfg(debug_assertions)]
+            eprintln!("[DEBUG] Fatal error: {}", e);
+
             return Err(e);
         }
     };
+
+    // =================================================
+    // Launch Lines Editor if File Provided
+    // =================================================
+    if let Some(file_path) = cli_args.starting_location.file_to_open {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[DEBUG] Launching Lines editor for file: {}",
+            file_path.display()
+        );
+
+        // Attempt to open file in Lines editor
+        // Lines failure is non-fatal - FF will still start
+        match lines_full_file_editor(
+            Some(file_path.clone()),
+            cli_args.starting_line,
+            cli_args.session_path.clone(),
+            true, // state_persists always true
+        ) {
+            Ok(_) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Lines editor completed successfully");
+            }
+            Err(_e) => {
+                // Lines editor failed - warn but continue to FF
+                println!("Warning: Could not open file in Lines editor.");
+                println!("Continuing with File Fantastic...");
+
+                #[cfg(debug_assertions)]
+                eprintln!("[DEBUG] Lines editor error: {}", _e);
+            }
+        }
+    }
+
+    // =================================================
+    // Start File Fantastic in Appropriate Directory
+    // =================================================
+    let mut current_directory_path = cli_args.starting_location.directory_to_browse;
 
     // Display startup information for transparency
     println!("Using directory: {}", current_directory_path.display());
