@@ -1634,7 +1634,6 @@ impl From<ButtonError> for LinesError {
             // Assertion violations map to our catch-handle error
             ButtonError::AssertionViolation { check } => {
                 LinesError::GeneralAssertionCatchViolation(
-                    // format!("Button system: {}", check).into(),
                     stack_format_it("Button system: {}", &[&check], "Button system").into(),
                 )
             }
@@ -1934,10 +1933,287 @@ where
 // ============================================================================
 
 // =========
+// =========
 // Utilities
 // =========
+// =========
 
-// experimental formatting... e.g. :<3
+// ===============
+// stack_format_it
+// ===============
+/// Formats a byte as 2-digit uppercase hexadecimal with optional ANSI styling.
+/// **ZERO HEAP ALLOCATION**
+///
+/// ## Project Context
+/// Used in hex editor display to show byte values with cursor highlighting.
+/// Formats bytes as "XX " (3 chars) or with ANSI escape codes for highlighting.
+/// Writes directly to provided stack buffer - NO heap allocation.
+///
+/// ## Operation
+/// - Normal mode: Writes "42 " to buffer (3 bytes)
+/// - Highlight mode: Writes ANSI codes + hex + reset to buffer
+/// - Pure stack-based: Uses only provided buffer
+///
+/// ## Safety & Error Handling
+/// - No panic: Returns None if buffer too small
+/// - No heap: Uses only caller-provided stack buffer
+/// - No allocations: Direct byte writes only
+///
+/// ## Parameters
+/// - `byte`: The byte value to format (0x00-0xFF)
+/// - `buf`: Mutable stack buffer to write into (caller-provided)
+/// - `highlight`: If true, wraps with ANSI color codes
+/// - `bold`: ANSI bold code (typically "\x1b[1m")
+/// - `red`: ANSI red foreground code
+/// - `bg_white`: ANSI white background code
+/// - `reset`: ANSI reset code (typically "\x1b[0m")
+///
+/// ## Returns
+/// - `Some(&str)`: Formatted string borrowing from buf
+/// - `None`: Buffer too small
+///
+/// ## Example use:
+/// ```rust
+/// let mut buf = [0u8; 64];
+///
+/// // Normal byte
+/// if let Some(hex) = stack_format_hex_zero(0x42, &mut buf, false, "", "", "", "") {
+///     print!("{}", hex); // "42 "
+/// }
+///
+/// // Highlighted byte
+/// if let Some(hex) = stack_format_hex_zero(0x42, &mut buf, true, BOLD, RED, BG_WHITE, RESET) {
+///     print!("{}", hex); // "\x1b[1m\x1b[31m\x1b[47m42\x1b[0m "
+/// }
+/// ```
+pub fn stack_format_hex<'a>(
+    byte: u8,
+    buf: &'a mut [u8],
+    highlight: bool,
+    bold: &str,
+    red: &str,
+    bg_white: &str,
+    reset: &str,
+) -> Option<&'a str> {
+    let mut pos = 0;
+
+    if highlight {
+        // Add ANSI codes before hex
+        for code in &[bold, red, bg_white] {
+            let code_bytes = code.as_bytes();
+            if pos + code_bytes.len() > buf.len() {
+                return None; // Buffer too small
+            }
+            buf[pos..pos + code_bytes.len()].copy_from_slice(code_bytes);
+            pos += code_bytes.len();
+        }
+    }
+
+    // Format byte as 2-digit hex (pure stack operation)
+    let hex_chars = b"0123456789ABCDEF";
+    let high = (byte >> 4) as usize;
+    let low = (byte & 0x0F) as usize;
+
+    if pos + 2 > buf.len() {
+        return None; // Buffer too small
+    }
+
+    buf[pos] = hex_chars[high];
+    buf[pos + 1] = hex_chars[low];
+    pos += 2;
+
+    if highlight {
+        // Add reset code after hex
+        let reset_bytes = reset.as_bytes();
+        if pos + reset_bytes.len() > buf.len() {
+            return None; // Buffer too small
+        }
+        buf[pos..pos + reset_bytes.len()].copy_from_slice(reset_bytes);
+        pos += reset_bytes.len();
+    }
+
+    // Add trailing space
+    if pos + 1 > buf.len() {
+        return None; // Buffer too small
+    }
+    buf[pos] = b' ';
+    pos += 1;
+
+    // Return slice of buffer (guaranteed valid ASCII, thus valid UTF-8)
+    std::str::from_utf8(&buf[..pos]).ok()
+}
+/// Converts byte to raw string representation with escape sequences.
+/// **ZERO HEAP ALLOCATION**
+///
+/// ## Project Context
+/// Used in hex editor to display bytes as readable escape sequences.
+/// Shows special characters (\n, \t) and non-printable bytes (\xHH) in a
+/// human-readable format. Writes directly to provided stack buffer - NO heap.
+///
+/// ## Operation
+/// - Printable ASCII (0x20-0x7E) → writes as single character
+/// - Special chars (newline, tab, etc.) → writes escape sequence
+/// - Non-printable bytes → writes hex escape \xHH
+/// - Pure stack-based: Uses only provided buffer
+///
+/// ## Safety & Error Handling
+/// - No panic: Returns None if buffer too small
+/// - No heap: Uses only caller-provided stack buffer
+/// - Bounded output: Maximum 4 bytes (\xHH)
+/// - Pre-validated: All paths write valid UTF-8
+///
+/// ## Parameters
+/// - `byte`: Single byte to convert (0x00-0xFF)
+/// - `buf`: Mutable stack buffer to write into (min 4 bytes)
+///
+/// ## Returns
+/// - `Some(&str)`: Formatted string borrowing from buf (1-4 chars)
+/// - `None`: Buffer too small (< 4 bytes)
+///
+/// ## Examples
+/// ```rust
+/// let mut buf = [0u8; 4];
+///
+/// stack_format_byte_escape(0x0A, &mut buf) // Some("\\n")
+/// stack_format_byte_escape(0x48, &mut buf) // Some("H")
+/// stack_format_byte_escape(0x00, &mut buf) // Some("\\0")
+/// stack_format_byte_escape(0x09, &mut buf) // Some("\\t")
+/// ```
+pub fn stack_format_byte_escape<'a>(byte: u8, buf: &'a mut [u8]) -> Option<&'a str> {
+    let len: usize;
+
+    match byte {
+        0x0A => {
+            // Newline: \n
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b'n';
+            len = 2;
+        }
+        0x09 => {
+            // Tab: \t
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b't';
+            len = 2;
+        }
+        0x0D => {
+            // Carriage return: \r
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b'r';
+            len = 2;
+        }
+        0x5C => {
+            // Backslash: \\
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b'\\';
+            len = 2;
+        }
+        0x22 => {
+            // Quote: \"
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b'"';
+            len = 2;
+        }
+        0x00 => {
+            // Null: \0
+            if buf.len() < 2 {
+                return None;
+            }
+            buf[0] = b'\\';
+            buf[1] = b'0';
+            len = 2;
+        }
+        0x20..=0x7E => {
+            // Printable ASCII
+            if buf.is_empty() {
+                return None;
+            }
+            buf[0] = byte;
+            len = 1;
+        }
+        _ => {
+            // Non-printable: \xHH
+            if buf.len() < 4 {
+                return None;
+            }
+            let hex_chars = b"0123456789ABCDEF";
+            buf[0] = b'\\';
+            buf[1] = b'x';
+            buf[2] = hex_chars[(byte >> 4) as usize];
+            buf[3] = hex_chars[(byte & 0x0F) as usize];
+            len = 4;
+        }
+    }
+
+    // Return slice (guaranteed valid UTF-8 - we only write ASCII)
+    std::str::from_utf8(&buf[..len]).ok()
+}
+#[cfg(test)]
+mod hex_format_tests {
+    use super::*;
+
+    #[test]
+    fn test_hex_zero_normal() {
+        let mut buf = [0u8; 64];
+        let result = stack_format_hex(0x42, &mut buf, false, "", "", "", "");
+        assert_eq!(result, Some("42 "));
+    }
+
+    #[test]
+    fn test_hex_zero_highlighted() {
+        let mut buf = [0u8; 64];
+        let result = stack_format_hex(0x42, &mut buf, true, "[B]", "[R]", "[W]", "[RST]");
+        assert_eq!(result, Some("[B][R][W]42[RST] "));
+    }
+
+    #[test]
+    fn test_hex_zero_buffer_too_small() {
+        let mut buf = [0u8; 2]; // Too small
+        let result = stack_format_hex(0x42, &mut buf, false, "", "", "", "");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_byte_escape_zero_printable() {
+        let mut buf = [0u8; 4];
+        assert_eq!(stack_format_byte_escape(b'H', &mut buf), Some("H"));
+    }
+
+    #[test]
+    fn test_byte_escape_zero_special() {
+        let mut buf = [0u8; 4];
+        assert_eq!(stack_format_byte_escape(0x0A, &mut buf), Some("\\n"));
+        assert_eq!(stack_format_byte_escape(0x09, &mut buf), Some("\\t"));
+    }
+
+    #[test]
+    fn test_byte_escape_zero_nonprintable() {
+        let mut buf = [0u8; 4];
+        assert_eq!(stack_format_byte_escape(0xFF, &mut buf), Some("\\xFF"));
+    }
+
+    #[test]
+    fn test_byte_escape_zero_buffer_too_small() {
+        let mut buf = [0u8; 1]; // Too small for \xHH
+        let result = stack_format_byte_escape(0xFF, &mut buf);
+        assert_eq!(result, None);
+    }
+}
+
 /// Formats a message with placeholders supporting alignment and width specifiers.
 ///
 /// ## Project Context
@@ -2013,7 +2289,7 @@ where
 ///     "Invalid byte range"
 /// );
 /// ```
-fn stack_format_it(template: &str, inserts: &[&str], fallback: &str) -> String {
+pub fn stack_format_it(template: &str, inserts: &[&str], fallback: &str) -> String {
     // Internal stack buffer for result
     let mut buf = [0u8; 512];
 
@@ -2253,6 +2529,9 @@ fn apply_format_spec(value: &str, spec: &FormatSpec) -> String {
         }
     }
 }
+// ======================
+// End of stack_format_it
+// ======================
 
 // ============================================================================
 // SAVE-AS-COPY OPERATION: Configuration Constants
@@ -2801,18 +3080,34 @@ pub fn createarchive_timestamp_with_precision(
             return String::from("1970_70_01_01_00_00_00");
         }
     }
+    let two_dig = year % 100;
 
     // Build base timestamp with YYYY prefix
-    let base_timestamp = format!(
+    let base_timestamp = stack_format_it(
         "{:04}_{:02}_{:02}_{:02}_{:02}_{:02}_{:02}",
-        year,       // Four-digit year
-        year % 100, // Two-digit year
-        month,
-        day,
-        hour,
-        minute,
-        second
+        &[
+            &year.to_string(),
+            &two_dig.to_string(),
+            &month.to_string(),
+            &day.to_string(),
+            &hour.to_string(),
+            &minute.to_string(),
+            &second.to_string(),
+        ],
+        "YYYY_MM_DD_HH_MM_OOPS",
     );
+
+    // // Build base timestamp with YYYY prefix
+    // let base_timestamp = format!(
+    //     "{:04}_{:02}_{:02}_{:02}_{:02}_{:02}_{:02}",
+    //     year,       // Four-digit year
+    //     year % 100, // Two-digit year
+    //     month,
+    //     day,
+    //     hour,
+    //     minute,
+    //     second
+    // );
 
     if !include_microseconds {
         return base_timestamp;
@@ -2820,6 +3115,13 @@ pub fn createarchive_timestamp_with_precision(
 
     // Add microseconds component
     let microseconds = duration_since_epoch.as_micros() % 1_000_000;
+
+    // // TODO add formatting ability?
+    // stack_format_it(
+    //     "{}_{:06}",
+    //     &[&base_timestamp.to_string(), &base_timestamp.to_string()],
+    //     "{}_{:06}",
+    // )
 
     format!("{}_{:06}", base_timestamp, microseconds)
 }
@@ -2853,7 +3155,11 @@ impl FixedSize32Timestamp {
         if s.len() > MAX_LEN {
             return Err(LinesError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("String too long: {} bytes, max: {}", s.len(), MAX_LEN),
+                stack_format_it(
+                    "impl FixedSize32Timestamp String too long: {} bytes, max: {}",
+                    &[&s.len().to_string(), &MAX_LEN.to_string()],
+                    "impl FixedSize32Timestamp String too long: __ bytes, max: __",
+                ),
             )));
         }
 
@@ -2906,7 +3212,11 @@ impl FixedSize32Timestamp {
         std::str::from_utf8(&self.data[..self.len]).map_err(|e| {
             LinesError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid UTF-8 in FixedSize32Timestamp: {}", e),
+                stack_format_it(
+                    "Invalid UTF-8 in FixedSize32Timestamp: {}",
+                    &[&e.to_string()],
+                    "Invalid UTF-8 in FixedSize32Timestamp",
+                ),
             ))
         })
     }
@@ -3099,7 +3409,6 @@ pub fn count_lines_in_file(file_path: &Path) -> Result<(usize, u64)> {
 
     let mut file = File::open(file_path).map_err(|e| {
         log_error(
-            // &format!("Cannot open file for line count: {}", e),
             &stack_format_it(
                 "Cannot open file for line count: {}",
                 &[&e.to_string()],
@@ -3177,8 +3486,18 @@ pub fn count_lines_in_file(file_path: &Path) -> Result<(usize, u64)> {
             }
             Err(e) => {
                 // Read error - propagate
+                #[cfg(debug_assertions)]
                 log_error(
-                    &format!("Read error at byte {}: {}", current_byte_position, e),
+                    &stack_format_it(
+                        "Read error at byte {}: {}",
+                        &[&current_byte_position.to_string(), &e.to_string()],
+                        "count_lines_in_file Read error",
+                    ),
+                    Some("count_lines_in_file"),
+                );
+                // safe
+                log_error(
+                    "count_lines_in_file Read error",
                     Some("count_lines_in_file"),
                 );
                 return Err(LinesError::Io(e));
@@ -5552,12 +5871,22 @@ impl EditorState {
 
                         let _ = self.set_info_bar_message("Byte written");
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         // Error already logged by write_n_log_hex_edit_in_place()
                         // Just show user-friendly message
                         let _ = self.set_info_bar_message("Edit failed");
+                        #[cfg(debug_assertions)]
                         log_error(
-                            &format!("Hex edit failed: {}", e),
+                            &stack_format_it(
+                                "Hex edit failed: {}",
+                                &[&_e.to_string()],
+                                "Hex edit failed",
+                            ),
+                            Some("handle_parse_hex_mode_input_and_commands"),
+                        );
+                        // safe
+                        log_error(
+                            "Hex edit failed",
                             Some("handle_parse_hex_mode_input_and_commands"),
                         );
                         // Continue editor loop - let user try again
@@ -5675,11 +6004,14 @@ impl EditorState {
                                 // Non-critical: Log error but don't fail the insertion
                                 #[cfg(debug_assertions)]
                                 log_error(
-                                    &format!("Cannot get changelog directory: {}", _e),
+                                    &stack_format_it(
+                                        "Cannot get changelog directory: {}",
+                                        &[&_e.to_string()],
+                                        "Cannot get changelog directory",
+                                    ),
                                     Some("insert_newline_at_cursor_chunked:changelog"),
                                 );
-
-                                #[cfg(not(debug_assertions))]
+                                // safe
                                 log_error(
                                     "Cannot get changelog directory",
                                     Some("insert_newline_at_cursor_chunked:changelog"),
@@ -5731,7 +6063,7 @@ impl EditorState {
                                             Some("insert_newline_at_cursor_chunked:changelog"),
                                         );
 
-                                        #[cfg(not(debug_assertions))]
+                                        // safe
                                         log_error(
                                             "Failed to log newline",
                                             Some("insert_newline_at_cursor_chunked:changelog"),
@@ -7687,7 +8019,12 @@ fn is_leap_year(year: u64) -> bool {
 //         .map_err(|e| {
 //             io::Error::new(
 //                 io::ErrorKind::NotFound,
-//                 format!("Could not find home directory: {}", e),
+//                 // format!("get_default_filepath Could not find home directory: {}", e),
+//                 stack_format_it(
+//                     "get_default_filepath Could not find home directory: {}",
+//                     &[&e.to_string()],
+//                     "get_default_filepath Could not find home directory",
+//                 ),
 //             )
 //         })?;
 
@@ -7704,8 +8041,10 @@ fn is_leap_year(year: u64) -> bool {
 
 //     // Create filename based on whether custom_name is provided
 //     let filename = match custom_name {
-//         Some(name) => format!("{}_{}.txt", name, timestamp),
-//         None => format!("{}.txt", timestamp),
+//         // Some(name) => format!("{}_{}.txt", name, timestamp),
+//         // None => format!("{}.txt", timestamp),
+//         Some(name) => stack_format_it("{}_{}.txt", &[&name, &timestamp.to_string()], "N_N.txt"),
+//         None => stack_format_it("{}.txt", &[&timestamp.to_string()], "N_N.txt"),
 //     };
 
 //     // Join the base path with the filename
@@ -8031,9 +8370,10 @@ fn seek_to_line_number(file: &mut File, target_line: usize) -> io::Result<u64> {
                 // EOF before reaching target line
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    format!(
-                        "File only has {} lines, requested line {}",
-                        current_line, target_line
+                    stack_format_it(
+                        "seek_to_line_number File only has {} lines, requested line {}",
+                        &[&current_line.to_string(), &target_line.to_string()],
+                        "seek_to_line_number File only has N lines, requested line N",
                     ),
                 ));
             }
@@ -8111,7 +8451,11 @@ pub fn build_windowmap_nowrap(state: &mut EditorState, readcopy_file_path: &Path
     if !readcopy_file_path.exists() {
         return Err(LinesError::Io(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("File not found: {:?}", readcopy_file_path),
+            stack_format_it(
+                "File not found: {:?}",
+                &[&readcopy_file_path.to_string_lossy()],
+                "File not found",
+            ),
         )));
     }
 
@@ -10188,7 +10532,6 @@ pub fn cleanup_all_session_directory(session_dir: &Path) -> io::Result<()> {
     fs::remove_dir_all(session_dir).map_err(|e| {
         io::Error::new(
             io::ErrorKind::Other,
-            // format!("Failed to remove session directory: {}", e),
             stack_format_it(
                 "Failed to remove session directory: {}",
                 &[&e.to_string()],
@@ -11137,13 +11480,11 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Rebuild window to show the new position
                     build_windowmap_nowrap(lines_editor_state, &base_edit_filepath)?;
 
-                    let _ = lines_editor_state
-                        // .set_info_bar_message(&format!("Jumped to line {}", line_number));
-                        .set_info_bar_message(&stack_format_it(
-                            "Jumped to line {}",
-                            &[&line_number.to_string()],
-                            "Jumped to line",
-                        ));
+                    let _ = lines_editor_state.set_info_bar_message(&stack_format_it(
+                        "Jumped to line {}",
+                        &[&line_number.to_string()],
+                        "Jumped to line",
+                    ));
                     Ok(true)
                 }
                 Err(_) => {
@@ -11213,15 +11554,11 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Rebuild window to show the new position
                     build_windowmap_nowrap(lines_editor_state, &base_edit_filepath)?;
 
-                    // let _ = lines_editor_state
-                    //     .set_info_bar_message(&format!("Jumped to line {}", line_number));
-                    let _ = lines_editor_state
-                        // .set_info_bar_message(&format!("Jumped to line {}", line_number));
-                        .set_info_bar_message(&stack_format_it(
-                            "Jumped to line {}",
-                            &[&line_number.to_string()],
-                            "Jumped to line",
-                        ));
+                    let _ = lines_editor_state.set_info_bar_message(&stack_format_it(
+                        "Jumped to line {}",
+                        &[&line_number.to_string()],
+                        "Jumped to line",
+                    ));
                     Ok(true)
                 }
                 Err(_) => {
@@ -11904,7 +12241,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     #[cfg(not(debug_assertions))]
                     let _ = lines_editor_state.set_info_bar_message(&info_message);
 
-                    // Prod Safe
+                    // Prod Safe (e.g. size)
                     let info_message = "Can't write,path exists?";
 
                     let _ = lines_editor_state.set_info_bar_message(&info_message);
@@ -12168,8 +12505,10 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
         }
     }
 
+    // message? 'end of line'?
     // let _ = lines_editor_state.set_info_bar_message(&format!("end of line ({} chars)", char_count));
-    let _ = lines_editor_state.set_info_bar_message(&char_count.to_string());
+    // let _ = lines_editor_state.set_info_bar_message(&char_count.to_string());
+    let _ = lines_editor_state.set_info_bar_message("end of line");
     Ok(())
 }
 
@@ -12226,11 +12565,10 @@ fn backspace_style_delete_noload(
                         // Invalid UTF-8 - log but continue with deletion
                         #[cfg(debug_assertions)]
                         log_error(
-                            // &format!("Invalid UTF-8 at position {}", prev_char_start),
                             &stack_format_it(
-                                "Invalid UTF-8 at position {}",
+                                "backspace_style_delete_noload Invalid UTF-8 at position {}",
                                 &[&prev_char_start.to_string()],
-                                "Invalid UTF-8 at position",
+                                "backspace_style_delete_noload Invalid UTF-8 at position",
                             ),
                             Some("backspace_style_delete_noload:read_char"),
                         );
@@ -12249,14 +12587,10 @@ fn backspace_style_delete_noload(
                 // Cannot read character - log but continue with deletion
                 #[cfg(debug_assertions)]
                 log_error(
-                    // &format!(
-                    //     "Cannot read character at position {}: {}",
-                    //     prev_char_start, _e
-                    // ),
                     &stack_format_it(
-                        "Cannot read character at position {}: {}",
+                        "bsdn Cannot read char at pos {}: {}",
                         &[&prev_char_start.to_string(), &_e.to_string()],
-                        "Cannot read character at position",
+                        "bsdn Cannot read char at pos",
                     ),
                     Some("backspace_style_delete_noload:read_char"),
                 );
@@ -12287,7 +12621,11 @@ fn backspace_style_delete_noload(
             // Non-critical: Log error but don't fail the deletion
             #[cfg(debug_assertions)]
             log_error(
-                &format!("Cannot get changelog directory: {}", _e),
+                &stack_format_it(
+                    "Cannot get changelog directory: {}",
+                    &[&_e.to_string()],
+                    "Cannot get changelog directory",
+                ),
                 Some("backspace_style_delete_noload:changelog"),
             );
 
@@ -12339,9 +12677,14 @@ fn backspace_style_delete_noload(
                         // Final retry failed - log but don't fail operation
                         #[cfg(debug_assertions)]
                         log_error(
-                            &format!(
-                                "Failed to log deleted char '{}' at position {}: {}",
-                                deleted_char, position_u128, _e
+                            &stack_format_it(
+                                "bsdn Fail log deleted char '{}' pos {}: {}",
+                                &[
+                                    &deleted_char.to_string(),
+                                    &position_u128.to_string(),
+                                    &_e.to_string(),
+                                ],
+                                "bsdn Fail to log deleted char at position",
                             ),
                             Some("backspace_style_delete_noload:changelog"),
                         );
@@ -12888,9 +13231,10 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
     if line_start > delete_end {
         #[cfg(debug_assertions)]
         log_error(
-            &format!(
+            &stack_format_it(
                 "Invalid line bounds: start {} > end {}",
-                line_start, delete_end
+                &[&line_start.to_string(), &delete_end.to_string()],
+                "Invalid line bounds",
             ),
             Some("delete_current_line_noload"),
         );
@@ -12952,15 +13296,12 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
     // =================================================
 
     if copy_iterations >= MAX_COPY_ITERATIONS {
-        #[cfg(debug_assertions)]
         log_error(
-            &format!("Copy iterations {} exceeded limit", copy_iterations),
-            Some("delete_current_line_noload:copy"),
-        );
-
-        #[cfg(not(debug_assertions))]
-        log_error(
-            "Copy iteration limit exceeded",
+            &stack_format_it(
+                "Copy iterations {} exceeded limit",
+                &[&copy_iterations.to_string()],
+                "Copy iterations _ exceeded limit",
+            ),
             Some("delete_current_line_noload:copy"),
         );
 
@@ -13762,14 +14103,14 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
     let file_size = file_metadata.len();
 
     if start >= file_size || end > file_size {
-        #[cfg(debug_assertions)]
         log_error(
-            &format!("Range {}-{} exceeds file size {}", start, end, file_size),
+            &stack_format_it(
+                "Range {}-{} exceeds file size {}",
+                &[&start.to_string(), &end.to_string(), &file_size.to_string()],
+                "Range exceeds file size",
+            ),
             Some("delete_position_range_noload"),
         );
-
-        #[cfg(not(debug_assertions))]
-        log_error("Range exceeds file", Some("delete_position_range_noload"));
 
         let _ = state.set_info_bar_message("invalid range");
         return Err(LinesError::Io(io::Error::new(
@@ -13798,14 +14139,14 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
                 Ok(char_len) => end + (char_len as u64),
                 Err(_) => {
                     // Invalid UTF-8 start byte, treat as single byte
-                    #[cfg(debug_assertions)]
                     log_error(
-                        &format!("Invalid UTF-8 at position {}", end),
+                        &stack_format_it(
+                            "Invalid UTF-8 at position {}",
+                            &[&end.to_string()],
+                            "Invalid UTF-8 at position",
+                        ),
                         Some("delete_position_range_noload"),
                     );
-
-                    #[cfg(not(debug_assertions))]
-                    log_error("Invalid UTF-8 at end", Some("delete_position_range_noload"));
 
                     end + 1
                 }
@@ -17951,7 +18292,6 @@ fn format_pasty_info_bar(
     info_bar_message: &str,
 ) -> io::Result<String> {
     let infobar_message_display = if !info_bar_message.is_empty() {
-        // format!(" {}", info_bar_message)
         stack_format_it(" {}", &[&info_bar_message], "")
     } else {
         String::new()
@@ -18980,13 +19320,31 @@ fn render_hex_row(state: &EditorState) -> Result<String> {
             // TODO: formatting?
             // === HEX LINE ===
             // Highlight if this is cursor position
-            if i == cursor_col {
-                hex_line.push_str(&format!(
-                    "{}{}{}{:02X}{} ",
-                    BOLD, RED, BG_WHITE, byte, RESET
-                ));
+            // if i == cursor_col {
+            //     hex_line.push_str(&format!(
+            //         "{}{}{}{:02X}{} ",
+            //         BOLD, RED, BG_WHITE, byte, RESET
+            //     ));
+            // } else {
+            //     hex_line.push_str(&format!("{:02X} ", byte));
+            // }
+
+            // Hex formatting
+            let mut hex_buf = [0u8; 64];
+
+            if let Some(formatted) = stack_format_hex(
+                byte,
+                &mut hex_buf,
+                i == cursor_col, // highlight flag
+                BOLD,
+                RED,
+                BG_WHITE,
+                RESET,
+            ) {
+                hex_line.push_str(formatted);
             } else {
-                hex_line.push_str(&format!("{:02X} ", byte));
+                // Fallback if buffer somehow fails
+                hex_line.push_str("?? ");
             }
 
             // === UTF-8 LINE ===
@@ -19000,7 +19358,12 @@ fn render_hex_row(state: &EditorState) -> Result<String> {
                     BOLD, RED, BG_WHITE, display_char, RESET
                 ));
             } else {
-                utf8_line.push_str(&format!("{}  ", display_char));
+                // utf8_line.push_str(&format!("{}  ", display_char));
+                utf8_line.push_str(&stack_format_it(
+                    "{}  ",
+                    &[&display_char.to_string()],
+                    "_  ",
+                ));
             }
         } else {
             // Past EOF - show empty space
@@ -19010,8 +19373,15 @@ fn render_hex_row(state: &EditorState) -> Result<String> {
     }
 
     // Combine into two-line output
-    let result = format!("{}\n{}\n", hex_line.trim_end(), utf8_line.trim_end());
+    // let result = format!("{}\n{}\n", hex_line.trim_end(), utf8_line.trim_end());
 
+    let result = stack_format_it(
+        "{}\n{}\n",
+        &[&hex_line.trim_end(), &utf8_line.trim_end()],
+        "_\n_\n",
+    );
+
+    // TODO: stack formatting in this function
     Ok(result)
 }
 
@@ -19383,44 +19753,47 @@ fn render_raw_row(state: &EditorState) -> Result<String> {
         if i < bytes_read {
             let byte = byte_buffer[i];
 
+            let mut hex_buf = [0u8; 64];
+
             // TODO: explore stack based formatting...
             // === RAW LINE (with escape sequences) ===
-            let raw_repr = byte_to_raw_escape(byte);
+            // let raw_repr = byte_to_raw_escape(byte);
+            let raw_repr = stack_format_byte_escape(byte, &mut hex_buf).unwrap_or("?");
 
             if i == cursor_col {
-                raw_line.push_str(&format!(
-                    "{}{}{}{:<3}{}", // Left-align in 3-char field
-                    BOLD, RED, BG_WHITE, raw_repr, RESET
-                ));
+                // raw_line.push_str(&format!(
+                //     "{}{}{}{:<3}{}", // Left-align in 3-char field
+                //     BOLD, RED, BG_WHITE, raw_repr, RESET
+                // ));
 
-                // let formatted_string_1 = stack_format_it(
-                //     "{}{}{}{:<3}{}", // "{}{}{}{:<3}{}",
-                //     &[&BOLD, &RED, &BG_WHITE, &raw_repr.to_string(), &RESET],
-                //     "NNNNN",
-                // );
-                // raw_line.push_str(&formatted_string_1);
+                let formatted_string_1 = stack_format_it(
+                    "{}{}{}{:<3}{}", // "{}{}{}{:<3}{}",
+                    &[&BOLD, &RED, &BG_WHITE, &raw_repr, &RESET],
+                    "NNNNN",
+                );
+                raw_line.push_str(&formatted_string_1);
             } else {
-                raw_line.push_str(&format!("{:<3}", raw_repr));
-                // let formatted_string_2 = stack_format_it("{:<3}", &[&raw_repr.to_string()], "N");
-                // raw_line.push_str(&formatted_string_2);
+                // raw_line.push_str(&format!("{:<3}", raw_repr));
+                let formatted_string_2 = stack_format_it("{:<3}", &[&raw_repr], "N");
+                raw_line.push_str(&formatted_string_2);
             }
 
             // === INTERPRETED LINE (same as hex mode) ===
             let display_char = byte_to_display_char(byte);
 
             if i == cursor_col {
-                interpreted_line.push_str(&format!(
+                // interpreted_line.push_str(&format!(
+                //     "{}{}{}{}{}  ",
+                //     BOLD, RED, BG_WHITE, display_char, RESET
+                // ));
+
+                let formatted_string_3 = stack_format_it(
                     "{}{}{}{}{}  ",
-                    BOLD, RED, BG_WHITE, display_char, RESET
-                ));
+                    &[&BOLD, &RED, &BG_WHITE, &display_char.to_string(), &RESET],
+                    "NNNNN",
+                );
 
-                // let formatted_string_3 = stack_format_it(
-                //     "{}{}{}{}{}",
-                //     &[&BOLD, &RED, &BG_WHITE, &display_char.to_string(), &RESET],
-                //     "NNNNN",
-                // );
-
-                // interpreted_line.push_str(&formatted_string_3);
+                interpreted_line.push_str(&formatted_string_3);
             } else {
                 interpreted_line.push_str(&format!("{}  ", display_char));
                 // interpreted_line.push_str(&stack_format_it(
@@ -19436,56 +19809,15 @@ fn render_raw_row(state: &EditorState) -> Result<String> {
         }
     }
 
-    let result = format!("{}\n{}\n", raw_line.trim_end(), interpreted_line.trim_end());
+    // let result = format!("{}\n{}\n", raw_line.trim_end(), interpreted_line.trim_end());
 
-    // let result = stack_format_it(
-    //     "{}\n{}\n",
-    //     &[&raw_line.trim_end(), &interpreted_line.trim_end()],
-    //     "^\n^\n",
-    // );
+    let result = stack_format_it(
+        "{}\n{}\n",
+        &[&raw_line.trim_end(), &interpreted_line.trim_end()],
+        "^\n^\n",
+    );
 
     Ok(result)
-}
-
-/// Converts byte to raw string representation with escape sequences
-///
-/// # Arguments
-/// * `byte` - Single byte to convert
-///
-/// # Returns
-/// String representation (1-4 characters):
-/// - Regular printable ASCII → single character
-/// - Special chars → escape sequence (\n, \t, etc.)
-/// - Non-printable → hex escape (\xHH)
-///
-/// # Examples
-/// ```
-/// byte_to_raw_escape(0x0A) // "\n"
-/// byte_to_raw_escape(0x48) // "H"
-/// byte_to_raw_escape(0x00) // "\x00"
-/// ```
-fn byte_to_raw_escape(byte: u8) -> String {
-    match byte {
-        0x0A => "\\n".to_string(),  // Newline
-        0x09 => "\\t".to_string(),  // Tab
-        0x0D => "\\r".to_string(),  // Carriage return
-        0x5C => "\\\\".to_string(), // Backslash
-        0x22 => "\\\"".to_string(), // Quote
-        0x00 => "\\0".to_string(),  // Null
-        0x20..=0x7E => {
-            // Printable ASCII (space through ~)
-            if byte == 0x5C || byte == 0x22 {
-                // Already handled above
-                format!("{}", byte as char)
-            } else {
-                format!("{}", byte as char)
-            }
-        }
-        _ => {
-            // Non-printable → hex escape
-            format!("\\x{:02X}", byte)
-        }
-    }
 }
 
 /// Formats info bar for raw string mode
@@ -19511,9 +19843,22 @@ fn format_raw_info_bar(state: &EditorState) -> Result<String> {
         0
     };
 
-    Ok(format!(
+    // Ok(format!(
+    //     "RAW byte {} of {} {} > ",
+    //     state.hex_cursor.byte_offset_linear_file_absolute_position, file_size, filename
+    // ))
+
+    Ok(stack_format_it(
         "RAW byte {} of {} {} > ",
-        state.hex_cursor.byte_offset_linear_file_absolute_position, file_size, filename
+        &[
+            &state
+                .hex_cursor
+                .byte_offset_linear_file_absolute_position
+                .to_string(),
+            &file_size.to_string(),
+            &filename,
+        ],
+        "RAW byte __ of _ _ > ",
     ))
 }
 
@@ -20215,10 +20560,6 @@ pub fn initialize_session_directory(
         fs::create_dir(&session_path).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
-                // format!(
-                //     "Failed to create session directory {}: {}",
-                //     session_time_stamp, e
-                // ),
                 stack_format_it(
                     "Failed to create session directory {}: {}",
                     &[&session_time_stamp.to_string(), &e.to_string()],
@@ -20473,7 +20814,6 @@ pub fn lines_full_file_editor(
         // new file header = longer readable timestamp
         let header_readable_timestamp = create_readable_archive_timestamp(SystemTime::now());
         let header = stack_format_it("# {}", &[&header_readable_timestamp], "");
-        // let header = format!("# {}", header_readable_timestamp);
 
         // Create with header
         let mut file = File::create(&target_path)?;
@@ -20594,7 +20934,6 @@ pub fn lines_fullfileeditor_core(
         // new file header = longer readable timestamp
         let header_readable_timestamp = create_readable_archive_timestamp(SystemTime::now());
         let header = stack_format_it("# {}", &[&header_readable_timestamp], "");
-        // let header = format!("# {}", header_readable_timestamp);
 
         // Create with header
         let mut file = File::create(&target_path)?;
@@ -20813,7 +21152,6 @@ pub fn lines_fullfileeditor_core(
             //  HEX Render a Flesh TUI
             //  ======================
             render_tui_hex(&lines_editor_state).map_err(|e| {
-                // io::Error::new(io::ErrorKind::Other, format!("Display error: {}", e))
                 io::Error::new(
                     io::ErrorKind::Other,
                     stack_format_it("Display error: {}", &[&e.to_string()], "Display error"),
@@ -20824,7 +21162,6 @@ pub fn lines_fullfileeditor_core(
             //  Sashimi Raw TUI Ramen
             //  =====================
             render_tui_raw(&lines_editor_state).map_err(|e| {
-                // io::Error::new(io::ErrorKind::Other, format!("Display error: {}", e))
                 io::Error::new(
                     io::ErrorKind::Other,
                     stack_format_it("Display error: {}", &[&e.to_string()], "Display error"),
@@ -20833,7 +21170,6 @@ pub fn lines_fullfileeditor_core(
         } else {
             // Render TUI (convert LinesError to io::Error)
             render_tui_utf8txt(&lines_editor_state).map_err(|e| {
-                // io::Error::new(io::ErrorKind::Other, format!("Display error: {}", e))
                 io::Error::new(
                     io::ErrorKind::Other,
                     stack_format_it("Display error: {}", &[&e.to_string()], "Display error"),
@@ -21038,4 +21374,269 @@ pub fn lines_fullfileeditor_core(
 
 /*
 Build Notes:
+*/
+
+/*
+
+# Example of FF open_file() integration
+
+/// ```
+fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
+    /*
+    The user input format/sytax should be as regular/consistent as possible
+    given the edge case that Lines-Editor is the default if none is specified.
+    After selecting file by number:
+
+    entering name of editor: opens in new terminal
+
+    name of editor + -h or --headless: opens in the same terminal
+
+    name of editor + -vsplit, -hsplit: opens in a tmux split
+
+    Empty Enter: should open lines in a new terminal
+
+    only "-h" or "--headless" (maybe "lines -h"): should open lines in same terminal
+
+
+    */
+    // Read partner programs configuration (gracefully handles all errors)
+    let partner_programs = read_partner_programs_file();
+
+    // check if suffi
+
+    // Build the user prompt based on whether partner programs are available
+    let prompt = if partner_programs.is_empty() {
+        // Standard prompt when no partner programs are configured
+        format!(
+            "{}(Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: nano -hsplit, hx -vsplit | .csv stats: vi -rc) {}",
+            YELLOW, RESET
+        )
+    } else {
+        // Enhanced prompt showing numbered partner program options
+        let mut numbered_options = String::new();
+        for (index, program_path) in partner_programs.iter().enumerate() {
+            if index > 0 {
+                numbered_options.push(' ');
+            }
+            numbered_options.push_str(&format!(
+                "{}. {}",
+                index + 1,
+                extract_program_display_name(program_path)
+            ));
+        }
+
+        format!(
+            "{}Open file w/  Default: Enter | software 'name': vi --headless, gedit, firefox | tmux: -hsplit | .csv: -rc | Partner #: {}): {}",
+            YELLOW, numbered_options, RESET
+        )
+    };
+
+    // Display the prompt and get user input
+    print!("{}", prompt);
+    io::stdout().flush().map_err(|e| {
+        eprintln!("Failed to flush stdout: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+
+    let mut user_input = String::new();
+    io::stdin().read_line(&mut user_input).map_err(|e| {
+        eprintln!("Failed to read input: {}", e);
+        FileFantasticError::Io(e)
+    })?;
+    let user_input = user_input.trim();
+
+    // TODO
+    // ==========================================
+    // Headless Default Lines-Editor
+    // ==========================================
+    if user_input == "-h"
+        || user_input == "--headless"
+        || user_input == "lines --headless"
+        || user_input == "lines -h"
+    {
+        // =============================
+        // Lines-Editor in this terminal
+        // =============================
+        /*
+        pub fn lines_full_file_editor(
+            original_file_path: Option<PathBuf>,
+            starting_line: Option<usize>,
+            use_this_session: Option<PathBuf>,
+            state_persists: bool, // if you want to keep session files.
+        ) -> Result<()> {
+        */
+
+        lines_full_file_editor(
+            Some(file_path.clone()),
+            None,
+            Some(lines_editor_session_path.clone()),
+            true,
+        )?; // The ? will use From<LinesError> to convert
+        return Ok(());
+    }
+
+    // ==========================================
+    // === MVP: Tmux splits for lines editor ===
+    // ==========================================
+    // === MVP: Tmux splits for lines editor ===
+    if user_input == "-vsplit" || user_input == "vsplit" {
+        // Check if in tmux
+        if std::env::var("TMUX").is_err() {
+            println!("{}Error: -vsplit requires tmux{}", RED, RESET);
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        // Get the path to the current executable
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Build the command as a single string with full binary path
+        let editor_command = format!(
+            "{} {} --session {}",
+            exe_path.to_string_lossy(),
+            file_path.to_string_lossy(),
+            lines_editor_session_path.to_string_lossy()
+        );
+
+        // Create vertical split (tmux -v = vertical split = horizontal panes)
+        let output = std::process::Command::new("tmux")
+            .args(["split-window", "-v", &editor_command])
+            .output()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        if !output.status.success() {
+            println!(
+                "{}Failed to create tmux split: {}{}",
+                RED,
+                String::from_utf8_lossy(&output.stderr),
+                RESET
+            );
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        return Ok(());
+    }
+
+    if user_input == "-hsplit" || user_input == "hsplit" {
+        // Check if in tmux
+        if std::env::var("TMUX").is_err() {
+            println!("{}Error: -hsplit requires tmux{}", RED, RESET);
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        // Get the path to the current executable
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Build the command as a single string with full binary path
+        let editor_command = format!(
+            "{} {} --session {}",
+            exe_path.to_string_lossy(),
+            file_path.to_string_lossy(),
+            lines_editor_session_path.to_string_lossy()
+        );
+
+        // Create horizontal split (tmux -h = horizontal split = vertical panes)
+        let output = std::process::Command::new("tmux")
+            .args(["split-window", "-h", &editor_command])
+            .output()
+            .map_err(|e| FileFantasticError::Io(e))?;
+
+        if !output.status.success() {
+            println!(
+                "{}Failed to create tmux split: {}{}",
+                RED,
+                String::from_utf8_lossy(&output.stderr),
+                RESET
+            );
+            println!("Press Enter to continue...");
+            let mut buf = String::new();
+            io::stdin()
+                .read_line(&mut buf)
+                .map_err(|e| FileFantasticError::Io(e))?;
+            return open_file(file_path, lines_editor_session_path);
+        }
+
+        return Ok(());
+    }
+
+    // === Handle "lines" keyword - open in new terminal ===
+    // === Handle "lines" keyword - open in new terminal ===
+    if user_input == "lines" || user_input.is_empty() {
+        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
+        // Launch in new terminal (platform-specific)
+        #[cfg(target_os = "macos")]
+        {
+            // macOS needs the command as a single string for Terminal.app
+            let lines_command = format!(
+                "{} {} --session {}; exit",
+                exe_path.to_string_lossy(),
+                file_path.to_string_lossy(),
+                lines_editor_session_path.to_string_lossy()
+            );
+
+            std::process::Command::new("open")
+                .args(["-a", "Terminal"])
+                .arg(&lines_command)
+                .spawn()
+                .map_err(|e| FileFantasticError::EditorLaunchFailed(format!("lines: {}", e)))?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let terminal_commands = [
+                ("gnome-terminal", vec!["--"]),
+                ("ptyxis", vec!["--"]),
+                ("konsole", vec!["-e"]),
+                ("xfce4-terminal", vec!["-e"]),
+                ("terminator", vec!["-e"]),
+                ("tilix", vec!["-e"]),
+                ("kitty", vec!["-e"]),
+                ("alacritty", vec!["-e"]),
+                ("xterm", vec!["-e"]),
+            ];
+
+            let mut success = false;
+            for (terminal, args) in terminal_commands.iter() {
+                let mut cmd = std::process::Command::new(terminal);
+                cmd.args(args)
+                    .arg(&exe_path) // Separate arg: executable
+                    .arg(file_path) // Separate arg: file path
+                    .arg("--session") // Separate arg: flag
+                    .arg(lines_editor_session_path); // Separate arg: session path
+
+                if cmd.spawn().is_ok() {
+                    success = true;
+                    break;
+                }
+            }
+
+            if !success {
+                println!(
+                    "{}No terminal available. Press Enter to continue...{}",
+                    RED, RESET
+                );
+                let mut buf = String::new();
+                io::stdin()
+                    .read_line(&mut buf)
+                    .map_err(|e| FileFantasticError::Io(e))?;
+                return open_file(file_path, lines_editor_session_path);
+            }
+        }
+...
+
 */
