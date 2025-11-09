@@ -3,6 +3,7 @@
 ff is a minimal file manager. It's File Fantastic.
 ...it's a File Fantasy.
 
+#### Text User Interface (TUI)
 ```text
 quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 f9 d8 a17 /home/oops/code/ff_file_manager_minimal_rust
@@ -26,6 +27,33 @@ f9 d8 a17 /home/oops/code/ff_file_manager_minimal_rust
  16. test.csv                                                 241 B 09-15 12:15
 --- Page 1 of 2: up/down, j/k, </>, w/x, arrows, etc. Size: tall+N wide-N ---
 >>
+```
+
+#### Tmux Split Terminal Example: File-Manager/File-Editor
+```text
+quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
+f14 d10 a24 /home/oops/code/ff_file_manager_minimal_rust
+  #   Name                                                     Size    Modified
+ ------------------------------------------------------------------------------
+  1. .cargo/                                                      - 09-12 23:29
+  2. .git/                                                        -       01:31
+  3. archive/                                                     - 11-08 18:01
+  4. executables/                                                 - 10-06 11:59
+--- Page 1 of 6: up/down, j/k, </>, w/x, arrows, etc. Size: tall-12 wide-N ---
+>>
+
+────────────────────────────────────────────────────────────────────────────────
+quit sav re,undo del|nrm ins vis hex raw|pasty cvy|wrd,b,end ///cmnt []idnt hjkl
+ 1 id,name,age,breed,color,favorite_food,is_indoor
+ 2 1,Whiskers,3,Siamese,Cream,Chicken,TRUE
+ 3 2,Mittens,5,Tabby,Gray,Tuna,FALSE
+ 4 3,Shadow,2,Black Cat,Black,Salmon,TRUE
+ 5 4,Luna,4,Persian,White,Dry Food,TRUE
+ 6 5,Oliver,1,Maine Coon,Brown,Wet Food,FALSE
+
+
+
+NORMAL 1:1 test.csv @0  >
 ```
 
 ## From Terminal

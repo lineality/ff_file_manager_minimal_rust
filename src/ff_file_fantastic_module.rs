@@ -11564,6 +11564,23 @@ fn handle_csv_analysis(csv_path: &PathBuf) -> Result<PathBuf> {
 /// Result: Opens with system default application
 /// ```
 fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result<()> {
+    /*
+    The user input format/sytax should be as regular/consistent as possible
+    given the edge case that Lines-Editor is the default if none is specified.
+    After selecting file by number:
+
+    entering name of editor: opens in new terminal
+
+    name of editor + -h or --headless: opens in the same terminal
+
+    name of editor + -vsplit, -hsplit: opens in a tmux split
+
+    Empty Enter: should open lines in a new terminal
+
+    only "-h" or "--headless" (maybe "lines -h"): should open lines in same terminal
+
+
+    */
     // Read partner programs configuration (gracefully handles all errors)
     let partner_programs = read_partner_programs_file();
 
@@ -11609,6 +11626,36 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
         FileFantasticError::Io(e)
     })?;
     let user_input = user_input.trim();
+
+    // TODO
+    // ==========================================
+    // Headless Default Lines-Editor
+    // ==========================================
+    if user_input == "-h"
+        || user_input == "--headless"
+        || user_input == "lines --headless"
+        || user_input == "lines -h"
+    {
+        // =============================
+        // Lines-Editor in this terminal
+        // =============================
+        /*
+        pub fn lines_full_file_editor(
+            original_file_path: Option<PathBuf>,
+            starting_line: Option<usize>,
+            use_this_session: Option<PathBuf>,
+            state_persists: bool, // if you want to keep session files.
+        ) -> Result<()> {
+        */
+
+        lines_full_file_editor(
+            Some(file_path.clone()),
+            None,
+            Some(lines_editor_session_path.clone()),
+            true,
+        )?; // The ? will use From<LinesError> to convert
+        return Ok(());
+    }
 
     // ==========================================
     // === MVP: Tmux splits for lines editor ===
@@ -11710,7 +11757,7 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 
     // === Handle "lines" keyword - open in new terminal ===
     // === Handle "lines" keyword - open in new terminal ===
-    if user_input == "lines" {
+    if user_input == "lines" || user_input.is_empty() {
         let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
 
         // Launch in new terminal (platform-specific)
