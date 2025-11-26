@@ -5354,6 +5354,10 @@ impl<'a> DirectoryView<'a> {
 
     /// Gets total number of pages
     fn total_pages(&self) -> usize {
+        // Do not try to divide by zero
+        if self.items_per_page == 0 {
+            return 0;
+        }
         (self.entries.len() + self.items_per_page - 1) / self.items_per_page
     }
 
@@ -5398,6 +5402,12 @@ impl<'a> DirectoryView<'a> {
     /// }
     /// ```
     fn set_current_page(&mut self, page_index: usize) -> bool {
+        // Do not try to paginate if items_per_page is zero
+        if self.items_per_page == 0 {
+            // Cannot paginate if items_per_page is zero
+            return false;
+        }
+
         if self.entries.is_empty() {
             self.current_page = 0;
             return page_index == 0;
@@ -6494,12 +6504,15 @@ fn parse_tui_adjustment_command(input: &str) -> Option<TuiAdjustmentAction> {
 ///     adjustment_magnitude: 5,
 ///     adjustment_direction_true_is_positive_false_is_negative: true,
 /// };
-/// apply_tui_adjustment(&mut nav_state, &action);
+/// apply_tui_resize_adjustment(&mut nav_state, &action);
 /// / Result: nav_state.tui_tall_adjustment = 5
 /// /         nav_state.tui_tall_direction_sign = true
 /// /         nav_state.current_page_index = 0
 /// ```
-fn apply_tui_adjustment(nav_state: &mut NavigationState, adjustment_action: &TuiAdjustmentAction) {
+fn apply_tui_resize_adjustment(
+    nav_state: &mut NavigationState,
+    adjustment_action: &TuiAdjustmentAction,
+) {
     if adjustment_action.adjustment_type_true_is_tall_false_is_wide {
         // This is a height (tall) adjustment
         nav_state.tui_tall_adjustment = adjustment_action.adjustment_magnitude;
@@ -15721,7 +15734,7 @@ pub fn file_fantastic() -> Result<PathBuf> {
                         }
                         NavigationAction::AdjustTuiSize(adjustment_action) => {
                             // Apply the adjustment to the navigation state
-                            apply_tui_adjustment(&mut nav_state, &adjustment_action);
+                            apply_tui_resize_adjustment(&mut nav_state, &adjustment_action);
 
                             // Format current settings for display
                             let (tall_display, wide_display) = format_tui_adjustments(
