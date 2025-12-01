@@ -14206,7 +14206,7 @@ const HELP_SECTION_TOPBAR_LEGEND: &str = r#"
 quit back|term|dir file|name size mod|get-send file v,y,p|str>search|enter>reset
 
  ═══ THE LEGEND OF TOP-BAR ═══
- quit back...........q for quite ff, b for go-back
+ quit back...........q for quit ff, b for go-back
 
  term................t for open a new terminal
                      vsplit for new tmux split vertical
