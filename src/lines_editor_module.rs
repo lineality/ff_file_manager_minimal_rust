@@ -969,6 +969,7 @@ fn main() -> Result<(), LinesError> {
 use std::env;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
+use std::io::BufRead;
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, StdinLock, Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -989,6 +990,28 @@ use super::buttons_reversible_edit_changelog_module::{
     button_undo_redo_next_inverse_changelog_pop_lifo, detect_utf8_byte_count,
     get_redo_changelog_directory_path, get_undo_changelog_directory_path,
     read_character_bytes_from_file, read_single_byte_from_file, remove_single_byte_from_file,
+};
+
+use super::buffy_format_write_module::{BuffyFormatArg, BuffyStyles, buffy_print, buffy_println};
+
+/// Style for line numbers - green, no bold
+const LINE_NUMBER_STYLE: BuffyStyles = BuffyStyles {
+    fg_color: Some("\x1b[32m"), // GREEN
+    bg_color: None,
+    bold: false,
+    underline: false,
+    italic: true,
+    dim: true,
+};
+
+/// Style for cursor block
+const CURSOR_BLOCK_STYLE: BuffyStyles = BuffyStyles {
+    fg_color: Some("\x1b[31m"), // RED
+    bg_color: Some("\x1b[47m"), // WHITE background
+    bold: true,
+    underline: false,
+    italic: false,
+    dim: false,
 };
 
 /// state.rs - Core editor state management with pre-allocated buffers
@@ -1059,6 +1082,45 @@ const GREEN: &str = "\x1b[32m";
 // const BOLD: &str = "\x1b[1m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
+
+/*
+Foreground Colors (Text Color):
+Color -> ANSI Code
+Black -> \x1b[30m
+Red -> \x1b[31m
+Green -> \x1b[32m
+Yellow -> \x1b[33m
+Blue -> \x1b[34m
+Magenta -> \x1b[35m
+Cyan -> \x1b[36m
+White -> \x1b[37m
+Default -> \x1b[39m
+
+
+Background Colors:
+Color -> ANSI Code
+Black -> \x1b[40m
+Red -> \x1b[41m
+Green -> \x1b[42m
+Yellow -> \x1b[43m
+Blue -> \x1b[44m
+Magenta -> \x1b[45m
+Cyan -> \x1b[46m
+White -> \x1b[47m
+Default -> \x1b[49m
+
+text styles:
+Style -> ANSI Code
+Bold -> \x1b[1m
+Dim -> \x1b[2m
+Italic -> \x1b[3m
+Underline -> \x1b[4m
+Blink -> \x1b[5m
+Reverse -> \x1b[7m
+Hidden -> \x1b[8m
+Reset -> \x1b[0m
+
+*/
 
 // ============================================================================
 // ERROR SECTION: ERROR HANDLING SYSTEM (start)
@@ -1146,9 +1208,8 @@ pub enum LinesError {
     /// Invalid user input or argument
     InvalidInput(String),
 
-    /// String formatting or display error
-    FormatError(String),
-
+    // /// String formatting or display error
+    // FormatError(String),
     /// UTF-8 encoding/decoding error
     Utf8Error(String),
 
@@ -1168,7 +1229,7 @@ impl std::fmt::Display for LinesError {
         match self {
             LinesError::Io(e) => write!(f, "IO error: {}", e),
             LinesError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            LinesError::FormatError(msg) => write!(f, "Format error: {}", msg),
+            // LinesError::FormatError(msg) => write!(f, "Format error: {}", msg),
             LinesError::Utf8Error(msg) => write!(f, "UTF-8 error: {}", msg),
             LinesError::DisplayError(msg) => write!(f, "Display error: {}", msg),
             LinesError::StateError(msg) => write!(f, "State error: {}", msg),
@@ -2072,7 +2133,7 @@ mod hex_format_tests {
 /// ```
 pub fn stack_format_it(template: &str, inserts: &[&str], fallback: &str) -> String {
     // Internal stack buffer for result
-    let mut buf = [0u8; 512];
+    let mut buf = [0u8; 256];
 
     // Maximum number of inserts to prevent abuse
     const MAX_INSERTS: usize = 128;
@@ -2184,6 +2245,7 @@ struct FormatSpec {
     width: Option<usize>,
 }
 
+// TODO vec< is heap
 /// Parse format specifiers from template
 /// Returns None if parsing fails or placeholder count doesn't match insert count
 fn parse_format_specs(template: &str, expected_count: usize) -> Option<Vec<FormatSpec>> {
@@ -2476,7 +2538,7 @@ mod limits {
     /// Allows up to 20-digit repeat counts (e.g., "12345678901234567890j")
     pub const COMMAND_PARSE_MAX_CHARS: usize = 20;
 
-    pub const TEXT_INPUT_CHUNKS: usize = 1024;
+    pub const TEXT_INPUT_CHUNKS: usize = 10_000_000;
 }
 
 // STEM values ensuring reproducibility
@@ -3314,119 +3376,770 @@ pub fn count_lines_in_file(file_path: &Path) -> Result<(usize, u64)> {
     Ok((line_count, last_newline_position))
 }
 
-/// Formats the navigation legend with color-coded keyboard shortcuts
+// TODO, maybe add to buffy
+/// Writes a single hotkey command with color highlighting directly to terminal
 ///
-/// # Purpose
-/// Creates a formatted legend string showing all available keyboard commands
-/// with color highlighting (RED for command keys, YELLOW for descriptions).
+/// ## Memory: ZERO HEAP
+/// Writes hotkey (RED) + description (YELLOW) using buffy_print
+///
+/// ## Parameters
+/// - hotkey: The command character(s) to highlight in RED
+/// - description: The rest of the text in YELLOW
+///
+/// ## Example
+/// ```rust
+/// write_red_hotkey("q", "uit ")?;  // Outputs: RED"q" + YELLOW"uit "
+/// ```
+fn write_red_hotkey(hotkey: &str, description: &str) -> io::Result<()> {
+    buffy_print(
+        "{}{}{}{}",
+        &[
+            BuffyFormatArg::Str(RED),
+            BuffyFormatArg::Str(hotkey),
+            BuffyFormatArg::Str(YELLOW),
+            BuffyFormatArg::Str(description),
+        ],
+    )
+}
+
+// TODO, maybe add to buffy
+/// Writes a two-part hotkey command with color highlighting directly to terminal
+///
+/// ## Memory: ZERO HEAP
+/// Writes hotkey_1 (RED) + hotkey_2 (GREEN) + description (YELLOW) using buffy_print
+///
+/// ## Parameters
+/// - hotkey_1: First part of command to highlight in RED
+/// - hotkey_2: Second part of command to highlight in GREEN
+/// - description: The rest of the text in YELLOW
+///
+/// ## Example
+/// ```rust
+/// write_red_green_hotkey("s", "a", "v ")?;  // Outputs: RED"s" + GREEN"a" + YELLOW"v "
+/// write_red_green_hotkey("/", "/", "/cmnt ")?;  // Outputs: RED"/" + GREEN"/" + YELLOW"/cmnt "
+/// ```
+fn write_red_green_hotkey(hotkey_1: &str, hotkey_2: &str, description: &str) -> io::Result<()> {
+    buffy_print(
+        "{}{}{}{}{}{}",
+        &[
+            BuffyFormatArg::Str(RED),
+            BuffyFormatArg::Str(hotkey_1),
+            BuffyFormatArg::Str(GREEN),
+            BuffyFormatArg::Str(hotkey_2),
+            BuffyFormatArg::Str(YELLOW),
+            BuffyFormatArg::Str(description),
+        ],
+    )
+}
+
+/// Writes the complete navigation legend directly to terminal
+///
+/// ## Project Context
+/// Displays all available keyboard commands for file navigation with
+/// color-coded hotkeys. Each command section written independently for
+/// maintainability - adding/removing commands requires no argument counting.
+///
+/// ## Memory: ZERO HEAP
+/// All output written directly to terminal using buffy functions.
+/// No intermediate String building, no heap allocation.
+///
+/// ## Operation
+/// Writes legend in modular sections:
+/// - Each command written separately via write_red_hotkey()
+/// - Colors applied per-command (RED hotkey, YELLOW description)
+/// - RESET applied at end
+/// - Modular: Add/remove commands without affecting others
+///
+/// ## Safety & Error Handling
+/// - Returns io::Result for write failures
+/// - Each command write is independent
+/// - Failure in one command doesn't affect others structurally
+///
+/// ## Legend Commands
+/// - q: quit application
+/// - sav: save current state (red and green and yellow)
+/// - re: reload/refresh
+/// - undo: undo last operation
+/// - del: delete item
+/// - nrm: normal mode
+/// - ins: insert mode
+/// - vis: visual mode
+/// - hex: hex editor mode
+/// - raw: raw view
+/// - pasty: paste operation
+/// - cvy: copy operation
+/// - wrd,b,end: word navigation
+/// - ///cmnt: comment operations (red and green and yellow)
+/// - []idnt: indent operations
+/// - hjkl: vim-style navigation
+///
+/// ## Example
+/// ```rust
+/// // In main display loop:
+/// write_formatted_navigation_legend_to_tui()?;
+/// ```
+fn write_formatted_navigation_legend_to_tui() -> Result<()> {
+    // File operations group
+    write_red_hotkey("q", "uit ")?;
+    // Three Colour
+    write_red_green_hotkey("s", "a", "v ")?;
+    // Red only
+    write_red_hotkey("re", ",")?;
+    write_red_hotkey("u", "ndo ")?;
+
+    // Mode operations group
+    write_red_hotkey("d", "el|")?;
+    write_red_hotkey("n", "rm ")?;
+    write_red_hotkey("i", "ns ")?;
+    write_red_hotkey("v", "is ")?;
+    write_red_hotkey("hex", "|")?;
+
+    // View operations group
+    // write_red_hotkey("r", "aw|")?;
+    write_red_hotkey("g", "o ")?;
+    write_red_hotkey("p", "asty ")?;
+    write_red_hotkey("cvy", "|")?;
+
+    // Navigation group
+    write_red_hotkey("w", "rd,")?;
+    write_red_hotkey("b", ",")?;
+    write_red_hotkey("e", "nd ")?;
+
+    // Comment/indent group
+    // Three Colour
+    write_red_green_hotkey("/", "/", "/cmnt ")?;
+    // Red only
+    write_red_hotkey("[]", "idnt ")?;
+
+    // Movement group
+    write_red_hotkey("hjkl", "")?;
+
+    // Clear formatting: ANSI color codes are stateful
+    // Make sure NEXT prints
+    // are not also formatted.
+    buffy_print("{}", &[BuffyFormatArg::Str(RESET)])?;
+
+    // Complete the line with newline \n
+    buffy_println("", &[])?;
+
+    // Done
+    Ok(())
+}
+
+/// Creates a unique temporary file in the specified base directory with configurable retry logic.
+///
+/// # Project Context
+/// This function generates temporary file names for intermediate processing
+/// in our application where we cannot use third-party dependencies. The file
+/// is created atomically to prevent race conditions where multiple processes
+/// or threads might generate the same name. This version allows the caller
+/// to configure retry behavior based on their specific use case (e.g., high
+/// contention environments may need more retries, low-priority operations
+/// may want fewer retries to fail fast).
+///
+/// # Implementation Strategy
+/// - Uses process ID, thread ID, and nanosecond timestamp for uniqueness
+/// - Attempts atomic file creation with `create_new(true)` flag
+/// - Retries up to `number_of_attempts` times with configurable delay
+/// - Different timestamps on each retry provide additional uniqueness
+/// - Parameterized retry logic allows tuning for different deployment scenarios
+///
+/// # Arguments
+/// * `base_path` - The directory where the temporary file will be created (must exist)
+/// * `prefix` - A prefix for the filename to identify the file's purpose (e.g., "cache", "upload")
+/// * `number_of_attempts` - Maximum number of creation attempts (recommended: 3-10)
+/// * `retry_delay_ms` - Milliseconds to wait between retry attempts (recommended: 1-100)
 ///
 /// # Returns
-/// * `Ok(String)` - The formatted legend string with ANSI color codes
-/// * `Err(FileFantasticError)` - If string formatting fails (defensive programming)
+/// * `Ok(PathBuf)` - Absolute path to the newly created unique temporary file
+/// * `Err(io::Error)` - If file creation fails after all retry attempts or other I/O error
 ///
-/// # Color Scheme
-/// - RED: Single letter command keys (q, b, t, d, f, n, s, m, g, v, y, p)
-/// - YELLOW: Command descriptions and separators
-/// - RESET: Applied at end to restore terminal defaults
+/// # Error Conditions
+/// - `CUTF: system time unavailable` - System clock error (rare, catastrophic)
+/// - `CUTF: max retry attempts exceeded` - Could not create unique file after all attempts
+/// - `CUTF: unexpected loop exit` - Internal logic error (should never occur)
+/// - Standard I/O errors: permission denied, disk full, path not found, etc.
 ///
-/// # Legend Commands
-/// - q: quit the application
-/// - b: navigate back/parent directory
-/// - t: open terminal in current directory
-/// - d: filter to show directories only
-/// - f: filter to show files only
-/// - n: sort by name
-/// - s: sort by size
-/// - m: sort by modified date
-/// - g: get-send file operations
-/// - v,y,p: additional file operations
-/// - str: search functionality
-/// - enter: reset filters/search
+/// # Safety & Reliability
+/// - No panic: all error cases return Result
+/// - No heap allocation in error messages (uses static strings with CUTF prefix)
+/// - Bounded retry loop (caller-specified maximum attempts)
+/// - Atomic file creation prevents race conditions
+/// - Thread-safe: uses thread-local IDs
+/// - Handles system clock errors gracefully
+///
+/// # Configuration Guidelines
+/// - **Low contention** (single-threaded, low frequency): `number_of_attempts = 3`, `retry_delay_ms = 1`
+/// - **Medium contention** (multi-threaded application): `number_of_attempts = 5`, `retry_delay_ms = 1-5`
+/// - **High contention** (distributed system, many processes): `number_of_attempts = 10`, `retry_delay_ms = 10-50`
+/// - **Fast-fail scenarios** (can afford to fail): `number_of_attempts = 1`, `retry_delay_ms = 0`
+///
+/// # Edge Cases Handled
+/// - Zero attempts: Function will try once (loop runs 0..0 means 0 iterations, caught by unreachable error)
+/// - System time moves backwards: Handled gracefully with retry
+/// - Concurrent file creation: Atomic `create_new` prevents race conditions
+/// - Disk full or permission errors: Immediate return without retries
 ///
 /// # Example
-/// ```rust
-/// match format_navigation_legend() {
-///     Ok(legend) => println!("{}", legend),
-///     Err(e) => eprintln!("Failed to format legend: {}", e),
+/// ```
+/// use std::path::Path;
+///
+/// let base = Path::new("/tmp");
+///
+/// // Standard usage
+/// match create_unique_temp_name_and_file_filepathbuf(base, "myapp", 5, 1) {
+///     Ok(path) => {
+///         println!("Created: {:?}", path);
+///         // Use the file...
+///         // Remember to delete it when done!
+///         let _ = std::fs::remove_file(path);
+///     },
+///     Err(e) => {
+///         eprintln!("Failed to create temp file: {}", e);
+///         // Handle error - application continues
+///     }
+/// }
+///
+/// // High-contention scenario
+/// match create_unique_temp_name_and_file_filepathbuf(base, "distributed", 10, 10) {
+///     Ok(path) => { /* use file */ },
+///     Err(e) => { /* handle gracefully */ }
 /// }
 /// ```
-fn format_navigation_legend() -> Result<String> {
-    // Pre-allocate string capacity based on expected legend size
-    // Legend is approximately 200 characters plus color codes
-    let mut legend = String::with_capacity(300);
+///
+/// # Security Considerations
+/// - File names are predictable (not cryptographically random)
+/// - Suitable for temporary storage, not for security-critical scenarios
+/// - Consider file permissions on created files (inherits from OpenOptions defaults)
+/// - Caller must ensure base_path is in a secure location
+///
+/// # Performance Considerations
+/// - Each retry costs `retry_delay_ms` milliseconds
+/// - Maximum possible delay: `number_of_attempts * retry_delay_ms`
+/// - Nanosecond timestamp provides ~1 billion unique values per second per thread
+/// - Thread ID formatting allocates small string (unavoidable with std::thread API)
+pub fn create_unique_temp_name_and_file_filepathbuf(
+    base_path: &Path,
+    prefix: &str,
+    number_of_attempts: u32,
+    retry_delay_ms: u64,
+) -> io::Result<PathBuf> {
+    use std::fs::OpenOptions;
+    use std::io;
+    use std::process;
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    // // Build the legend string with error handling for format operations
-    // // quit save undo norm ins vis del wrap relative raw byt wrd,b,end /commnt hjkl
-    // let formatted_legend = format!(
-    //     "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
-    //     // YELLOW, // Overall legend color
-    //     RED,
-    //     YELLOW, // RED q + YELLOW uit
-    //     RED,
-    //     GREEN, // RED b + YELLOW ack
-    //     YELLOW,
-    //     RED,
-    //     YELLOW, // RED b + YELLOW ack
-    //     RED,
-    //     YELLOW, // RED t + YELLOW erm
-    //     RED,
-    //     YELLOW, // RED d + YELLOW ir
-    //     RED,
-    //     YELLOW, // RED f + YELLOW ile
-    //     RED,
-    //     YELLOW, // RED n + YELLOW ame
-    //     RED,
-    //     YELLOW, // RED s + YELLOW ize
-    //     RED,
-    //     YELLOW, // RED m + YELLOW od
-    //     RED,
-    //     YELLOW, // RED m + YELLOW od
-    //     RED,
-    //     YELLOW, // RED g + YELLOW et
-    //     RED,
-    //     YELLOW, // RED v + YELLOW ,
-    //     RED,
-    //     YELLOW, // RED y + YELLOW ,
-    //     RED,
-    //     YELLOW, // RED p + YELLOW ,
-    //     RED,
-    //     YELLOW, // RED str + YELLOW ...
-    //     RED,
-    //     YELLOW,
-    //     RED,
-    //     // YELLOW, // RED enter + YELLOW ...
-    //     GREEN,  // RED b + YELLOW ack
-    //     YELLOW, // RED enter + YELLOW ...
-    //     RED,
-    //     YELLOW, // RED enter + YELLOW ...
-    //     RED,
-    //     YELLOW, // RED enter + YELLOW ...
-    //     RESET
-    // );
-
-    let formatted_legend = stack_format_it(
-        "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
-        &[
-            &RED, &YELLOW, &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
-            &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED,
-            &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
-            &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RESET,
-        ],
-        "quit sav re,undo del|nrm ins vis hex raw|pasty cvy|wrd,b,end ///cmnt []idnt hjkl",
-    );
-    // Check if the formatted string is reasonable
-    // (defensive programming against format! macro issues)
-    if formatted_legend.is_empty() {
-        return Err(LinesError::FormatError(String::from(
-            "Legend formatting produced empty string",
-        )));
+    // Production catch: validate number_of_attempts is non-zero
+    // Zero attempts would make function always fail
+    if number_of_attempts == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CUTF: number_of_attempts must be greater than zero",
+        ));
     }
 
-    // TODO (push in smaller segments?)
-    legend.push_str(&formatted_legend);
+    // Get process ID once (constant for this process)
+    let pid = process::id();
 
-    Ok(legend)
+    // Get thread ID and format it for filename use
+    let thread_id = thread::current().id();
+    let thread_id_string = format!("{:?}", thread_id);
+
+    // Clean thread ID: remove "ThreadId(" prefix and ")" suffix
+    // This converts "ThreadId(123)" to "123"
+    let thread_id_clean = thread_id_string
+        .trim_start_matches("ThreadId(")
+        .trim_end_matches(')');
+
+    // Attempt to create unique file with retry logic
+    for attempt in 0..number_of_attempts {
+        // Get current timestamp with nanosecond precision
+        // This provides uniqueness across time
+        let timestamp_result = SystemTime::now().duration_since(UNIX_EPOCH);
+
+        let timestamp_nanos = match timestamp_result {
+            Ok(duration) => duration.as_nanos(),
+            Err(_) => {
+                // System time error (e.g., clock moved backwards)
+                // In production, we handle this gracefully and continue
+                if attempt == number_of_attempts - 1 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "CUTF: system time unavailable",
+                    ));
+                }
+                // Try again with next attempt
+                thread::sleep(Duration::from_millis(retry_delay_ms));
+                continue;
+            }
+        };
+
+        // Construct filename: prefix_pid_threadid_timestamp.tmp
+        // Example: myapp_12345_67_1234567890123456789.tmp
+        let filename = format!(
+            "{}_{}_{}_{}.tmp",
+            prefix, pid, thread_id_clean, timestamp_nanos
+        );
+
+        // Build absolute path
+        let file_path = base_path.join(&filename);
+
+        // Attempt to create file atomically
+        // create_new(true) ensures the operation fails if file exists
+        // This prevents race conditions with other processes/threads
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true) // Critical: fails if file already exists
+            .open(&file_path)
+        {
+            Ok(_file) => {
+                // Success: file created exclusively
+                // File handle is dropped here, closing the file
+                // Caller is responsible for file cleanup
+                return Ok(file_path);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // File name collision detected
+                // This is expected in high-concurrency scenarios
+
+                // Production catch: check if we've exhausted retries
+                if attempt == number_of_attempts - 1 {
+                    // Final attempt failed - return descriptive error
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "CUTF: max retry attempts exceeded",
+                    ));
+                }
+
+                // Wait briefly before retry
+                // This allows timestamp to change and reduces contention
+                thread::sleep(Duration::from_millis(retry_delay_ms));
+
+                // Continue to next attempt
+                continue;
+            }
+            Err(e) => {
+                // Other error occurred (permissions, disk full, etc.)
+                // Return immediately - retrying won't help
+                return Err(e);
+            }
+        }
+    }
+
+    // Should be unreachable due to loop logic, but rust requires this
+    // Production safety: return error rather than panic
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "CUTF: unexpected loop exit",
+    ))
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tempname_tests {
+    use super::*;
+    use std::fs;
+
+    /// Test basic functionality: can we create a temp file with standard parameters?
+    #[test]
+    fn test_create_temp_file_basic() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "test", 5, 1);
+
+        assert!(result.is_ok(), "Should successfully create temp file");
+
+        let path = result.unwrap();
+        assert!(path.exists(), "Created file should exist");
+        assert!(
+            path.starts_with(&temp_dir),
+            "File should be in temp directory"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(path);
+    }
+
+    /// Test that multiple files created rapidly are unique
+    #[test]
+    fn test_create_multiple_unique_files() {
+        let temp_dir = std::env::temp_dir();
+        let mut paths = Vec::new();
+
+        // Create 5 temp files in rapid succession
+        for _ in 0..5 {
+            let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "multi", 5, 1);
+            assert!(result.is_ok(), "Should create file");
+            paths.push(result.unwrap());
+        }
+
+        // Verify all paths are unique
+        for i in 0..paths.len() {
+            for j in (i + 1)..paths.len() {
+                assert_ne!(paths[i], paths[j], "Paths should be unique");
+            }
+        }
+
+        // Verify all files exist
+        for path in &paths {
+            assert!(path.exists(), "File should exist");
+        }
+
+        // Cleanup
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test that function returns error for non-existent directory
+    #[test]
+    fn test_nonexistent_directory() {
+        let bad_path = Path::new("/this/path/definitely/does/not/exist/nowhere/12345");
+
+        let result = create_unique_temp_name_and_file_filepathbuf(bad_path, "test", 3, 1);
+
+        assert!(result.is_err(), "Should fail for non-existent directory");
+    }
+
+    /// Test filename format contains expected components
+    #[test]
+    fn test_filename_format() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "prefix", 5, 1);
+        assert!(result.is_ok(), "Should create file");
+
+        let path = result.unwrap();
+        let filename = path.file_name().unwrap().to_str().unwrap();
+
+        // Verify filename contains prefix
+        assert!(
+            filename.starts_with("prefix_"),
+            "Filename should start with prefix"
+        );
+
+        // Verify filename ends with .tmp
+        assert!(filename.ends_with(".tmp"), "Filename should end with .tmp");
+
+        // Verify filename contains underscores (pid_threadid_timestamp structure)
+        assert!(
+            filename.matches('_').count() >= 3,
+            "Filename should have at least 3 underscores"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(path);
+    }
+
+    /// Test with zero attempts parameter (should return error immediately)
+    #[test]
+    fn test_zero_attempts() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "zero", 0, 1);
+
+        assert!(result.is_err(), "Should fail with zero attempts");
+
+        if let Err(e) = result {
+            let error_msg = format!("{}", e);
+            assert!(error_msg.contains("CUTF"), "Error should have CUTF prefix");
+            assert!(
+                error_msg.contains("greater than zero") || error_msg.contains("number_of_attempts"),
+                "Error should mention invalid attempt count"
+            );
+        }
+    }
+
+    /// Test with single attempt (should work in low-contention)
+    #[test]
+    fn test_single_attempt() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "single", 1, 1);
+
+        assert!(
+            result.is_ok(),
+            "Should succeed with single attempt in low contention"
+        );
+
+        if let Ok(path) = result {
+            assert!(path.exists(), "File should exist");
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test with different delay values (ensures parameter is used)
+    #[test]
+    fn test_different_delays() {
+        let temp_dir = std::env::temp_dir();
+
+        // Test with zero delay
+        let result1 = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "delay0", 3, 0);
+        assert!(result1.is_ok(), "Should work with zero delay");
+        if let Ok(path) = result1 {
+            let _ = fs::remove_file(path);
+        }
+
+        // Test with larger delay
+        let result2 = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "delay100", 3, 100);
+        assert!(result2.is_ok(), "Should work with 100ms delay");
+        if let Ok(path) = result2 {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test with high number of attempts (stress test)
+    #[test]
+    fn test_many_attempts() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "many", 20, 1);
+
+        assert!(result.is_ok(), "Should work with many attempts");
+
+        if let Ok(path) = result {
+            assert!(path.exists(), "File should exist");
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test prefix with special characters (edge case)
+    #[test]
+    fn test_prefix_with_special_chars() {
+        let temp_dir = std::env::temp_dir();
+
+        // Test with prefix containing hyphens and underscores
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "my-app_v2", 5, 1);
+
+        assert!(result.is_ok(), "Should handle prefix with special chars");
+
+        if let Ok(path) = result {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            assert!(
+                filename.starts_with("my-app_v2_"),
+                "Filename should preserve prefix"
+            );
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test that created file is actually writable
+    #[test]
+    fn test_file_is_writable() {
+        let temp_dir = std::env::temp_dir();
+
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "writable", 5, 1);
+        assert!(result.is_ok(), "Should create file");
+
+        let path = result.unwrap();
+
+        // Try to open and write to the file
+        let write_result = OpenOptions::new().write(true).open(&path);
+
+        assert!(
+            write_result.is_ok(),
+            "Should be able to open file for writing"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(path);
+    }
+
+    /// Test concurrent creation from multiple threads
+    #[test]
+    fn test_concurrent_creation() {
+        use std::sync::Arc;
+
+        let temp_dir = Arc::new(std::env::temp_dir());
+        let mut handles = vec![];
+
+        // Spawn 5 threads that each create 2 files
+        for thread_num in 0..5 {
+            let temp_dir_clone = Arc::clone(&temp_dir);
+
+            let handle = thread::spawn(move || {
+                let mut created_paths = Vec::new();
+
+                for file_num in 0..2 {
+                    let prefix = format!("concurrent_t{}_f{}", thread_num, file_num);
+                    let result = create_unique_temp_name_and_file_filepathbuf(
+                        &temp_dir_clone,
+                        &prefix,
+                        10,
+                        5,
+                    );
+
+                    assert!(result.is_ok(), "Should create file from thread");
+                    created_paths.push(result.unwrap());
+                }
+
+                created_paths
+            });
+
+            handles.push(handle);
+        }
+
+        // Collect all created paths
+        let mut all_paths = Vec::new();
+        for handle in handles {
+            let paths = handle.join().expect("Thread should complete");
+            all_paths.extend(paths);
+        }
+
+        // Verify all paths are unique
+        for i in 0..all_paths.len() {
+            for j in (i + 1)..all_paths.len() {
+                assert_ne!(
+                    all_paths[i], all_paths[j],
+                    "All paths from all threads should be unique"
+                );
+            }
+        }
+
+        // Verify all files exist
+        for path in &all_paths {
+            assert!(path.exists(), "All created files should exist");
+        }
+
+        // Cleanup
+        for path in all_paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Test error message format for debugging
+    #[test]
+    fn test_error_messages_have_cutf_prefix() {
+        let temp_dir = std::env::temp_dir();
+
+        // Test zero attempts error
+        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "test", 0, 1);
+        if let Err(e) = result {
+            assert!(
+                format!("{}", e).contains("CUTF"),
+                "Error should have CUTF prefix"
+            );
+        }
+    }
+}
+
+// /// Formats the navigation legend with color-coded keyboard shortcuts
+// ///
+// /// # Purpose
+// /// Creates a formatted legend string showing all available keyboard commands
+// /// with color highlighting (RED for command keys, YELLOW for descriptions).
+// ///
+// /// # Returns
+// /// * `Ok(String)` - The formatted legend string with ANSI color codes
+// /// * `Err(FileFantasticError)` - If string formatting fails (defensive programming)
+// ///
+// /// # Color Scheme
+// /// - RED: Single letter command keys (q, b, t, d, f, n, s, m, g, v, y, p)
+// /// - YELLOW: Command descriptions and separators
+// /// - RESET: Applied at end to restore terminal defaults
+// ///
+// /// # Legend Commands
+// /// - q: quit the application
+// /// - b: navigate back/parent directory
+// /// - t: open terminal in current directory
+// /// - d: filter to show directories only
+// /// - f: filter to show files only
+// /// - n: sort by name
+// /// - s: sort by size
+// /// - m: sort by modified date
+// /// - g: get-send file operations
+// /// - v,y,p: additional file operations
+// /// - str: search functionality
+// /// - enter: reset filters/search
+// ///
+// /// # Example
+// /// ```rust
+// /// match write_formatted_navigation_legend_to_tui() {
+// ///     Ok(legend) => println!("{}", legend),
+// ///     Err(e) => eprintln!("Failed to format legend: {}", e),
+// /// }
+// /// ```
+// fn write_formatted_navigation_legend_to_tui() -> Result<String> {
+//     // Pre-allocate string capacity based on expected legend size
+//     // Legend is approximately 200 characters plus color codes
+//     let mut legend = String::with_capacity(300);
+
+//     // // Build the legend string with error handling for format operations
+//     // // quit save undo norm ins vis del wrap relative raw byt wrd,b,end /commnt hjkl
+//     // let formatted_legend = format!(
+//     //     "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
+//     //     // YELLOW, // Overall legend color
+//     //     RED,
+//     //     YELLOW, // RED q + YELLOW uit
+//     //     RED,
+//     //     GREEN, // RED b + YELLOW ack
+//     //     YELLOW,
+//     //     RED,
+//     //     YELLOW, // RED b + YELLOW ack
+//     //     RED,
+//     //     YELLOW, // RED t + YELLOW erm
+//     //     RED,
+//     //     YELLOW, // RED d + YELLOW ir
+//     //     RED,
+//     //     YELLOW, // RED f + YELLOW ile
+//     //     RED,
+//     //     YELLOW, // RED n + YELLOW ame
+//     //     RED,
+//     //     YELLOW, // RED s + YELLOW ize
+//     //     RED,
+//     //     YELLOW, // RED m + YELLOW od
+//     //     RED,
+//     //     YELLOW, // RED m + YELLOW od
+//     //     RED,
+//     //     YELLOW, // RED g + YELLOW et
+//     //     RED,
+//     //     YELLOW, // RED v + YELLOW ,
+//     //     RED,
+//     //     YELLOW, // RED y + YELLOW ,
+//     //     RED,
+//     //     YELLOW, // RED p + YELLOW ,
+//     //     RED,
+//     //     YELLOW, // RED str + YELLOW ...
+//     //     RED,
+//     //     YELLOW,
+//     //     RED,
+//     //     // YELLOW, // RED enter + YELLOW ...
+//     //     GREEN,  // RED b + YELLOW ack
+//     //     YELLOW, // RED enter + YELLOW ...
+//     //     RED,
+//     //     YELLOW, // RED enter + YELLOW ...
+//     //     RED,
+//     //     YELLOW, // RED enter + YELLOW ...
+//     //     RESET
+//     // );
+
+//     let formatted_legend = stack_format_it(
+//         "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
+//         &[
+//             &RED, &YELLOW, &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
+//             &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED,
+//             &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
+//             &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RESET,
+//         ],
+//         "quit sav re,undo del|nrm ins vis hex raw|pasty cvy|wrd,b,end ///cmnt []idnt hjkl",
+//     );
+//     // Check if the formatted string is reasonable
+//     // (defensive programming against format! macro issues)
+//     if formatted_legend.is_empty() {
+//         return Err(LinesError::FormatError(String::from(
+//             "Legend formatting produced empty string",
+//         )));
+//     }
+
+//     // TODO (push in smaller segments?)
+//     legend.push_str(&formatted_legend);
+
+//     Ok(legend)
+// }
 
 /// Makes, verifies, or creates a directory path relative to the executable directory location.
 ///
@@ -3706,6 +4419,7 @@ pub enum PastyInputPathOrCommand {
     ClearRank(usize),
     Back,
     EmptyEnterFirstItem,
+    PastyPasteInputMode,
 }
 
 /// Renders the Pasty mode TUI display
@@ -3742,7 +4456,7 @@ fn render_pasty_tui(
     print!("\x1b[2J\x1b[H");
 
     // Draw legend (using existing helper)
-    println!("{}", format_pasty_tui_legend()?);
+    let _ = format_pasty_tui_legend();
 
     // // Padding, print 3 lines // under construction...
     // for _ in 0..3 {
@@ -3784,15 +4498,13 @@ fn render_pasty_tui(
     let message_for_infobar =
         std::str::from_utf8(&state.info_bar_message_buffer[..message_len]).unwrap_or(""); // Empty string if invalid UTF-8
 
-    print!(
-        "{}",
-        format_pasty_info_bar(
-            total_count,
-            first_count_visible,
-            last_count_visible,
-            message_for_infobar // Use info_bar_message from state
-        )?
-    );
+    // writes to TUI
+    display_pasty_info_bar(
+        total_count,
+        first_count_visible,
+        last_count_visible,
+        message_for_infobar, // Use info_bar_message from state
+    )?;
 
     io::stdout().flush()?;
 
@@ -4465,6 +5177,10 @@ impl EditorState {
             return Ok(PastyInputPathOrCommand::ClearAll);
         }
 
+        if trimmed == "paste" {
+            return Ok(PastyInputPathOrCommand::PastyPasteInputMode);
+        }
+
         // Check for "clearN" pattern (e.g., "clear3")
         if trimmed.starts_with("clear") && trimmed.len() > 5 {
             let num_str = &trimmed[5..];
@@ -4889,7 +5605,7 @@ impl EditorState {
 
         // Pagination state (transient to this Pasty session)
         let mut offset: usize = 0;
-        let items_per_page = self.effective_rows;
+        let items_per_page = self.effective_rows - 1; // double header
 
         // Loop iteration counter (defensive bounds)
         let mut pasty_iteration = 0;
@@ -4951,6 +5667,86 @@ impl EditorState {
                 Ok(PastyInputPathOrCommand::Back) => {
                     let _ = self.set_info_bar_message(""); // Clear any error messages
                     return Ok(true); // Exit Pasty mode, back to editor
+                }
+
+                //  ==============================
+                //  PastyPasteInputMode
+                //  ==============================
+                /*
+                Idea:
+                multi-line paste works in append-mode,
+                but not well in full-lines
+                so:
+                have a 'Paste functionality' in Pasty
+                to append into a new file
+                then Pasty that file in
+                */
+                Ok(PastyInputPathOrCommand::PastyPasteInputMode) => {
+                    // 1 make new file/path
+                    let pasty_paste_path_base: Option<PathBuf> =
+                        self.session_directory_path.clone();
+
+                    // // 1: Get clipboard directory
+                    // let pasty_paste_path_base = self
+                    //     .session_directory_path
+                    //     .as_ref()
+                    //     .ok_or_else(|| {
+                    //         log_error(
+                    //             "Session directory path is not set",
+                    //             Some("copy_selection_to_clipboardfile"),
+                    //         );
+                    //         LinesError::StateError(
+                    //             "Session directory path is not initialized".into(),
+                    //         )
+                    //     })?
+                    //     .join("clipboard");
+
+                    let extractedpath_base = match pasty_paste_path_base {
+                        Some(p) => p,
+                        None => PathBuf::from(""),
+                    };
+
+                    let extracted_path = extractedpath_base.join("clipboard");
+
+                    // https://github.com/lineality/unique_temp_pathname_rust
+                    let pasteinput_path =
+                        create_unique_temp_name_and_file_filepathbuf(&extracted_path, "", 10, 10)?;
+
+                    // Convert to absolute path (defensive)
+                    let absolute_path = if pasteinput_path.is_absolute() {
+                        pasteinput_path
+                    } else {
+                        // Make relative to current working directory
+                        match std::env::current_dir() {
+                            Ok(cwd) => cwd.join(&pasteinput_path),
+                            Err(_) => {
+                                let _ = self.set_info_bar_message("*path resolution failed*");
+                                continue; // Stay in loop
+                            }
+                        }
+                    };
+
+                    print!("\x1B[2J\x1B[1;1H");
+                    io::stdout().flush()?;
+
+                    // 2. paste into file-path
+                    // Lets users do N multi-line pastes, works like append-mode
+                    // plus pasty mode
+                    // TODO add to clipboard?
+                    // ok to pass in handle...hopefully ^
+                    let _ = pasty_paste_mode(&absolute_path, stdin_handle);
+
+                    // 3. Insert
+
+                    // Insert file at cursor
+                    if let Err(_) = insert_file_at_cursor(self, &absolute_path) {
+                        let _ = self.set_info_bar_message("*insert failed*");
+                        continue; // Stay in loop
+                    }
+
+                    let _ = self.set_info_bar_message(""); // Clear messages
+
+                    return Ok(true); // Exit Pasty mode
                 }
 
                 //  ==========================================
@@ -5680,12 +6476,12 @@ impl EditorState {
                                         &[&_e.to_string()],
                                         "Cannot get changelog directory",
                                     ),
-                                    Some("insert_newline_at_cursor_chunked:changelog"),
+                                    Some("get_undo_changelog_directory_path:changelog"),
                                 );
                                 // safe
                                 log_error(
                                     "Cannot get changelog directory",
-                                    Some("insert_newline_at_cursor_chunked:changelog"),
+                                    Some("get_undo_changelog_directory_path:changelog"),
                                 );
 
                                 // Continue without undo support - insertion succeeded
@@ -5731,13 +6527,17 @@ impl EditorState {
                                                 "Failed to log newline at position {}: {}",
                                                 position_u128, _e
                                             ),
-                                            Some("insert_newline_at_cursor_chunked:changelog"),
+                                            Some(
+                                                "button_make_changelog_from_user_character_action_level:changelog",
+                                            ),
                                         );
 
                                         // safe
                                         log_error(
                                             "Failed to log newline",
-                                            Some("insert_newline_at_cursor_chunked:changelog"),
+                                            Some(
+                                                "button_make_changelog_from_user_character_action_level:changelog",
+                                            ),
                                         );
                                     } else {
                                         // Retry after brief pause
@@ -5867,13 +6667,13 @@ impl EditorState {
                                 #[cfg(debug_assertions)]
                                 log_error(
                                     &format!("Cannot get changelog directory: {}", _e),
-                                    Some("insert_newline_at_cursor_chunked:changelog"),
+                                    Some("get_undo_changelog_directory_path:changelog"),
                                 );
 
                                 #[cfg(not(debug_assertions))]
                                 log_error(
                                     "Cannot get changelog directory",
-                                    Some("insert_newline_at_cursor_chunked:changelog"),
+                                    Some("get_undo_changelog_directory_path:changelog"),
                                 );
 
                                 // Continue without undo support - insertion succeeded
@@ -5919,13 +6719,17 @@ impl EditorState {
                                                 "Failed to log newline at position {}: {}",
                                                 position_u128, _e
                                             ),
-                                            Some("insert_newline_at_cursor_chunked:changelog"),
+                                            Some(
+                                                "button_make_changelog_from_user_character_action_level:changelog",
+                                            ),
                                         );
 
                                         #[cfg(not(debug_assertions))]
                                         log_error(
                                             "Failed to log newline",
-                                            Some("insert_newline_at_cursor_chunked:changelog"),
+                                            Some(
+                                                "button_make_changelog_from_user_character_action_level:changelog",
+                                            ),
                                         );
                                     } else {
                                         // Retry after brief pause
@@ -6484,12 +7288,88 @@ impl EditorState {
             // and we should NOT continue reading more chunks
             let ends_with_newline = bytes_read > 0 && text_buffer[bytes_read - 1] == b'\n';
             let will_continue_brigade =
+                // TODO: this equivalence is taken to indicate what?
                 !ends_with_newline && bytes_read == TEXT_BUCKET_BRIGADE_CHUNKING_BUFFER_SIZE;
 
             // Process the chunk, handling multiple newlines
             let mut chunk_start = 0;
 
             while chunk_start < bytes_read {
+                // =================
+                // Handling Newlines
+                // =================
+                /*
+                Issues and known strangeness.
+
+                1. Newlines
+                Due to newlines '\n' being the content & code signal for one or more things
+                relating to stdin, There may be no perfect way to handle them.
+
+                Multi-line cut and past (for lines less than ~200 char) can work
+                smoothly if you double-newline where the inner-newlines are.
+
+                e.g.
+                ```
+                1 fish
+
+                2 f
+                i
+                s
+                h
+
+
+                3 f
+
+                i
+
+                s
+
+                h
+
+                ```
+                1 and 2 appear the same, 3 looks like 2
+
+
+                2. there is a long-line bug which is triggered by
+                single newlines becoming long-lines.
+                Bug: If the line is longer than ~200char, something breaks
+                sometimes causes an error ("cursor not on valid file position") from here:
+                ```rust
+                    // Step 1: Get file position at/of/where  cursor (with graceful error handling)
+                    let file_pos = match lines_editor_state.get_row_col_file_position(
+                        lines_editor_state.cursor.tui_row,
+                        lines_editor_state.cursor.tui_col,
+                    ) {
+                        Ok(Some(pos)) => pos,
+                        Ok(None) => {
+                            eprintln!("Warning: Cannot insert - cursor not on valid file position");
+                            log_error(
+                                "Insert newline failed: cursor not on valid file position",
+                                Some("insert_newline_at_cursor_chunked"),
+                            );
+                            return Ok(());
+                ```
+                "cursor not on valid file position"
+                Sometimes not.
+                Lines does not panic or exit or restart, it just hangs, which is odd.
+
+                3. The clean alternative, which is best for large texts
+                anyway most likely, is to import a .txt doc (not copy-paste with OS heap)
+
+                4. minimal 'append-mode' works just fine (funnily enough)
+                So possibly the issue is knowing where to move the cursor to after input...
+
+                if brute force:
+
+                file byte length before and after insert, and move cursor ahead the difference?
+
+                5. There is also the hex-write system, by which characters are hex-edited in
+                onto blank spaces, which is odd, unless the file is huge then it makes sense.
+
+
+
+                */
+
                 // Find next newline
                 let remaining = &text_buffer[chunk_start..bytes_read];
 
@@ -7421,7 +8301,7 @@ fn is_leap_year(year: u64) -> bool {
 // /// ```
 // pub fn memo_mode_mini_editor_loop(original_file_path: &Path) -> Result<()> {
 //     // Pre-allocated buffer for bucket brigade stdin reading
-//     const STDIN_CHUNK_SIZE: usize = 256;
+//     const STDIN_CHUNK_SIZE: usize = 64;
 //     const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
 
 //     let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
@@ -7543,6 +8423,119 @@ fn is_leap_year(year: u64) -> bool {
 
 //     Ok(())
 // }
+
+/// Lets users do N multi-line pastes, works like append-mode
+pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) -> Result<()> {
+    // Pre-allocated buffer for bucket brigade stdin reading
+    const STDIN_CHUNK_SIZE: usize = 64;
+    const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
+
+    let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
+
+    // Open file in append mode once (keeps handle open for session)
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&absolute_path)?;
+
+    // buffy_print("Paste multiline text here. ", &[])?;
+    io::stdout().flush()?;
+
+    let mut chunk_counter = 0;
+
+    // Main editor loop
+    loop {
+        buffy_print("\x1B[2J\x1B[1;1H", &[])?;
+        io::stdout().flush()?;
+        write_red_hotkey("", "Paste multiline text here. Type '")?;
+        write_red_hotkey("b", "' to go")?;
+        write_red_hotkey(" back", ". Paste here:")?;
+        buffy_print("{} > ", &[BuffyFormatArg::Str(RESET)])?;
+        io::stdout().flush()?;
+
+        // Defensive: prevent infinite loop
+        chunk_counter += 1;
+        if chunk_counter > MAX_CHUNKS {
+            return Err(LinesError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "Maximum iteration limit exceeded",
+            )));
+        }
+
+        // Clear buffer before reading (defensive: prevent data leakage)
+        for i in 0..STDIN_CHUNK_SIZE {
+            stdin_chunk_buffer[i] = 0;
+        }
+
+        // Read next chunk from stdin
+        let bytes_read = match stdin_handle.read(&mut stdin_chunk_buffer) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                continue;
+            }
+        };
+
+        //    =================================================
+        // // Debug-Assert, Test-Asset, Production-Catch-Handle
+        //    =================================================
+        // This is not included in production builds
+        // assert: only when running in a debug-build: will panic
+        debug_assert!(
+            bytes_read <= STDIN_CHUNK_SIZE,
+            "bytes_read ({}) exceeded buffer size ({})",
+            bytes_read,
+            STDIN_CHUNK_SIZE
+        );
+        // This is not included in production builds
+        // assert: only when running cargo test: will panic
+        #[cfg(test)]
+        assert!(
+            bytes_read <= STDIN_CHUNK_SIZE,
+            "bytes_read ({}) exceeded buffer size ({})",
+            bytes_read,
+            STDIN_CHUNK_SIZE
+        );
+        // Catch & Handle without panic in production
+        // This IS included in production to safe-catch
+        if !bytes_read <= STDIN_CHUNK_SIZE {
+            // state.set_info_bar_message("Config error");
+            return Err(LinesError::GeneralAssertionCatchViolation(
+                "bytes_read <= STDIN_CHUNK_SIZE".into(),
+            ));
+        }
+
+        // Check for exit command before writing to file
+        // Only check if valid UTF-8 (don't fail on binary data)
+        if let Ok(text_input_str) = std::str::from_utf8(&stdin_chunk_buffer[..bytes_read]) {
+            let trimmed = text_input_str.trim();
+
+            // Exit commands: q, quit, exit, exit()
+            if trimmed == "b" || trimmed == "back" || trimmed == "q" {
+                println!("Exiting editor...");
+                break;
+            }
+        }
+
+        // Write chunk directly to file (bucket brigade pattern)
+        let bytes_written = file.write(&stdin_chunk_buffer[..bytes_read])?;
+
+        // Defensive assertion: all bytes should be written
+        assert_eq!(
+            bytes_written, bytes_read,
+            "File write incomplete: wrote {} of {} bytes",
+            bytes_written, bytes_read
+        );
+
+        // Flush to disk immediately (durability)
+        file.flush()?;
+    }
+
+    // Final flush before exit
+    file.flush()?;
+
+    Ok(())
+}
 
 // /// Builds and displays the memo mode TUI (Text User Interface)
 // ///
@@ -11489,15 +12482,17 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 Ok(success) => success,
                 Err(_e) => {
                     #[cfg(debug_assertions)]
-                    eprintln!("Error clearing redo logs: {:?}", _e);
+                    eprintln!(
+                        "button_safe_clear_all_redo_logs Error clearing redo logs: {:?}",
+                        _e
+                    );
 
                     // Log error and continue (non-fatal)
                     log_error(
-                        "Cannot clear redo logs",
-                        Some("backspace_style_delete_noload"),
+                        "button_safe_clear_all_redo_logs Cannot clear redo logs",
+                        Some("DeleteRange"),
                     );
-                    let _ = lines_editor_state
-                        .set_info_bar_message("DeleteRange call Redo clear failed");
+                    let _ = lines_editor_state.set_info_bar_message("Redo-clear failed");
 
                     false // Treat error as failure
                 }
@@ -11534,11 +12529,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     eprintln!("Error clearing redo logs: {:?}", _e);
 
                     // Log error and continue (non-fatal)
-                    log_error(
-                        "Cannot clear redo logs",
-                        Some("backspace_style_delete_noload"),
-                    );
-                    let _ = lines_editor_state.set_info_bar_message("bsdn Redo clear failed");
+                    log_error("Cannot clear redo logs", Some("Command DeleteBackspace"));
+                    let _ = lines_editor_state.set_info_bar_message("Redo clear failed");
 
                     false // Treat error as failure
                 }
@@ -11562,9 +12554,9 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Log error and continue (non-fatal)
                     log_error(
                         "Cannot clear redo logs",
-                        Some("backspace_style_delete_noload"),
+                        Some("Command::InsertNewline button_safe_clear_all_redo_logs"),
                     );
-                    let _ = lines_editor_state.set_info_bar_message("bsdn Redo clear failed");
+                    let _ = lines_editor_state.set_info_bar_message("Redo clear failed");
 
                     false // Treat error as failure
                 }
@@ -12237,33 +13229,35 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
     );
     // reset for each new fn goto_line_end
     lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_length + line_num_width;
-    let this_row = lines_editor_state.cursor.tui_row;
-    let this_col = lines_editor_state.cursor.tui_col;
-    println!(
-        "fn goto_line_end lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-        this_row, this_col,
-    );
-    println!(
-        "\nfn goto_line_end lines_editor_state.get_row_col_file_position -> {:?}",
-        lines_editor_state.get_row_col_file_position(this_row, this_col)
-    );
-    println!(
-        "\nfn goto_line_end lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-        lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-    );
-    println!(
-        "\nfn goto_line_end lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-        lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-    );
-    println!(
-        "\nfn goto_line_end lines_editor_state.cursor.tui_row -> {:?}",
-        lines_editor_state.cursor.tui_row
-    );
-    println!(
-        "\nfn goto_line_end windowmap_line_byte_start_end_position_pairs -> {:?}",
-        lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-    );
-
+    #[cfg(debug_assertions)]
+    {
+        let this_row = lines_editor_state.cursor.tui_row;
+        let this_col = lines_editor_state.cursor.tui_col;
+        println!(
+            "fn goto_line_end lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
+            this_row, this_col,
+        );
+        println!(
+            "\nfn goto_line_end lines_editor_state.get_row_col_file_position -> {:?}",
+            lines_editor_state.get_row_col_file_position(this_row, this_col)
+        );
+        println!(
+            "\nfn goto_line_end lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
+            lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
+        );
+        println!(
+            "\nfn goto_line_end lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
+            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
+        );
+        println!(
+            "\nfn goto_line_end lines_editor_state.cursor.tui_row -> {:?}",
+            lines_editor_state.cursor.tui_row
+        );
+        println!(
+            "\nfn goto_line_end windowmap_line_byte_start_end_position_pairs -> {:?}",
+            lines_editor_state.windowmap_line_byte_start_end_position_pairs,
+        );
+    }
     // ========================================================================
     // STEP 3: Convert bytes to characters
     // ========================================================================
@@ -12324,7 +13318,7 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
         }
     }
 
-    // message? 'end of line'?
+    // message? 'end of line'? TODO: How detailed or terse should this be?
     // let _ = lines_editor_state.set_info_bar_message(&format!("end of line ({} chars)", char_count));
     // let _ = lines_editor_state.set_info_bar_message(&char_count.to_string());
     let _ = lines_editor_state.set_info_bar_message("end of line");
@@ -18095,6 +19089,7 @@ pub fn append_bytes_from_file_to_file(
     Ok(())
 }
 
+// TODO vec< is heap
 /// Reads clipboard directory and returns files sorted by modified time (newest first)
 pub fn read_and_sort_pasty_clipboard(clipboard_dir: &PathBuf) -> io::Result<Vec<PathBuf>> {
     if !clipboard_dir.exists() {
@@ -18125,95 +19120,295 @@ pub fn read_and_sort_pasty_clipboard(clipboard_dir: &PathBuf) -> io::Result<Vec<
     Ok(files_with_time.into_iter().map(|(path, _)| path).collect())
 }
 
-/// Formats the Pasty legend with color-coded commands
-fn format_pasty_tui_legend() -> io::Result<String> {
-    // Ok(format!(
-    //     "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
-    //     YELLOW,
-    //     RED,
-    //     YELLOW,
-    //     RED,
-    //     YELLOW,
-    //     RED,
-    //     YELLOW,
-    //     YELLOW,
-    //     RED,
-    //     YELLOW,
-    //     RED,
-    //     RESET,
-    //     RED,
-    //     YELLOW,
-    //     RESET
-    // ))
+/// Writes the complete navigation legend directly to terminal
+///
+/// ## Project Context
+/// Displays all available keyboard commands for file navigation with
+/// color-coded hotkeys. Each command section written independently for
+/// maintainability - adding/removing commands requires no argument counting.
+///
+/// ## Memory: ZERO HEAP
+/// All output written directly to terminal using buffy functions.
+/// No intermediate String building, no heap allocation.
+///
+/// ## Operation
+/// Writes legend in modular sections:
+/// - Each command written separately via write_red_hotkey()
+/// - Colors applied per-command (RED hotkey, YELLOW description)
+/// - RESET applied at end
+/// - Modular: Add/remove commands without affecting others
+///
+/// ## Safety & Error Handling
+/// - Returns io::Result for write failures
+/// - Each command write is independent
+/// - Failure in one command doesn't affect others structurally
+///
+/// ## Legend Commands
+/// - q: quit application
+/// - sav: save current state (red and green and yellow)
+/// - re: reload/refresh
+/// - undo: undo last operation
+/// - del: delete item
+/// - nrm: normal mode
+/// - ins: insert mode
+/// - vis: visual mode
+/// - hex: hex editor mode
+/// - raw: raw view
+/// - pasty: paste operation
+/// - cvy: copy operation
+/// - wrd,b,end: word navigation
+/// - ///cmnt: comment operations (red and green and yellow)
+/// - []idnt: indent operations
+/// - hjkl: vim-style navigation
+///
+/// ## Example
+/// ```rust
+/// // In main display loop:
+/// write_formatted_navigation_legend_to_tui()?;
+/// ```
+fn format_pasty_tui_legend() -> Result<()> {
+    // File operations group
+    write_red_hotkey("", "Have a Pasty!! ")?;
+    // Three Colour
+    // write_red_green_hotkey("s", "a", "v ")?;
+    // Red only
+    write_red_hotkey("b", "ack paste")?;
+    write_red_hotkey("N", " ")?;
 
-    let stack_formatted_legend = stack_format_it(
-        "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
-        &[
-            &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &YELLOW, &RED, &YELLOW, &RED,
-            &RESET, &RED, &YELLOW, &RESET,
-        ],
-        "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
-    );
+    // Mode operations group
+    write_red_hotkey("str", "(any file-path) | ")?;
+    write_red_hotkey("clear", " all | ")?;
+    write_red_green_hotkey("clear", "N", " item ")?;
+    // newline \n
+    buffy_println("", &[])?;
 
-    Ok(stack_formatted_legend)
+    write_red_hotkey("Empty Enter", " Add Freshest Clipboard Item | ")?;
+
+    write_red_hotkey("paste", " multi-line cut and paste")?;
+    // write_red_hotkey("hex", " ")?;
+
+    // // View operations group
+    // write_red_hotkey("r", "aw|")?;
+    // write_red_hotkey("p", "asty ")?;
+    // write_red_hotkey("cvy", "|")?;
+
+    // // Navigation group
+    // write_red_hotkey("w", "rd,")?;
+    // write_red_hotkey("b", ",")?;
+    // write_red_hotkey("e", "nd ")?;
+
+    // // Comment/indent group
+    // // Three Colour
+    // write_red_green_hotkey("/", "/", "/cmnt ")?;
+    // // Red only
+    // write_red_hotkey("[]", "idnt ")?;
+
+    // // Movement group
+    // write_red_hotkey("hjkl", "")?;
+
+    // Clear formatting: ANSI color codes are stateful
+    // Make sure NEXT prints
+    // are not also formatted.
+    buffy_print("{}", &[BuffyFormatArg::Str(RESET)])?;
+
+    // newline \n
+    buffy_println("", &[])?;
+
+    // Done
+    Ok(())
 }
 
-/// Formats the Pasty info bar with count, pagination, and error messages
-fn format_pasty_info_bar(
+// /// Formats the Pasty legend with color-coded commands
+// fn format_pasty_tui_legend2() -> io::Result<String> {
+//     // Ok(format!(
+//     //     "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
+//     //     YELLOW,
+//     //     RED,
+//     //     YELLOW,
+//     //     RED,
+//     //     YELLOW,
+//     //     RED,
+//     //     YELLOW,
+//     //     YELLOW,
+//     //     RED,
+//     //     YELLOW,
+//     //     RED,
+//     //     RESET,
+//     //     RED,
+//     //     YELLOW,
+//     //     RESET
+//     // ))
+
+//     let stack_formatted_legend = stack_format_it(
+//         "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
+//         &[
+//             &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &YELLOW, &RED, &YELLOW, &RED,
+//             &RESET, &RED, &YELLOW, &RESET,
+//         ],
+//         "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
+//     );
+
+//     Ok(stack_formatted_legend)
+// }
+
+// /// Formats the Pasty info bar with count, pagination, and error messages
+// fn format_pasty_info_bar(
+//     total_count: usize,
+//     first_count_visible: usize,
+//     last_count_visible: usize,
+//     info_bar_message: &str,
+// ) -> io::Result<String> {
+//     let infobar_message_display = if !info_bar_message.is_empty() {
+//         stack_format_it(" {}", &[&info_bar_message], "")
+//     } else {
+//         String::new()
+//     };
+
+//     // Ok(format!(
+//     //     // "{}{}{}Total, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{} >{} ",  // minimal
+//     //     "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item # to paste, or a file-path to paste file text {}> ",
+//     //     RED,
+//     //     total_count,
+//     //     YELLOW,
+//     //     YELLOW,
+//     //     RED,
+//     //     first_count_visible,
+//     //     YELLOW,
+//     //     RED,
+//     //     last_count_visible,
+//     //     YELLOW,
+//     //     infobar_message_display,
+//     //     YELLOW,
+//     //     RESET
+//     // ))
+
+//     let string_totalcount = total_count.to_string();
+//     let string_firstcount_visible = first_count_visible.to_string();
+//     let string_last_count_visible = last_count_visible.to_string();
+
+//     let stack_formatted_infobar = stack_format_it(
+//         "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item #, 'paste', or file-path to paste file text {}> ",
+//         &[
+//             &RED,
+//             &string_totalcount,
+//             &YELLOW,
+//             &YELLOW,
+//             &RED,
+//             &string_firstcount_visible,
+//             &YELLOW,
+//             &RED,
+//             &string_last_count_visible,
+//             &YELLOW,
+//             &infobar_message_display,
+//             &YELLOW,
+//             &RESET,
+//         ],
+//         "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
+//     );
+
+//     Ok(stack_formatted_infobar)
+// }
+
+/// Displays the Pasty info bar with count, pagination, and error messages.
+/// Writes directly to stdout with zero heap allocation.
+///
+/// ## Project Context
+/// Pasty clipboard manager info bar - shows total items, current view range,
+/// navigation hints, and optional error/status messages. Each colored item
+/// has its color code with it (not scattered in previous statements).
+///
+/// ## Memory: ZERO HEAP
+/// All output written directly to terminal using stack-based formatting.
+///
+/// ## Parameters
+/// - total_count: Total number of clipboard items
+/// - first_count_visible: First item number currently displayed
+/// - last_count_visible: Last item number currently displayed
+/// - info_bar_message: Optional status/error message (empty string if none)
+fn display_pasty_info_bar(
     total_count: usize,
     first_count_visible: usize,
     last_count_visible: usize,
     info_bar_message: &str,
-) -> io::Result<String> {
-    let infobar_message_display = if !info_bar_message.is_empty() {
-        stack_format_it(" {}", &[&info_bar_message], "")
-    } else {
-        String::new()
-    };
+) -> io::Result<()> {
+    // =========================================================================
+    // SECTION 1: RED total_count
+    // =========================================================================
+    buffy_print(
+        "{}{}",
+        &[BuffyFormatArg::Str(RED), BuffyFormatArg::Usize(total_count)],
+    )?;
 
-    // Ok(format!(
-    //     // "{}{}{}Total, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{} >{} ",  // minimal
-    //     "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item # to paste, or a file-path to paste file text {}> ",
-    //     RED,
-    //     total_count,
-    //     YELLOW,
-    //     YELLOW,
-    //     RED,
-    //     first_count_visible,
-    //     YELLOW,
-    //     RED,
-    //     last_count_visible,
-    //     YELLOW,
-    //     infobar_message_display,
-    //     YELLOW,
-    //     RESET
-    // ))
+    // =========================================================================
+    // SECTION 2: YELLOW " Clipboard Items, "
+    // =========================================================================
+    buffy_print("{} Clipboard Items, ", &[BuffyFormatArg::Str(YELLOW)])?;
 
-    let string_totalcount = total_count.to_string();
-    let string_firstcount_visible = first_count_visible.to_string();
-    let string_last_count_visible = last_count_visible.to_string();
+    // =========================================================================
+    // SECTION 3: YELLOW "Showing"
+    // =========================================================================
+    buffy_print("{}Showing ", &[BuffyFormatArg::Str(YELLOW)])?;
 
-    let stack_formatted_infobar = stack_format_it(
-        "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item # to paste, or a file-path to paste file text {}> ",
+    // =========================================================================
+    // SECTION 4: RED first_count_visible
+    // =========================================================================
+    buffy_print(
+        "{}{}",
         &[
-            &RED,
-            &string_totalcount,
-            &YELLOW,
-            &YELLOW,
-            &RED,
-            &string_firstcount_visible,
-            &YELLOW,
-            &RED,
-            &string_last_count_visible,
-            &YELLOW,
-            &infobar_message_display,
-            &YELLOW,
-            &RESET,
+            BuffyFormatArg::Str(RED),
+            BuffyFormatArg::Usize(first_count_visible),
         ],
-        "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
-    );
+    )?;
 
-    Ok(stack_formatted_infobar)
+    // =========================================================================
+    // SECTION 5: YELLOW "-"
+    // =========================================================================
+    buffy_print("{}-", &[BuffyFormatArg::Str(YELLOW)])?;
+
+    // =========================================================================
+    // SECTION 6: RED last_count_visible
+    // =========================================================================
+    buffy_print(
+        "{}{}",
+        &[
+            BuffyFormatArg::Str(RED),
+            BuffyFormatArg::Usize(last_count_visible),
+        ],
+    )?;
+
+    // =========================================================================
+    // SECTION 7: YELLOW " (Page up/down k/j) "
+    // =========================================================================
+    buffy_print("{} (Page up/down k/j) ", &[BuffyFormatArg::Str(YELLOW)])?;
+
+    // =========================================================================
+    // SECTION 8: YELLOW info_bar_message (if present)
+    // =========================================================================
+    if !info_bar_message.is_empty() {
+        buffy_print(
+            "{}{}",
+            &[
+                BuffyFormatArg::Str(YELLOW),
+                BuffyFormatArg::Str(info_bar_message),
+            ],
+        )?;
+    }
+
+    // =========================================================================
+    // SECTION 9: Newline + prompt text + RESET
+    // =========================================================================
+    buffy_print("\nEnter clipboard item #, 'paste', ", &[])?;
+
+    buffy_print("or file-path to paste file text ", &[])?;
+
+    buffy_print("{}> ", &[BuffyFormatArg::Str(RESET)])?;
+
+    // =========================================================================
+    // FINAL: Flush to ensure prompt appears immediately
+    // =========================================================================
+    io::stdout().flush()?;
+
+    Ok(())
 }
 
 /// Clears all files from clipboard directory
@@ -19063,8 +20258,7 @@ pub fn render_tui_hex(state: &EditorState) -> Result<()> {
     })?;
 
     // === TOP LINE: LEGEND (same as UTF-8 mode) ===
-    let legend = format_navigation_legend()?;
-    println!("{}", legend);
+    let _ = write_formatted_navigation_legend_to_tui()?;
 
     // padding
     for _ in 0..5 {
@@ -19302,8 +20496,7 @@ pub fn render_tui_raw(state: &EditorState) -> Result<()> {
     })?;
 
     // === TOP LINE: LEGEND (same as hex mode) ===
-    let legend = format_navigation_legend()?;
-    println!("{}", legend);
+    let _ = write_formatted_navigation_legend_to_tui()?;
 
     // padding
     for _ in 0..5 {
@@ -19839,8 +21032,7 @@ pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
     })?;
 
     // === TOP LINE: LEGEND ===
-    let legend = format_navigation_legend()?;
-    println!("{}", legend);
+    let _ = write_formatted_navigation_legend_to_tui()?;
 
     // === MIDDLE: FILE CONTENT WITH CURSOR ===
     // // Render each content row
@@ -19851,25 +21043,54 @@ pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
 
             match std::str::from_utf8(row_content) {
                 Ok(row_str) => {
-                    // ADD CURSOR HIGHLIGHTING HERE (was missing!)
+                    // // add formatting and highlighitng here
+                    // let display_str = render_utf8txt_row_with_cursor(state, row, row_str)?;
+                    // println!("{}", display_str);
+
+                    // // Find where line number ends (first space after digits)
+                    // let mut found_digit = false;
+                    // let mut split_pos = 0;
+
+                    let line_num_width = calculate_line_number_width(
+                        state.line_count_at_top_of_window,
+                        state.cursor.tui_row,
+                        state.effective_rows,
+                    );
+
+                    let line_num_part = &row_str[..line_num_width];
+                    // let content_part = &row_str[line_num_width..];
+
+                    // Print green line number
+                    buffy_print(
+                        "{}",
+                        &[BuffyFormatArg::StrStyled(line_num_part, LINE_NUMBER_STYLE)],
+                    )?;
+
+                    // Render JUST content with cursor (cursor.tui_col is still in full row coordinates)
+                    // Pass full row_str so cursor column math works, but only display content
                     let display_str = render_utf8txt_row_with_cursor(state, row, row_str)?;
-                    println!("{}", display_str);
+
+                    // Print only content portion of display_str (skip line number)
+                    buffy_println("{}", &[BuffyFormatArg::Str(&display_str[line_num_width..])])?;
                 }
-                Err(_) => println!("�"),
+                Err(_) => buffy_println("�", &[])?, //println!("�"),
             }
         } else {
             // Show cursor on empty rows if cursor is here
             if row == state.cursor.tui_row {
-                println!("{}{}{}█{}", "\x1b[1m", "\x1b[31m", "\x1b[47m", "\x1b[0m");
+                // println!("{}{}{}█{}", "\x1b[1m", "\x1b[31m", "\x1b[47m", "\x1b[0m");
+                buffy_println("{}", &[BuffyFormatArg::CharStyled('█', CURSOR_BLOCK_STYLE)])?;
             } else {
-                println!();
+                // println!();
+                buffy_println("", &[])?;
             }
         }
     }
 
     // === BOTTOM LINE: INFO BAR ===
     let info_bar = format_info_bar_cafe_normal_visualselect(state)?;
-    print!("{}", info_bar);
+    // print!("{}", info_bar);
+    buffy_print(&info_bar, &[])?;
 
     io::stdout().flush().map_err(|e| {
         LinesError::DisplayError(stack_format_it(
@@ -19881,6 +21102,7 @@ pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
 
     Ok(())
 }
+
 /// Renders one row of display with both cursor and visual selection highlighting
 ///
 /// # Purpose
@@ -19918,6 +21140,7 @@ fn render_utf8txt_row_with_cursor(
     const BG_CYAN: &str = "\x1b[46m";
     const RESET: &str = "\x1b[0m";
 
+    // TODO vec< is heap
     let chars: Vec<char> = row_content.chars().collect();
     let mut result = String::with_capacity(row_content.len() + 100);
 

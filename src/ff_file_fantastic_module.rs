@@ -14969,6 +14969,10 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
         include_str!("error_types_module.rs"),
     ),
     SourcedFile::new(
+        "src/buffy_format_write_module.rs",
+        include_str!("buffy_format_write_module.rs"),
+    ),
+    SourcedFile::new(
         "src/ff_file_fantastic_module.rs",
         include_str!("ff_file_fantastic_module.rs"),
     ),

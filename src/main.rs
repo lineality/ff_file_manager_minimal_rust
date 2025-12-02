@@ -11,6 +11,7 @@ mod ribbon_external_counter_module;
 mod rows_and_columns_module;
 
 // lines
+mod buffy_format_write_module;
 mod buttons_reversible_edit_changelog_module;
 mod lines_editor_module;
 mod toggle_comment_indent_module;
