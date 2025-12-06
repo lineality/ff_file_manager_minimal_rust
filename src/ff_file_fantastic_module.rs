@@ -11769,7 +11769,6 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
     }
 
     // === Handle "lines" keyword - open in new terminal ===
-    // === Handle "lines" keyword - open in new terminal ===
     if user_input == "lines" || user_input.is_empty() {
         let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
 
@@ -11847,6 +11846,18 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
                 .arg(&lines_command)
                 .spawn()
                 .map_err(|e| FileFantasticError::EditorLaunchFailed(format!("lines: {}", e)))?;
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            // android is always headless
+            lines_full_file_editor(
+                Some(file_path.clone()),
+                None,
+                Some(lines_editor_session_path.clone()),
+                true,
+            )?; // The ? will use From<LinesError> to convert
+            return Ok(());
         }
 
         return Ok(());
