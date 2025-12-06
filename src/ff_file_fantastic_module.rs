@@ -11770,11 +11770,11 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 
     // === Handle "lines" keyword - open in new terminal ===
     if user_input == "lines" || user_input.is_empty() {
-        let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
-
         // Launch in new terminal (platform-specific)
         #[cfg(target_os = "macos")]
         {
+            let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
             // macOS needs the command as a single string for Terminal.app
             let lines_command = format!(
                 "{} {} --session {}; exit",
@@ -11792,6 +11792,8 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 
         #[cfg(target_os = "linux")]
         {
+            let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
             let terminal_commands = [
                 ("gnome-terminal", vec!["--"]),
                 ("ptyxis", vec!["--"]),
@@ -11834,6 +11836,8 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
 
         #[cfg(target_os = "windows")]
         {
+            let exe_path = std::env::current_exe().map_err(|e| FileFantasticError::Io(e))?;
+
             let lines_command = format!(
                 "{} {} --session {} && pause",
                 exe_path.to_string_lossy(),
@@ -11857,7 +11861,6 @@ fn open_file(file_path: &PathBuf, lines_editor_session_path: &PathBuf) -> Result
                 Some(lines_editor_session_path.clone()),
                 true,
             )?; // The ? will use From<LinesError> to convert
-            return Ok(());
         }
 
         return Ok(());
