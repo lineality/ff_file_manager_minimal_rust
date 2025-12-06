@@ -180,11 +180,14 @@ e.g. Fedora(rpm) / Ubuntu (Linux)
 ```
 cargo install --path . --root ~/.local
 ```
-e.g. Andoid (also linux)
+e.g. Andoid (which is a form of linux)
 ```
 cargo install --path . --root $PREFIX
 ```
-
+e.g. Andoid (which is a form of linux)
+```
+cargo install --path . --root $PREFIX --profile release-performance
+```
 
 Then running 'ff' in a terminal should work.
 
