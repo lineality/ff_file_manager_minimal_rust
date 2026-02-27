@@ -992,7 +992,10 @@ use super::buttons_reversible_edit_changelog_module::{
     read_character_bytes_from_file, read_single_byte_from_file, remove_single_byte_from_file,
 };
 
-use super::buffy_format_write_module::{BuffyFormatArg, BuffyStyles, buffy_print, buffy_println};
+use super::buffy_format_write_module::{
+    BuffyFormatArg, BuffyStyles, SyntaxHighlight, buffy_get_syntax_highlight,
+    buffy_is_plain_text_extension, buffy_print, buffy_println,
+};
 
 /// Style for line numbers - green, no bold
 const LINE_NUMBER_STYLE: BuffyStyles = BuffyStyles {
@@ -1082,6 +1085,27 @@ const GREEN: &str = "\x1b[32m";
 // const BOLD: &str = "\x1b[1m";
 // const ITALIC: &str = "\x1b[3m";
 // const UNDERLINE: &str = "\x1b[4m";
+
+// ===========================================================
+// ANSI ESCAPE CODES — compile-time constants, zero allocation
+// ===========================================================
+const BOLD_U8: &[u8] = b"\x1b[1m";
+const RED_U8: &[u8] = b"\x1b[31m";
+const GREEN_U8: &[u8] = b"\x1b[32m";
+const YELLOW_U8: &[u8] = b"\x1b[33m";
+// const BLUE_U8: &[u8] = b"\x1b[34m";
+const MAGENTA_U8: &[u8] = b"\x1b[35m";
+// const CYAN: &[u8] = b"\x1b[36m";
+const BG_WHITE_U8: &[u8] = b"\x1b[47m";
+const BG_CYAN_U8: &[u8] = b"\x1b[46m";
+const RESET_U8: &[u8] = b"\x1b[0m";
+
+// =======================================
+// Code & Syntax Formatting / Highlighting
+// =======================================
+const DEFAULT_TEXT_COLOUR: &[u8] = GREEN_U8;
+const DEFINITION_COLOUR: &[u8] = YELLOW_U8;
+const SYMBOL_COLOUR: &[u8] = MAGENTA_U8;
 
 /*
 Foreground Colors (Text Color):
@@ -1222,6 +1246,15 @@ pub enum LinesError {
     /// For use with suite of
     /// Debug-Assert, Test-Asset, Production-Catch-Handle
     GeneralAssertionCatchViolation(String),
+
+    /// Lines processed exceeded available display rows.
+    /// Indicates potential state corruption or file processing logic error.
+    /// This should never occur in normal operation; if it does, the file
+    /// or internal state may be malformed.
+    LineCountExceeded {
+        lines_processed: usize,
+        available_rows: usize,
+    },
 }
 
 impl std::fmt::Display for LinesError {
@@ -1233,7 +1266,17 @@ impl std::fmt::Display for LinesError {
             LinesError::Utf8Error(msg) => write!(f, "UTF-8 error: {}", msg),
             LinesError::DisplayError(msg) => write!(f, "Display error: {}", msg),
             LinesError::StateError(msg) => write!(f, "State error: {}", msg),
-            LinesError::GeneralAssertionCatchViolation(msg) => write!(f, "State error: {}", msg),
+            LinesError::GeneralAssertionCatchViolation(msg) => {
+                write!(f, "GeneralAssertionCatchViolation error: {}", msg)
+            }
+            LinesError::LineCountExceeded {
+                lines_processed,
+                available_rows,
+            } => write!(
+                f,
+                "LineCountExceeded error: {} {}",
+                lines_processed, available_rows
+            ),
         }
     }
 }
@@ -6195,12 +6238,7 @@ impl EditorState {
     ///
     /// | Input | Action | Loop Control |
     /// |-------|--------|--------------|
-    /// | `-n` or `ESC` | Normal mode | Continue |
-    /// | `-i` | Insert mode | Continue |
-    /// | `-s` or `-w` | SaveFileStandard | Continue |
-    /// | `-q` | Quit | **Stop** |
-    /// | `-wq` | SaveAndQuit | **Stop** |
-    ///
+    ///  escape key for normal mode
     /// # Return Value Semantics
     ///
     /// * `Ok(true)` → Keep editor loop running
@@ -6623,7 +6661,7 @@ impl EditorState {
                 let readcopy_pathclone = read_copy_path.clone();
 
                 if result.is_ok() {
-                    let _ = self.set_info_bar_message("Added Byte");
+                    let _ = self.set_info_bar_message("(Added a Byte)");
 
                     // ==================
                     // Clear Redo Stack
@@ -6752,7 +6790,7 @@ impl EditorState {
             }
 
             // === MODE SWITCHING ===
-            "n" | "\x1b" => {
+            "n" | "\x1b" | "q" | "b" => {
                 // Exit to normal mode
                 keep_editor_loop_running = execute_command(self, Command::EnterNormalMode)?;
             }
@@ -6778,15 +6816,12 @@ impl EditorState {
                 keep_editor_loop_running = execute_command(self, Command::SaveFileStandard)?;
             }
 
-            "wq" => {
+            "wq" | "sq" => {
                 // SaveAndQuit
                 keep_editor_loop_running = execute_command(self, Command::SaveAndQuit)?;
             }
 
-            "q" => {
-                // Quit without saving
-                keep_editor_loop_running = execute_command(self, Command::Quit)?;
-            }
+            // safer to have q return to normal mode
 
             // === NAVIGATION: LEFT/RIGHT (single byte) ===
             "h" => {
@@ -6944,7 +6979,7 @@ impl EditorState {
     /// # Overview
     ///
     /// This method is responsible for ALL insert mode input handling, including:
-    /// 1. **Command detection** - Recognizing special commands (-n, -v, -s, -w, -wq, -q, etc.)
+    /// 1. **Command detection** - Recognizing special commands
     /// 2. **Text insertion** - Inserting user-typed text at cursor position
     /// 3. **Bucket brigade** - Handling large text input that exceeds buffer size
     /// 4. **Newline handling** - Distinguishing between content newlines and stdin delimiters
@@ -7000,9 +7035,6 @@ impl EditorState {
     ///   - Most commands (mode switches, save, empty input)
     ///   - All text insertion
     ///
-    /// * `Ok(false)` → Stop main editor loop (exit editor)
-    ///   - Quit command (-q)
-    ///   - SaveAndQUite (-wq)
     ///
     /// * `Err(e)` → IO error occurred, propagates to main
     ///   - stdin read failure
@@ -7020,13 +7052,8 @@ impl EditorState {
     ///
     /// | Input | Command | Action | Loop Control |
     /// |-------|---------|--------|--------------|
-    /// | `-n` or `ESC` | Enter Normal Mode | Switch to normal mode | Continue |
-    /// | `-v` | Enter Visual Mode | Switch to visual mode | Continue |
-    /// | `-s` or `-w` | SaveFileStandard | Write changes to disk | Continue |
-    /// | `-wq` | SaveAndQuit | SaveAndexit editor | **Stop** |
-    /// | `-q` | Quit | Exit without saving | **Stop** |
+    /// | ESC-key | Enter Normal Mode | Switch to normal mode | Continue |
     /// | `Delete key` | Delete Backspace | Delete character | Continue |
-    /// | `\n` or `\r\n` | Insert Newline | Add new line | Continue |
     /// | Other text | Insert Text | Add text at cursor | Continue |
     ///
     /// # Windowmap Rebuilding
@@ -7222,29 +7249,6 @@ impl EditorState {
         //  ////////////////////////
 
         // // Check for exit insert mode commands
-        // if trimmed == "-n" || trimmed == "\x1b" {
-        //     // \x1b is Esc key
-        //     // Exit insert mode
-        //     keep_editor_loop_running = execute_command(self, Command::EnterNormalMode)?;
-
-        //     // Now we can mutably borrow state
-        //     build_windowmap_nowrap(self, &read_copy)?;
-        // } else if trimmed == "-v" {
-        //     keep_editor_loop_running = execute_command(self, Command::EnterVisualMode)?;
-
-        //     // Now we can mutably borrow state
-        //     build_windowmap_nowrap(self, &read_copy)?;
-        // } else if trimmed == "-s" || trimmed == "-w" {
-        //     // Exit insert mode
-        //     keep_editor_loop_running = execute_command(self, Command::SaveFileStandard)?;
-        // } else if trimmed == "-wq" {
-        //     // Exit insert mode
-        //     keep_editor_loop_running = execute_command(self, Command::SaveAndQuit)?;
-        // } else if trimmed == "-q" {
-        //     // Exit insert mode
-        //     keep_editor_loop_running = execute_command(self, Command::Quit)?;
-
-        // TODO: safer?
         // // Only escape key to leave insert mode
         // possible to turn off all ascii keys
         if trimmed == "\x1b" {
@@ -7529,7 +7533,7 @@ impl EditorState {
         // In insert mode, most keys are text, not commands
         if current_mode == EditorMode::Insert {
             // Check for escape sequences to exit insert mode
-            if trimmed == "\x1b" || trimmed == "ESC" || trimmed == "-n" {
+            if trimmed == "\x1b" {
                 return Command::EnterNormalMode;
             }
 
@@ -7819,9 +7823,9 @@ impl EditorState {
 
                 "i" => Command::EnterInsertMode,
                 "v" => Command::EnterVisualMode,
-                "raw" | "r" => Command::EnterRawMode,
+                "raw" => Command::EnterRawMode,
                 // Multi-character commands
-                "wq" | "ws" => Command::SaveAndQuit,
+                "wq" | "sq" => Command::SaveAndQuit,
                 "s" | "ww" => Command::SaveFileStandard,
                 "q" => Command::Quit,
                 "p" | "pasty" => Command::EnterPastyClipboardMode,
@@ -7864,7 +7868,7 @@ impl EditorState {
                 "c" | "y" => Command::Copyank,
                 "s" | "ww" => Command::SaveFileStandard,
                 "n" | "\x1b" => Command::EnterNormalMode,
-                "wq" | "ws" => Command::SaveAndQuit,
+                "wq" | "sq" => Command::SaveAndQuit,
                 // "d" => Command::DeleteBackspace, // minimal, works
                 "d" => Command::DeleteRange,
                 "\x1b[3~" => Command::DeleteBackspace, // delete key -> \x1b[3~
@@ -8004,6 +8008,10 @@ impl EditorState {
                 None => Command::None, // No previous command
             }
         } else {
+            if trimmed == "help" {
+                display_help_menu_system(stdin_handle)?; // stdin_handle: &mut StdinLock,
+            }
+
             // Normal/Visual mode: Parse this command
             self.parse_commands_for_normal_visualselect_modes(command_str, self.mode)
         };
@@ -9292,10 +9300,22 @@ pub fn build_windowmap_nowrap(state: &mut EditorState, readcopy_file_path: &Path
     }
 
     // Assertion: Verify our line count makes sense
+    #[cfg(debug_assertions)]
     debug_assert!(
         lines_processed <= state.effective_rows,
         "Processed more lines than display rows available"
     );
+
+    // Validates that the processed line count does not exceed available display rows.
+    // This catch ensures the windowmap construction stayed within bounds.
+    // Returns error if an impossible state is detected (e.g., state corruption,
+    // off-by-one errors in line processing, or file format unexpected behavior).
+    if lines_processed > state.effective_rows {
+        return Err(LinesError::LineCountExceeded {
+            lines_processed,
+            available_rows: state.effective_rows,
+        });
+    }
 
     Ok(lines_processed)
 }
@@ -11339,7 +11359,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 // safe subtraction with error handling
                 if let Some(new_position) = lines_editor_state
                     .in_row_abs_horizontal_0_index_cursor_position
-                    .checked_sub(count)
+                    .checked_sub(1)
+                // increment, not full 'count'
                 {
                     lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = new_position;
                 } else {
@@ -11378,6 +11399,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     if (lines_editor_state.cursor.tui_row == 0)
                         && ((lines_editor_state.cursor.tui_col - line_num_width) == 0)
                         && !(lines_editor_state.line_count_at_top_of_window == 0)
+                        && (lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset == 0)
                     {
                         // move up, move to end of line.
                         _ = execute_command(lines_editor_state, Command::MoveUp(1))?;
@@ -12409,12 +12431,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // let line_num_width = calculate_line_number_width(lines_editor_state.cursor.tui_row);
 
             #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
-
-            #[cfg(debug_assertions)]
             {
+                let this_row = lines_editor_state.cursor.tui_row;
+                let this_col = lines_editor_state.cursor.tui_col;
+
                 println!(
                     "GotoLineStart lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
                     this_row, this_col,
@@ -12458,6 +12478,9 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 Err(_e) => {
                     #[cfg(debug_assertions)]
                     eprintln!("Error clearing redo logs: {:?}", _e);
+
+                    // Safe Error
+                    eprintln!("Error clearing redo logs.");
 
                     // Log error and continue (non-fatal)
                     log_error(
@@ -12697,6 +12720,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             Ok(true)
         }
+
         Command::EnterRawMode => {
             // rebuild may not be needed here, but just in case
             // Rebuild window to show the change from read-copy file
@@ -12722,6 +12746,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             Ok(true)
         }
+
         Command::ToggleCommentOneLine(line_number_0number) => {
             // println!("line_number {line_number}");
             toggle_basic_singleline_comment_bytewise(
@@ -12731,6 +12756,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::ToggleDocstringOneLine(line_number_0number) => {
             toggle_rust_docstring_singleline_comment_bytewise(
                 &edit_file_path.display().to_string(),
@@ -12740,6 +12766,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::ToggleBlockcomments(start_row_0number, end_row_0number) => {
             #[cfg(debug_assertions)]
             {
@@ -12794,6 +12821,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::IndentRange => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -12831,6 +12859,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::ToggleRustDocstringRange => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -12868,6 +12897,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::ToggleBasicCommentlinesRange => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -12905,6 +12935,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::UnindentOneLine(line_number) => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -12931,6 +12962,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         Command::IndentOneLine(line_number) => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -12957,6 +12989,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
+
         // =============================
         // Undo Redo Buttons all undone!
         // =============================
@@ -12980,6 +13013,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             Ok(true)
         }
+
         Command::RedoButtonsCommand => {
             let redo_path = get_redo_changelog_directory_path(&edit_file_path)?;
             match button_undo_redo_next_inverse_changelog_pop_lifo(&edit_file_path, &redo_path) {
@@ -13008,6 +13042,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             Ok(true)
             // SaveFileStandard doesn't need rebuild (no content change in display)
         }
+
         Command::SaveAs(save_as_path) => {
             // Execute save-as operation
             // Note: save_as_path is PathBuf, we need &Path
@@ -13072,6 +13107,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 }
             }
         }
+
         // Command::SaveAs(save_as_path) => {
         //     // 1     original_file_path: &Path, new_file_path_name: &Path,
         //     let saveas_status_message: String =
@@ -19987,25 +20023,594 @@ fn create_new_draft_copy(
 //     println!("OPTIONS:");
 //     println!("    --help, -h      Show this help message");
 //     println!("    --version, -v   Show version information");
+//     println!("HELP MENU:");
+//     println!("    help            For a help menue with sections.)");
+//     println!("QUIT & SAVE:");
+//     println!("                    If you 'quit' without saving, your work is gone.)");
+//     println!("                    If session ends without 'quit' then a backup exists.");
+//     println!("    q               quit");
+//     println!("    wq              save and quit (same as 'write and quit')");
+//     println!("    s               save / write (same thing), (w alone is 'word' jump)");
 //     println!("MODES:");
 //     println!("    Memo Mode:      Run from home directory, Append-only quickie");
 //     println!("                    Creates dated files in ~/Documents/lines_editor/");
 //     println!("    Full Editor:    Run from any other directory");
+//     println!("    n               Normal-Mode (navigation)");
+//     println!("    i               Insert-Mode (typing in text)");
+//     println!("    v               Visual/Select-Mode (select and act on selections");
+//     println!("    hex             Hex Editor Mode");
+//     println!("    p | pasty       Clipboard / Paste Mode");
 //     println!("DELETE: d");
-//     println!("    Normal Mode: 'd' delete a whole file-line (not just TUI display)");
+//     println!("    Normal Mode: 'd' deletes a WHOLE file-line");
 //     println!("    Insert Mode: delete-key for Backspace-Style Delete");
-//     println!("    Visual Mode  'd' delete a selection inclusive / single char backspace style;");
+//     println!("    Visual Mode  'd' delete a selection inclusive");
+//     println!("    Visual & Normal: delete-key: deletes a single char backspace-style");
+
+//     println!("Resize-Tui: (Works with Enter-Key-to-Repeat");
+//     println!("    wide+           +1 wider");
+//     println!("    wide-           -1 wide");
+//     println!("    tall+           +1 taller");
+//     println!("    tall-           -1 tall");
 //     println!("NAVIGATION:");
+//     println!("    Esc | N         Normal Mode");
 //     println!("    hjkl            Move cursor");
 //     println!("    5j, 10l         Move with repeat count");
 //     println!("    [Empty Enter]   Repeat last command (Normal/Visual/ ...?)");
-//     println!("-n -v -wq -q -s -d  Insert Mode: Flag style commands");
+//     println!("MOVE CURSOR: Normal-Mode move, Visual-Mode highlight");
+//     println!("                    Arrow keys (+ Enter) work too!");
+//     println!("    j               down");
+//     println!("    k               up");
+//     println!("    h               left");
+//     println!("    l               right");
+//     println!("    w               jump AHEAD to start of next word/symbol");
+//     println!("    e               jump AHEAD to end of this word/symbol");
+//     println!("    b               go BACK to beginning of this/next word/symbol");
+//     println!("GOTO:");
+//     println!("    g[int] =>       go to line number");
+//     println!("                     in Hex-Mode: Go To File Byte");
+//     println!("    gg     =>       go to start of file");
+//     println!("    ge | G =>       go to last line of file");
+//     println!("    gh | 0 =>       go to start of file");
+//     println!("    gl | $ =>       go to end of this line");
+//     println!("INDENT/UINDENT :");
+//     println!("    [               Indent");
+//     println!("    ]               Unindent");
+//     println!("COMMENT/UNCOMMENT:");
+//     println!("    /               Toggle Simple Comment (individual line(s))");
+//     println!("                     normal-mode or blocks in visual-mode)");
+//     println!("    //              Comment/Uncomment Block (visual-mode ");
+//     println!("                     include markers for Uncomment)");
+//     println!("    ///             Rust Doc-String Comment");
+//     println!("DELETE:");
+//     println!("                    Backspace key does not work with input buffer");
+//     println!("    d               Normal-Mode: like backspace");
+//     println!("                    Visual-Mode: removes selection");
+//     println!("    delete(key)     Only like backspace, not remove section");
+//     println!("UNDO/REDO:");
+//     println!("    u               undo");
+//     println!("    r               redo");
+//     println!("Cut/Past/Clipboard: Pasty!!");
+//     println!("    c | y           copy, yank (same thing)");
+//     println!("    v | p | pasty   go to Pasty-Mode (to paste)");
+//     println!("PASTEY MODE:");
+//     println!("    Enter           paste last copied/yanked item");
+//     println!("    [int]           clipboard items are numbered");
+//     println!("                     that number to past that item)");
+//     println!("    path            path to any other file to paste in");
+//     println!("    clear           clear whole clipboard");
+//     println!("    clear[int]      delete clipboard item by number");
+//     println!("    paste           to paste multi-line block from outside lines");
+//     println!("    b               go BACK");
+//     println!("HEX EDIT: Careful, Edit With The Safety!");
+//     println!("    hex         Enter hex-edit mode from Normal-Mode");
+//     println!("    [NN]            Enter two 'digit' hex number to change current byte");
+//     println!("                     this is standard hex-edit funcationality, in place");
+//     println!("    [NN]-i          *Insert* New Byte (byte-hex dash i)");
+//     println!("    d               Delete/Remove current byte");
+//     println!("    g[int]          Go To File Byte");
 //     println!("Examples in terminal/shell:");
 //     println!("  lines                Memo mode (if in home)");
 //     println!("  lines notes.txt      Create/open notes.txt");
-//     println!("  lines notes.txt:42    # Open to line 42");
+//     println!("  lines notes.txt:42   Open to line 42");
 //     println!("  lines mydir/ Create new file in directory");
 // }
+
+/// Help section identifiers for menu navigation
+///
+/// Each variant represents a distinct help section that can be displayed
+/// independently to fit within 80x24 terminal constraints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum HelpSections {
+    QuickStartBlurb,
+    TopbarLegend,
+    Navigation,
+    HelpSectionGoto,
+    HelpSectionCopyPasty,
+    HelpSectionIndentComment,
+    HelpSectionUndoRedo,
+    HelpSectionHexEdit,
+    // Configuration,
+    // TerminalManagement,
+}
+
+/// Main help menu header text
+///
+/// Displayed at the top of the help menu selection screen
+const HELP_MENU_HEADER: &str = r#"
+  ╔═════════════════════════════════════════════════════╗
+  ║   Lines  ->  a modal cli/terminal text/hex editor   ║
+  ╚══════https://github.com/lineality/lines_editor══════╝
+            get source code -> lines --source
+
+   To use lines across multiple files, see File Fantastic
+   https://github.com/lineality/file_fantastic
+ "#;
+
+/// Quick start and examples help section content
+const HELP_SECTION_QUICK_START: &str = r#"
+═══ QUICK START & EXAMPLES ═══     Press Enter to return to help menu
+ USAGE in terminal:      ff [OPTIONS] [DIRECTORY]
+ OPTIONS:
+   -h, --help            Show this help menu
+   --source              Get ff source code, Rust 'crate'
+
+ EXAMPLES for terminal/shell:
+   lines                Memo mode (if in home)
+   lines notes.txt      Create/open notes.txt
+   lines notes.txt:42   Open to line 42
+   lines mydir/ Create new file in directory
+
+ BASIC WORKFLOW:
+   1. Open or create a file:
+    A. Create a new quick-memo file by simply running: lines
+       simply type and press enter to append a line; q to quit
+    B. Make a specific file by adding path: lines THIS/PATH
+   2. Use modes (like vi) and the "+Enter" system to edit files.
+   3. Use 'i'(+Enter) for insert mode to enter text
+   4. Use 'v'(+Enter) to select and act on selections
+   5. copy (c/y), paste & manage clipboard with 'pasty'
+   6. Use hex-editor with 'hex' (in place, or insert or delete bytes)
+   7. 'q' to quit"#;
+
+const HELP_SECTION_TOPBAR_LEGEND: &str = r#"
+"+Enter" Sytem: Press Enter after a command.
+ ═══ THE LEGEND OF TOP-BAR ═══
+quit sav re,undo del|nrm ins vis hex|go pasty cvy|wrd,b,end ///cmnt []idnt hjkl
+
+ quit............. q for quit
+ Save
+     s               save / write (same thing), (w alone is 'word' jump)
+     wq | sq         save and quit (same as 'write and quit')
+     If you 'quit' without saving, your work is gone.)
+ Undo/Redo........ u for undo, r for redo
+ d................ delete with 'd' (also delete-key variation)
+ Modes............ normal (n), insert(i), visual/select(v), hex-editor (hex)
+ go...............'g' for go-to commands (see section for those)
+ pasty,p.......... paste-content options (see section for that)
+                   if already in visual-select mode, 'v' works for paste too
+ wrd,b,end........ standard jump-cursor commands (see section for that)
+ [,].............. standard indent/unindent keys
+ /,//,///......... standard comment/uncomment + blocks (see section for that)
+ h,j,k,l.......... standard movements, arrow keys work too
+
+    Press Enter to return to help menu..."#;
+
+/// Navigation commands help section content
+const HELP_SECTION_NAVIGATION: &str = r#"
+ ═══ NAVIGATION COMMANDS ═══
+
+ NAVIGATION:
+     Esc-key | N         Normal Mode
+     hjkl            Move cursor
+     5j, 10l         Move with repeat count
+     [Empty Enter]   Repeat last command (Normal/Visual/ ...?)
+
+MODES:
+    Memo Mode:      Run from home directory, Append-only quickie
+                    Creates dated files in ~/Documents/lines_editor/
+    Full Editor:    Run from any other directory
+    n               Normal-Mode (navigation)
+    i               Insert-Mode (typing in text)
+    v               Visual/Select-Mode (select and act on selections
+    hex             Hex Editor Mode
+    p | pasty       Clipboard / Paste Mode
+
+  Press Enter to return to help menu..."#;
+
+/// Sorting and filtering help section content
+const HELP_SECTION_GOTO: &str = r#"
+ ═══ Go To ═══
+
+ NORMAL and Visual-Select Modes:
+    g[int] =>       go to line number
+                    in Hex-Mode: Go To File Byte
+    gg     =>       go to start of file
+    ge | G =>       go to last line of file
+    gh | 0 =>       go to start of file
+    gl | $ =>       go to end of this line
+
+ HEX MODE:
+    g[int] =>       in Hex-Mode: Go To File Byte
+
+ OPEN FILE To Line: e.g. Open to line 42
+     lines notes.txt:42
+
+  Press Enter to return to help menu..."#;
+
+/// Search options help section content
+const HELP_SECTION_COPY_PASTY: &str = r#"
+ ═══ COPY PASTE OPTIONS ═══
+
+ Cut/Past/Clipboard: Pasty!!
+     c | y           copy, yank (same thing)
+     v | p | pasty   go to Pasty-Mode (to paste)
+ PASTEY MODE:
+     Enter           paste last copied/yanked item
+     [int]           clipboard items are numbered
+                      that number to past that item)
+     path            path to any other file to paste in
+     clear           clear whole clipboard
+     clear[int]      delete clipboard item by number
+     paste           to paste multi-line block from outside lines
+     b               go BACK
+
+ Press Enter to return to help menu... "#;
+
+/// File operations help section content
+const HELP_SECTION_INDENT_COMMENT: &str = r#"
+ ═══ INDENT & COMMENT ═══
+
+ Mode editor/IDE/Notebook systems use standard
+   (shift +)   [,],/
+ keys for toggle-indent and toggle/comment.
+ Lines uses these (with +Enter instead of shift-key)
+
+ Note: block-commenting with /* */ or """ """ is not toggled
+ because uncomment must include the ~flag symbols.
+
+ Visual-mode can single-line-comment multiple selected lines.
+
+ INDENT/UINDENT :
+     [               Indent
+     ]               Unindent
+ COMMENT/UNCOMMENT:
+     /               Toggle Simple Comment (individual line(s))
+                      normal-mode or blocks in visual-mode)
+     //              Comment/Uncomment Block (visual-mode
+                      include markers for Uncomment)
+     ///             Rust Doc-String Comment
+
+    Press  Enter to return to help menu... "#;
+
+/// Get-Send Mode
+const HELP_SECTION_UNDO_REDO_DELETE: &str = r#"
+ ═══ GET-SEND MODE ═══
+
+ DELETE:
+                     Backspace key does not work with input buffer
+     d               Normal-Mode: like backspace
+                     Visual-Mode: removes selection
+     delete(key)     Only like backspace, not remove section
+
+Normal Mode:  'd': deletes a WHOLE file-line
+               delete-key: deletes a single char, backspace style
+
+Insert Mode:   delete-key only for Backspace-Style Delete
+
+Visual Mode   'd': deletes a selected-selection inclusive
+               delete-key: deletes a single char, backspace style
+
+ UNDO/REDO:
+     u               undo
+     r               redo
+
+ Press Enter to return to help menu..."#;
+
+/// Get-Send Mode
+const HELP_SECTION_HEX_EDIT: &str = r#"
+  ═══ HEX EDIT ═══
+
+  HEX EDIT: Careful, Edit With The Safety!
+      hex         Enter hex-edit mode from Normal-Mode
+      [NN]            Enter two 'digit' hex number to change current byte
+                       this is standard hex-edit funcationality, in place
+      [NN]-i          *Insert* New Byte (byte-hex dash i)
+      d               Delete/Remove current byte
+      g[int]          Go To File Byte
+
+ Press Enter to return..."#;
+
+// /// Terminal management help section content
+// const HELP_SECTION_TERMINAL: &str = r#"
+//  ═══ TERMINAL & DISPLAY MANAGEMENT ═══  Press Enter to return
+
+//  Your 'current working directory,' where you go, in ff, does not
+//  carry over to your terminal after you exit. But you will want
+//  to keep working where you are in ff:
+//  - you can open a new terminal or split IN your current ff location.
+//  - Note: Run tmux before you run ff to use the tmux splits.
+
+//  TERMINAL OPERATIONS:
+//    t                     Open new terminal in current directory
+//    vsplit                Create vertical tmux split (current directory)
+//    hsplit                Create horizontal tmux split (current directory)
+
+//  DISPLAY RESIZING:       'N' here is whatever number you enter.
+//    tall+N                Increase display height by N rows
+//    tall-N                Decrease display height by N rows
+//    wide+N                Increase display width by N chars
+//    wide-N                Decrease display width by N chars
+
+//  When ff exits, it will tell you where you last were,
+//  and the ~bash line to run to go back there in a terminal.
+//  e.g.   To continue from this location, run:
+//         cd /home/oops/code/ff_file_manager_minimal_rust"#;
+
+// /// Configuration help section content
+// const HELP_SECTION_CONFIGURATION: &str = r#"
+//  ═══ PARTNER PROGRAMS CONFIGURATION ═══
+
+//  You may want to call your own applications or other applications
+//  that are not fully 'installed' on your system. "Partner Programs"
+//  allows you to tell File Fantastic where these binary-executible
+//  files are, wherever they are. Just list each file-path in this file,
+//  which FF will create:
+
+//  CONFIGURATION FILE:
+//    ~/.ff_data/absolute_paths_to_local_partner_fileopening_executables.txt
+
+//  FILE FORMAT:
+//    - One program path per line
+//    - Use absolute paths
+//    - Comments with #, and blank lines, are ignored
+
+//  EXAMPLE CONFIGURATION:
+//    /usr/bin/emacs
+//    # This is a comment
+//    /home/user/bin/custom-editor
+
+//  Press Enter to return to help menu... "#;
+
+/// Wait for user to press Enter key
+///
+/// Simple utility function to pause execution until the user
+/// presses the Enter key. Used between help sections.
+///
+/// # Returns
+/// * `Result<()>` - Ok when Enter pressed, Err on I/O error
+fn wait_for_enter_keypress(stdin_handle: &mut StdinLock) -> Result<()> {
+    let mut buffer = String::new();
+    stdin_handle
+        .read_line(&mut buffer)
+        .map_err(LinesError::Io)?;
+    Ok(())
+}
+
+/// Display the main help menu and handle section selection
+///
+/// This function presents the user with a numbered menu of help sections
+/// and processes their selection. It returns to the caller when the user
+/// chooses to quit.
+///
+/// # Returns
+/// * `Result<()>` - Ok on successful completion, Err on I/O or other errors
+///
+/// # Errors
+/// - I/O errors when reading user input
+/// - Terminal display errors
+pub fn display_help_menu_system(stdin_handle: &mut StdinLock) -> Result<()> {
+    loop {
+        // Clear screen for clean display
+        clear_terminal_screen()?;
+
+        // Display header with colors
+        print!("{}{}", ansi_colors::BOLD, ansi_colors::BRIGHT_WHITE);
+        println!("{}", HELP_MENU_HEADER);
+        print!("{}", ansi_colors::RESET);
+
+        // Quit instructions (...learning from the vim nightmare...)
+        println!(
+            "  {}q.{} Type 'q' & hit Enter to quit help menu / File Fantastic",
+            ansi_colors::YELLOW,
+            ansi_colors::RESET
+        );
+        println!();
+
+        // Display menu options
+        println!(
+            "{} Select a help section:{}",
+            ansi_colors::CYAN,
+            ansi_colors::RESET
+        );
+
+        // Menu items with colored numbers
+        println!(
+            "  {}1.{} Quick Start & Examples",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}2.{} Top Bar Legend Tips",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}3.{} Navigation Commands",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}4.{} Go To (a file-line or start/end of a line)",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}5.{} Copy Paste & Clipboard",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}6.{} Indent & Unident Lines, Comment & Uncomment Lines",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}7.{} Undo / Redo",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        println!(
+            "  {}8.{} Hex-Editor: edit in place, insert, remove raw bytes",
+            ansi_colors::MAGENTA,
+            ansi_colors::RESET
+        );
+        // println!(
+        //     "  {}9.{} Terminal & Display Management",
+        //     ansi_colors::MAGENTA,
+        //     ansi_colors::RESET
+        // );
+        // println!(
+        //     "  {}10.{} 'Partner Programs' Configuration",
+        //     ansi_colors::MAGENTA,
+        //     ansi_colors::RESET
+        // );
+        // println!(
+        //     "  {}11.{} View help menu doc in editor (vi/nano)",
+        //     ansi_colors::GREEN,
+        //     ansi_colors::RESET
+        // );
+        println!();
+        print!(
+            "{}Enter section number (1-10) or 'q' to quit: {}",
+            ansi_colors::BOLD,
+            ansi_colors::RESET
+        );
+
+        // Flush to ensure prompt appears
+        io::stdout().flush().map_err(LinesError::Io)?;
+
+        // // Read user input
+        // let mut input = String::new();
+        // io::stdin().read_line(&mut input).map_err(LinesError::Io)?;
+        // let input = input.trim().to_lowercase();
+
+        // Read user input using the passed-in lock instead of io::stdin()
+        let mut input = String::new();
+        stdin_handle.read_line(&mut input).map_err(LinesError::Io)?;
+        let input = input.trim().to_lowercase();
+
+        // Process user selection
+        match input.as_str() {
+            "1" => display_help_section_content(HelpSections::QuickStartBlurb, stdin_handle)?,
+            "2" => display_help_section_content(HelpSections::TopbarLegend, stdin_handle)?,
+            "3" => display_help_section_content(HelpSections::Navigation, stdin_handle)?,
+            "4" => display_help_section_content(HelpSections::HelpSectionGoto, stdin_handle)?,
+            "5" => display_help_section_content(HelpSections::HelpSectionCopyPasty, stdin_handle)?,
+            "6" => {
+                display_help_section_content(HelpSections::HelpSectionIndentComment, stdin_handle)?
+            }
+            "7" => display_help_section_content(HelpSections::HelpSectionUndoRedo, stdin_handle)?,
+            "8" => display_help_section_content(HelpSections::HelpSectionHexEdit, stdin_handle)?,
+            // "9" => display_help_section_content(HelpSections::TerminalManagement, stdin_handle)?,
+            // "10" => display_help_section_content(HelpSections::Configuration, stdin_handle)?,
+            "q" | "quit" | "exit" => {
+                println!(
+                    "{}Exiting help system...{}",
+                    ansi_colors::GREEN,
+                    ansi_colors::RESET
+                );
+                return Ok(());
+            }
+            _ => {
+                println!(
+                    "{}Try again...Please enter 1-10 or 'q'.{}",
+                    ansi_colors::YELLOW,
+                    ansi_colors::RESET
+                );
+                wait_for_enter_keypress(stdin_handle)?;
+            }
+        }
+    }
+}
+
+/// Clear the terminal screen using ANSI escape codes
+///
+/// This function uses ANSI escape sequences to clear the terminal
+/// and reset the cursor to the top-left position.
+///
+/// # Returns
+/// * `Result<()>` - Ok on success, Err on I/O error
+fn clear_terminal_screen() -> Result<()> {
+    // ANSI escape codes: clear screen and move cursor to top-left
+    print!("\x1b[2J\x1b[1;1H");
+    io::stdout().flush().map_err(LinesError::Io)?;
+    Ok(())
+}
+
+/// ANSI color codes for terminal formatting
+///
+/// These constants provide color and style formatting for terminal output.
+/// Using ANSI escape sequences for maximum compatibility.
+mod ansi_colors {
+    /// Reset all formatting to default
+    pub const RESET: &str = "\x1b[0m";
+
+    /// Bold text for headers
+    pub const BOLD: &str = "\x1b[1m";
+
+    /// Cyan color for commands
+    pub const CYAN: &str = "\x1b[36m";
+
+    /// Green color for examples
+    pub const GREEN: &str = "\x1b[32m";
+
+    /// Yellow color for warnings or important notes
+    pub const YELLOW: &str = "\x1b[33m";
+
+    /// Bright white for emphasis
+    pub const BRIGHT_WHITE: &str = "\x1b[97m";
+
+    /// Magenta for section numbers
+    pub const MAGENTA: &str = "\x1b[35m";
+}
+
+/// Display a specific help section with proper formatting
+///
+/// This function clears the screen and displays the content for the
+/// selected help section, waiting for user input before returning.
+///
+/// # Arguments
+/// * `section` - The help section to display
+///
+/// # Returns
+/// * `Result<()>` - Ok on successful display, Err on I/O errors
+fn display_help_section_content(section: HelpSections, stdin_handle: &mut StdinLock) -> Result<()> {
+    clear_terminal_screen()?;
+
+    // Select and display appropriate section content
+    let content = match section {
+        HelpSections::QuickStartBlurb => HELP_SECTION_QUICK_START,
+        HelpSections::TopbarLegend => HELP_SECTION_TOPBAR_LEGEND,
+        HelpSections::Navigation => HELP_SECTION_NAVIGATION,
+        HelpSections::HelpSectionGoto => HELP_SECTION_GOTO,
+        HelpSections::HelpSectionCopyPasty => HELP_SECTION_COPY_PASTY,
+        HelpSections::HelpSectionIndentComment => HELP_SECTION_INDENT_COMMENT,
+        HelpSections::HelpSectionUndoRedo => HELP_SECTION_UNDO_REDO_DELETE,
+        HelpSections::HelpSectionHexEdit => HELP_SECTION_HEX_EDIT,
+        // HelpSections::TerminalManagement => HELP_SECTION_TERMINAL,
+        // HelpSections::Configuration => HELP_SECTION_CONFIGURATION,
+    };
+
+    // Display with color formatting
+    print!("{}{}", ansi_colors::BOLD, ansi_colors::CYAN);
+    println!("{}", content);
+    print!("{}", ansi_colors::RESET);
+
+    // Wait for user to read
+    wait_for_enter_keypress(stdin_handle)?;
+
+    Ok(())
+}
 
 /// Formats the bottom info bar with current editor state
 ///
@@ -20971,7 +21576,7 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
         + 1;
 
     let info_bar = stack_format_it(
-        "{}HEX byte {}{}{} of {}{}{} {}, Edit:Enter Hex|Insrt:NN-i|GoTo:gN {} {}> ",
+        "{}HEX byte {}{}{} of {}{}{} {}, Edit:Enter Hex|Insrt:NN-i|GoTo:gN|d {} {}> ",
         &[
             &YELLOW,
             &RED,
@@ -20990,20 +21595,12 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
     Ok(info_bar)
 }
 
-/// Renders the complete UTF8-text TUI to terminal: legend + content + info bar
+/// Renders the complete UTF8-text TUI to terminal: legend + content + info bar.
 ///
-/// # Purpose
-/// Displays the minimal 3-section TUI:
-/// 1. Top: Command legend (1 line)
-/// 2. Middle: File content (effective_rows lines)
-/// 3. Bottom: Info bar with command input (1 line)
-///
-/// # Arguments
-/// * `state` - Current editor state with display buffers
-///
-/// # Returns
-/// * `Ok(())` - Successfully rendered
-/// * `Err(LinesError)` - Display operation failed
+/// # Purpose (Project Context)
+/// This is the top-level rendering function for the TUI text editor.
+/// It displays the minimal 3-section interface and is called once per
+/// screen refresh (after each user action or resize event).
 ///
 /// # Layout
 /// ```text
@@ -21015,162 +21612,543 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
 /// NORMAL line 42, col 7 doc.txt > cmd_         <- Info bar (1 line)
 /// ```
 ///
+/// # Rendering Pipeline
+/// This function orchestrates three distinct output phases:
+///
+/// 1. **Legend** (top line): Static navigation help, written by
+///    write_formatted_navigation_legend_to_tui().
+///
+/// 2. **Content** (middle rows): Each row is rendered in two parts:
+///    - Line number prefix: Written by buffy_print() with LINE_NUMBER_STYLE
+///      (green). This is the "1 ", "2 ", etc. at the start of each line.
+///    - Content portion: Written directly to stdout by
+///      render_utf8txt_row_with_cursor(), which applies cursor highlighting
+///      (PRIORITY 1), visual selection highlighting (PRIORITY 2), syntax
+///      highlighting (PRIORITY 3, if not a plain text file), or no styling
+///      (PRIORITY 4). This function writes bytes directly — no intermediate
+///      String is built or returned.
+///
+/// 3. **Info bar** (bottom line): Mode, position, filename, command input.
+///    Written by format_info_bar_cafe_normal_visualselect().
+///
+/// # Syntax Highlighting Decision
+/// The file extension is checked ONCE before the row loop using
+/// buffy_is_plain_text_extension(). If the file is .txt or .log, syntax
+/// highlighting is skipped entirely for all rows. Otherwise, each character
+/// in each row is checked for symbol/keyword highlighting during rendering.
+///
+/// # Cursor Column Adjustment
+/// state.cursor.tui_col is in full-row coordinates (including line number
+/// prefix characters like "42 "). render_utf8txt_row_with_cursor() receives
+/// only the content portion of each row (prefix stripped), so the cursor
+/// column must be adjusted by subtracting line_num_width. Saturating
+/// subtraction prevents underflow if the cursor is somehow in the prefix area.
+///
+/// # Memory: Zero Heap in Rendering Path
+/// - Line number: Written via buffy_print (stack-only)
+/// - Content: Written via stdout.write_all inside render_utf8txt_row_with_cursor
+///   (no String, no Vec<char>)
+/// - Legend and info bar: Their own rendering functions
+/// - is_plain_text: bool computed once, stack
+///
+/// # Arguments
+/// * `state` - Current editor state with display buffers, cursor position,
+///             mode, window_map, file path, and all rendering state.
+///
+/// # Returns
+/// * `Ok(())` - Successfully rendered all three sections
+/// * `Err(LinesError)` - Display operation failed (write error, window_map
+///                        error, or selection calculation error)
+///
+/// # Error Handling
+/// All errors from sub-functions are propagated via `?`. No silent failures.
+/// If stdout flush fails, the error is wrapped in LinesError::DisplayError
+/// with a unique prefix "render_tui: flush" for tracing.
+///
 /// # Design Goals
-/// - Only 2 non-content lines (legend + info)
+/// - Only 2 non-content lines (legend + info bar)
 /// - No wasted space, no filler lines
-/// - All essential info visible
+/// - All essential info visible at all times
 /// - Clean, minimal aesthetic
+/// - Zero heap allocation in the rendering hot path
 pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
-    // Clear screen
+    // =========================================================================
+    // CLEAR SCREEN
+    // =========================================================================
+    // Move cursor to top-left and clear entire screen.
+    // This is a single write of static bytes — no allocation.
     print!("\x1B[2J\x1B[H");
     io::stdout().flush().map_err(|e| {
         LinesError::DisplayError(stack_format_it(
-            "Failed to flush stdout: {}",
+            "render_tui: flush clear: {}",
             &[&e.to_string()],
-            "Failed to flush stdout",
+            "render_tui: flush clear",
         ))
     })?;
 
-    // === TOP LINE: LEGEND ===
+    // =========================================================================
+    // TOP LINE: NAVIGATION LEGEND
+    // =========================================================================
+    // Static hotkey reference line. Written once per refresh.
     let _ = write_formatted_navigation_legend_to_tui()?;
 
-    // === MIDDLE: FILE CONTENT WITH CURSOR ===
-    // // Render each content row
+    // =========================================================================
+    // SYNTAX HIGHLIGHTING: PLAIN TEXT CHECK (computed once for all rows)
+    // =========================================================================
+    // Check the file extension to decide if syntax highlighting applies.
+    // .txt and .log files are plain text: no keyword/symbol colouring.
+    // Everything else (including unknown/no extension) gets highlighting.
+    //
+    // Computed once here rather than per-row or per-character to avoid
+    // redundant path inspection on every iteration.
+    //
+    // state.original_file_path is Option<PathBuf>.
+    // .as_deref() converts Option<PathBuf> to Option<&Path> (no allocation).
+    let is_plain_text = buffy_is_plain_text_extension(state.original_file_path.as_deref());
+
+    // =========================================================================
+    // MIDDLE: FILE CONTENT WITH CURSOR, SELECTION, AND SYNTAX HIGHLIGHTING
+    // =========================================================================
+    // Each row in the display buffer is rendered in two parts:
+    //
+    //   1. Line number prefix  →  buffy_print with green styling
+    //   2. Content portion     →  render_utf8txt_row_with_cursor (direct write)
+    //
+    // The line number prefix is computed by calculate_line_number_width()
+    // and written BEFORE calling the content renderer. The content renderer
+    // receives only the content portion (prefix stripped) and writes it
+    // directly to stdout. A newline is written after each row.
+    //
+    // Empty rows (display_utf8txt_buffer_lengths[row] == 0) get either:
+    //   - A cursor block character if the cursor is on this row
+    //   - A blank line otherwise
     for row in 0..state.effective_rows {
         if state.display_utf8txt_buffer_lengths[row] > 0 {
+            // =================================================================
+            // NON-EMPTY ROW: Has content in display buffer
+            // =================================================================
             let row_content =
                 &state.utf8_txt_display_buffers[row][..state.display_utf8txt_buffer_lengths[row]];
 
             match std::str::from_utf8(row_content) {
                 Ok(row_str) => {
-                    // // add formatting and highlighitng here
-                    // let display_str = render_utf8txt_row_with_cursor(state, row, row_str)?;
-                    // println!("{}", display_str);
-
-                    // // Find where line number ends (first space after digits)
-                    // let mut found_digit = false;
-                    // let mut split_pos = 0;
-
+                    // ---------------------------------------------------------
+                    // SPLIT: Line number prefix vs content
+                    // ---------------------------------------------------------
+                    // calculate_line_number_width returns the byte length of
+                    // the line number prefix (e.g. "42 " = 3 bytes).
+                    // All line numbers are ASCII digits + space, so
+                    // byte width == character width for the prefix.
                     let line_num_width = calculate_line_number_width(
                         state.line_count_at_top_of_window,
                         state.cursor.tui_row,
                         state.effective_rows,
                     );
 
-                    let line_num_part = &row_str[..line_num_width];
-                    // let content_part = &row_str[line_num_width..];
+                    // Defensive: ensure line_num_width does not exceed row_str
+                    let line_num_width = line_num_width.min(row_str.len());
 
-                    // Print green line number
+                    let line_num_part = &row_str[..line_num_width];
+                    let content_part = &row_str[line_num_width..];
+
+                    // ---------------------------------------------------------
+                    // WRITE LINE NUMBER PREFIX (green)
+                    // ---------------------------------------------------------
+                    // Written via buffy_print: zero heap, direct to stdout.
                     buffy_print(
                         "{}",
                         &[BuffyFormatArg::StrStyled(line_num_part, LINE_NUMBER_STYLE)],
                     )?;
 
-                    // Render JUST content with cursor (cursor.tui_col is still in full row coordinates)
-                    // Pass full row_str so cursor column math works, but only display content
-                    let display_str = render_utf8txt_row_with_cursor(state, row, row_str)?;
+                    // ---------------------------------------------------------
+                    // CURSOR COLUMN ADJUSTMENT
+                    // ---------------------------------------------------------
+                    // state.cursor.tui_col is in full-row coordinates
+                    // (including line number prefix characters).
+                    //
+                    // render_utf8txt_row_with_cursor receives the content
+                    // portion only (prefix stripped), so the cursor column
+                    // must be adjusted by subtracting line_num_width.
+                    //
+                    // saturating_sub prevents underflow if cursor.tui_col
+                    // is somehow less than line_num_width (cursor in the
+                    // line number prefix area — should not happen in normal
+                    // operation, but handled defensively).
+                    let content_cursor_col = state.cursor.tui_col.saturating_sub(line_num_width);
 
-                    // Print only content portion of display_str (skip line number)
-                    buffy_println("{}", &[BuffyFormatArg::Str(&display_str[line_num_width..])])?;
+                    // ---------------------------------------------------------
+                    // WRITE CONTENT WITH HIGHLIGHTING (direct to stdout)
+                    // ---------------------------------------------------------
+                    // render_utf8txt_row_with_cursor writes each character
+                    // directly to stdout with appropriate ANSI styling.
+                    // It returns Result<()>, not a String.
+                    //
+                    // Priority order inside the function:
+                    //   1. Cursor (BOLD RED BG_WHITE)
+                    //   2. Visual selection (BOLD YELLOW BG_CYAN)
+                    //   3. Syntax highlighting (cyan symbols, yellow keywords)
+                    //   4. Plain character (no ANSI codes)
+                    render_utf8txt_row_with_cursor(
+                        state,
+                        row,
+                        content_part,
+                        content_cursor_col,
+                        is_plain_text,
+                    )?;
+
+                    // ---------------------------------------------------------
+                    // NEWLINE AFTER ROW
+                    // ---------------------------------------------------------
+                    // render_utf8txt_row_with_cursor does NOT write a newline.
+                    // The caller (here) is responsible for line termination.
+                    // buffy_println with empty template writes just "\n" + flush.
+                    buffy_println("", &[])?;
                 }
-                Err(_) => buffy_println("�", &[])?, //println!("�"),
+                Err(_) => {
+                    // UTF-8 decode failure for this row's display buffer.
+                    // Show replacement character and continue rendering
+                    // remaining rows. Do not halt for one bad row.
+                    buffy_println("�", &[])?;
+                }
             }
         } else {
-            // Show cursor on empty rows if cursor is here
+            // =================================================================
+            // EMPTY ROW: No content in display buffer
+            // =================================================================
+            // If the cursor is on this empty row, show a visible cursor block
+            // so the user knows where they are. Otherwise, blank line.
             if row == state.cursor.tui_row {
-                // println!("{}{}{}█{}", "\x1b[1m", "\x1b[31m", "\x1b[47m", "\x1b[0m");
                 buffy_println("{}", &[BuffyFormatArg::CharStyled('█', CURSOR_BLOCK_STYLE)])?;
             } else {
-                // println!();
                 buffy_println("", &[])?;
             }
         }
     }
 
-    // === BOTTOM LINE: INFO BAR ===
+    // =========================================================================
+    // BOTTOM LINE: INFO BAR
+    // =========================================================================
+    // Shows current mode, cursor position, filename, and command input.
+    // Written as the final line with no trailing newline (cursor stays on
+    // the info bar for command input visibility).
     let info_bar = format_info_bar_cafe_normal_visualselect(state)?;
-    // print!("{}", info_bar);
     buffy_print(&info_bar, &[])?;
 
+    // =========================================================================
+    // FINAL FLUSH
+    // =========================================================================
+    // Ensure all buffered output reaches the terminal before returning.
+    // Without this flush, the screen may appear partially rendered.
     io::stdout().flush().map_err(|e| {
         LinesError::DisplayError(stack_format_it(
-            "Failed to flush stdout: {}",
+            "render_tui: flush final: {}",
             &[&e.to_string()],
-            "Failed to flush stdout",
+            "render_tui: flush final",
         ))
     })?;
 
     Ok(())
 }
 
-/// Renders one row of display with both cursor and visual selection highlighting
+/// Renders one row of display directly to stdout with cursor, selection,
+/// and syntax highlighting — zero heap allocation.
 ///
-/// # Purpose
-/// Takes a display row and adds:
-/// 1. Cursor highlighting (RED + WHITE_BG) if cursor on this row - PRIORITY 1
-/// 2. Visual selection highlighting (YELLOW + CYAN_BG) if in visual mode - PRIORITY 2
-/// 3. Character-by-character highlighting via window_map
+/// # Purpose (Project Context)
+/// This is the character-by-character rendering function for the TUI editor's
+/// content area. It processes a single display row and writes ANSI-styled
+/// characters directly to stdout as it goes. No intermediate String is built.
+///
+/// The function applies three layers of highlighting with strict priority:
+///   PRIORITY 1: Cursor (BOLD + RED + WHITE_BG) — always wins
+///   PRIORITY 2: Visual selection (BOLD + YELLOW + CYAN_BG) — if in visual mode
+///   PRIORITY 3: Syntax highlighting (cyan for symbols, yellow for keywords)
+///   PRIORITY 4: Plain character — no styling
+///
+/// # Multi-byte UTF-8 and the Byte-vs-Character Index Problem
+///
+/// ## Critical Invariant
+/// `cursor.tui_col` is a CHARACTER column position, not a byte offset.
+/// When we removed Vec<char>, we lost the simple `for col in 0..chars.len()`
+/// iteration where `col` automatically tracked character index.
+///
+/// We now iterate over `row_content` byte-by-byte using UTF-8 boundary
+/// detection and maintain TWO separate counters:
+///
+///   - `byte_pos`:  Byte offset into `row_content`. Used for slicing, for
+///                  syntax highlight prefix matching, and for writing bytes.
+///                  Advances by 1-4 bytes per character.
+///
+///   - `char_index`: Character column position. Increments by exactly 1 per
+///                   complete UTF-8 character, regardless of byte width.
+///                   Compared against `cursor_col` for cursor highlighting.
+///
+/// ## Why This Matters (Concrete Example)
+/// ```text
+/// row_content bytes: [h] [e] [l] [l] [o] [ ] [E4 B8 96] [20]
+///                     0   1   2   3   4   5   6  7   8     9   <- byte_pos
+/// character index:    0   1   2   3   4   5   6              7  <- char_index
+///
+/// cursor_col = 6 → cursor is on '世' (3-byte char at byte_pos 6).
+/// If we compared cursor_col against byte_pos, it would accidentally match
+/// byte 6 here — but on a different line where multi-byte chars appear
+/// earlier, byte_pos and char_index diverge and the cursor would land
+/// on the wrong character.
+/// ```
+///
+/// This is the same byte-vs-character discipline used in
+/// process_line_with_offset() during its skip and write phases.
+///
+/// # Syntax Highlighting Integration
+/// When `is_plain_text` is false (file is not .txt/.log):
+///   - buffy_get_syntax_highlight() is called with `byte_pos` to check
+///     for keyword or symbol matches
+///   - SyntaxSymbol: single character written in cyan
+///   - DefinitionWord: keyword_byte_len bytes written in yellow, then
+///     byte_pos and char_index advance past the entire keyword
+///   - The cursor position is NEVER syntax-highlighted (cursor priority)
+///   - Characters inside the keyword span that overlap the cursor still
+///     get cursor highlighting for that one character
+///
+/// # Direct-Write Pattern (No Heap)
+/// This function writes ANSI escape codes and character bytes directly to
+/// stdout using stdout.write_all(). No String accumulation, no Vec<char>,
+/// no format!() macro. This is the pattern Buffy is designed for.
+///
+/// The caller (render_tui_utf8txt) prints the line number prefix BEFORE
+/// calling this function, then calls buffy_println for the newline AFTER.
+/// This function writes only the content portion of the row.
 ///
 /// # Arguments
-/// * `state` - Editor state (mode, cursor position, window_map)
-/// * `row_index` - Display row being rendered (0-indexed)
-/// * `row_content` - The text content for this row
+/// * `state`          - Editor state (mode, cursor position, window_map)
+/// * `row_index`      - Display row being rendered (0-indexed within window)
+/// * `row_content`    - The text content for this row (content portion only,
+///                      line number prefix already excluded by caller)
+/// * `cursor_col`     - Cursor column adjusted for content portion (caller
+///                      subtracts line_num_width from state.cursor.tui_col)
+/// * `is_plain_text`  - If true, skip syntax highlighting entirely.
+///                      Computed once by caller via buffy_is_plain_text_extension()
 ///
 /// # Returns
-/// * `Ok(String)` - Row with highlighting applied
-/// * `Err(LinesError)` - If window_map lookup fails or selection check fails
+/// * `Ok(())` - Row content written to stdout successfully
+/// * `Err(LinesError)` - If window_map lookup fails, selection check fails,
+///                        or stdout write fails
 ///
 /// # Error Handling
-/// All failures are propagated - no silent failures.
-/// Window_map errors, selection calculation errors, all returned as Err.
-///
-/// # Design Notes
-/// - Window_map provides byte_offset_linear_file_absolute_position for each display position
-/// - Cursor takes priority over selection highlighting
-/// - All operations can fail and must be handled by caller
+/// All write failures and window_map errors are propagated. No silent failures.
+/// stdout.write_all() errors are converted to LinesError::DisplayError.
+/// This function never panics in production.
 fn render_utf8txt_row_with_cursor(
     state: &EditorState,
     row_index: usize,
     row_content: &str,
-) -> Result<String> {
-    const BOLD: &str = "\x1b[1m";
-    const RED: &str = "\x1b[31m";
-    const YELLOW: &str = "\x1b[33m";
-    const BG_WHITE: &str = "\x1b[47m";
-    const BG_CYAN: &str = "\x1b[46m";
-    const RESET: &str = "\x1b[0m";
+    cursor_col: usize,
+    is_plain_text: bool,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+    let row_bytes = row_content.as_bytes();
+    let row_len = row_bytes.len();
 
-    // TODO vec< is heap
-    let chars: Vec<char> = row_content.chars().collect();
-    let mut result = String::with_capacity(row_content.len() + 100);
-
-    // Defensive: prevent cursor beyond line length
-    let cursor_col = state.cursor.tui_col.min(chars.len());
+    // =========================================================================
+    // CURSOR ON THIS ROW?
+    // =========================================================================
     let cursor_on_this_row = row_index == state.cursor.tui_row;
 
-    // Process each character in the row
-    for col in 0..chars.len() {
-        let ch = chars[col];
-        let ch_string = ch.to_string();
-        // PRIORITY 1: Cursor highlighting (takes precedence)
-        if cursor_on_this_row && col == cursor_col {
-            let formatted_string_1 = stack_format_it(
-                "{}{}{}{}{}",
-                &[&BOLD, &RED, &BG_WHITE, &ch_string, &RESET],
-                "NNNNN",
+    // =========================================================================
+    // TOTAL CHARACTER COUNT (for cursor-at-end-of-line detection)
+    // =========================================================================
+    // We need to know the total number of characters in the row to detect
+    // when the cursor is at/past the end. We count characters by scanning
+    // UTF-8 lead bytes. This is O(n) but avoids Vec<char> allocation.
+    // Done once before the main loop.
+    let total_chars = row_content.chars().count();
+
+    // Defensive: prevent cursor beyond line length (same as original)
+    let effective_cursor_col = cursor_col.min(total_chars);
+
+    // =========================================================================
+    // MAIN LOOP: Iterate by UTF-8 character boundaries
+    //
+    // TWO COUNTERS (see doc comment for full explanation):
+    //   byte_pos   — byte offset into row_bytes, advances by char byte length
+    //   char_index — character column, advances by 1 per UTF-8 character
+    //
+    // For cursor comparison: char_index == effective_cursor_col
+    // For syntax matching:   byte_pos passed to buffy_get_syntax_highlight()
+    // For writing bytes:     &row_bytes[byte_pos..byte_pos + char_byte_len]
+    // =========================================================================
+    let mut byte_pos: usize = 0;
+    let mut char_index: usize = 0;
+
+    // Safety bound: prevent infinite loops on malformed input.
+    // row_len is the byte length; we can never have more characters than bytes.
+    let max_iterations = row_len + 1;
+    let mut iterations: usize = 0;
+
+    while byte_pos < row_len {
+        // =====================================================================
+        // ITERATION GUARD
+        // =====================================================================
+        iterations += 1;
+        if iterations > max_iterations {
+            // Defensive: should never happen with well-formed UTF-8.
+            // In production, break and return what we have rather than panic.
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "render_utf8txt_row_with_cursor: iteration limit reached at byte_pos={}, char_index={}",
+                byte_pos, char_index
             );
-            // result.push_str(&format!("{}{}{}{}{}", BOLD, RED, BG_WHITE, ch, RESET));
-            result.push_str(&formatted_string_1);
+            break;
+        }
+
+        // =====================================================================
+        // DETERMINE CHARACTER BYTE LENGTH
+        // =====================================================================
+        // UTF-8 encoding: lead byte tells us how many bytes this character is.
+        //   0xxxxxxx → 1 byte  (ASCII)
+        //   110xxxxx → 2 bytes
+        //   1110xxxx → 3 bytes
+        //   11110xxx → 4 bytes
+        //   Anything else → malformed, treat as 1 byte defensively.
+        let char_byte_len = if byte_pos < row_len {
+            let lead = row_bytes[byte_pos];
+            if lead < 0x80 {
+                1
+            } else if lead < 0xE0 {
+                2
+            } else if lead < 0xF0 {
+                3
+            } else if lead < 0xF8 {
+                4
+            } else {
+                // Malformed lead byte. Advance 1 byte to avoid infinite loop.
+                1
+            }
+        } else {
+            break; // past end, should not reach here due to while condition
+        };
+
+        // Defensive: ensure we do not read past end of row_bytes
+        let char_end = byte_pos + char_byte_len;
+        let char_end = if char_end > row_len {
+            // Incomplete multi-byte character at end of string.
+            // Write a replacement character and break.
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "render_utf8txt_row_with_cursor: incomplete UTF-8 at byte_pos={}, need {} bytes, have {}",
+                byte_pos,
+                char_byte_len,
+                row_len - byte_pos
+            );
+            stdout.write_all("�".as_bytes()).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC write error: {}",
+                    &[&e.to_string()],
+                    "rURWC write error",
+                ))
+            })?;
+            break;
+        } else {
+            char_end
+        };
+
+        let char_bytes = &row_bytes[byte_pos..char_end];
+
+        // =====================================================================
+        // PRIORITY 1: CURSOR HIGHLIGHTING
+        // =====================================================================
+        // cursor.tui_col is a CHARACTER index. We compare against char_index.
+        // If cursor is on this character, write with cursor styling and skip
+        // all other highlighting.
+        if cursor_on_this_row && char_index == effective_cursor_col {
+            stdout.write_all(BOLD_U8).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC cursor write: {}",
+                    &[&e.to_string()],
+                    "rURWC cursor write",
+                ))
+            })?;
+            stdout.write_all(RED_U8).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC cursor write: {}",
+                    &[&e.to_string()],
+                    "rURWC cursor write",
+                ))
+            })?;
+            stdout.write_all(BG_WHITE_U8).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC cursor write: {}",
+                    &[&e.to_string()],
+                    "rURWC cursor write",
+                ))
+            })?;
+            stdout.write_all(char_bytes).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC cursor write: {}",
+                    &[&e.to_string()],
+                    "rURWC cursor write",
+                ))
+            })?;
+            stdout.write_all(RESET_U8).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC cursor write: {}",
+                    &[&e.to_string()],
+                    "rURWC cursor write",
+                ))
+            })?;
+
+            byte_pos = char_end;
+            char_index += 1;
             continue;
         }
 
-        // PRIORITY 2: Visual selection highlighting
+        // =====================================================================
+        // PRIORITY 2: VISUAL SELECTION HIGHLIGHTING
+        // =====================================================================
         if state.mode == EditorMode::VisualSelectMode {
-            // Get file position - propagate error if lookup fails
-            let file_pos_option = state.get_row_col_file_position(row_index, col)?;
+            // get_row_col_file_position uses char_index (column) for lookup.
+            // The window_map was built with character columns, not byte offsets.
+            // We need to add line_num_width back because the window_map was
+            // built with the full row coordinates including line number prefix.
+            //
+            // IMPORTANT: The caller passes us content-only (line number prefix
+            // stripped), and passes cursor_col already adjusted. But the
+            // window_map stores positions in full-row coordinates. We need the
+            // line_num_width to reconstruct the full-row column for the lookup.
+            //
+            // However, looking at the original code: the original function
+            // received the full row_str including line number, and iterated
+            // over all characters. The caller then sliced the OUTPUT string
+            // with [line_num_width..]. Now we receive only the content portion
+            // but must look up positions in the full-row window_map.
+            //
+            // We pass row_index and the FULL column (char_index + line_num_width)
+            // to the window_map lookup. But we do not have line_num_width here.
+            //
+            // SOLUTION: We look up using the char_index offset that the
+            // window_map actually stores. The caller can tell us the column
+            // offset to add. For now, we rely on the fact that the window_map
+            // columns start at col_start (which is the line_num_width).
+            // We need to receive this offset. But to minimise signature changes
+            // in this step, we can compute it from state.
+            //
+            // Actually, reviewing render_tui_utf8txt more carefully:
+            // The original code passed full row_str, and the window_map was
+            // indexed with full-row columns. The caller sliced the RESULT.
+            // Now we need to map char_index back to the window_map column.
+            //
+            // We compute line_num_width the same way the caller does, and
+            // add it to char_index for the window_map lookup.
+
+            let line_num_width = calculate_line_number_width(
+                state.line_count_at_top_of_window,
+                state.cursor.tui_row,
+                state.effective_rows,
+            );
+            let map_col = char_index + line_num_width;
+
+            let file_pos_option = state.get_row_col_file_position(row_index, map_col)?;
 
             if let Some(file_pos) = file_pos_option {
-                // Check if in selection - propagate error if check fails
                 let in_selection = is_in_selection(
                     file_pos.byte_offset_linear_file_absolute_position,
                     state.file_position_of_vis_select_start,
@@ -21178,34 +22156,276 @@ fn render_utf8txt_row_with_cursor(
                 )?;
 
                 if in_selection {
-                    let formatted_string_2 = stack_format_it(
-                        "{}{}{}{}{}",
-                        &[&BOLD, &YELLOW, &BG_CYAN, &ch_string, &RESET],
-                        "NNNNN",
-                    );
-                    // result.push_str(&format!("{}{}{}{}{}", BOLD, YELLOW, BG_CYAN, ch, RESET));
-                    result.push_str(&formatted_string_2);
+                    stdout.write_all(BOLD_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC sel write: {}",
+                            &[&e.to_string()],
+                            "rURWC sel write",
+                        ))
+                    })?;
+                    stdout.write_all(YELLOW_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC sel write: {}",
+                            &[&e.to_string()],
+                            "rURWC sel write",
+                        ))
+                    })?;
+                    stdout.write_all(BG_CYAN_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC sel write: {}",
+                            &[&e.to_string()],
+                            "rURWC sel write",
+                        ))
+                    })?;
+                    stdout.write_all(char_bytes).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC sel write: {}",
+                            &[&e.to_string()],
+                            "rURWC sel write",
+                        ))
+                    })?;
+                    stdout.write_all(RESET_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC sel write: {}",
+                            &[&e.to_string()],
+                            "rURWC sel write",
+                        ))
+                    })?;
+
+                    byte_pos = char_end;
+                    char_index += 1;
                     continue;
                 }
             }
         }
 
-        // PRIORITY 3: Normal character (no highlighting)
-        result.push(ch);
+        // =====================================================================
+        // PRIORITY 3: SYNTAX HIGHLIGHTING
+        // =====================================================================
+        // Only when the file is not plain text (.txt, .log).
+        // buffy_get_syntax_highlight() receives byte_pos because it needs
+        // to do prefix matching (keyword detection) from that position.
+        if !is_plain_text {
+            let highlight = buffy_get_syntax_highlight(byte_pos, row_content);
+
+            match highlight {
+                SyntaxHighlight::SyntaxSymbol => {
+                    // Single character in colour. Write ANSI, char, reset.
+                    stdout.write_all(SYMBOL_COLOUR).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC syn write: {}",
+                            &[&e.to_string()],
+                            "rURWC syn write",
+                        ))
+                    })?;
+                    stdout.write_all(char_bytes).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC syn write: {}",
+                            &[&e.to_string()],
+                            "rURWC syn write",
+                        ))
+                    })?;
+                    stdout.write_all(RESET_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC syn write: {}",
+                            &[&e.to_string()],
+                            "rURWC syn write",
+                        ))
+                    })?;
+
+                    byte_pos = char_end;
+                    char_index += 1;
+                    continue;
+                }
+
+                SyntaxHighlight::DefinitionWord { keyword_byte_len } => {
+                    // Multi-character keyword in yellow.
+                    // Write the entire keyword span as one coloured block,
+                    // BUT: if the cursor is inside this keyword span, we must
+                    // write character-by-character so the cursor character gets
+                    // cursor highlighting instead.
+                    //
+                    // Determine how many CHARACTERS are in the keyword.
+                    // All current keywords are ASCII, so byte_len == char_count.
+                    // But for safety, we count properly.
+                    let keyword_end_byte = byte_pos + keyword_byte_len;
+                    let keyword_end_byte = keyword_end_byte.min(row_len); // bounds safety
+
+                    // Check: does the cursor land inside this keyword span?
+                    // If so, fall through to character-by-character rendering
+                    // so cursor priority is respected.
+                    let cursor_in_keyword = if cursor_on_this_row {
+                        // Count characters in the keyword span to know
+                        // what char_index range it covers.
+                        let keyword_slice = &row_content[byte_pos..keyword_end_byte];
+                        let keyword_char_count = keyword_slice.chars().count();
+                        let keyword_char_end = char_index + keyword_char_count;
+                        effective_cursor_col >= char_index
+                            && effective_cursor_col < keyword_char_end
+                    } else {
+                        false
+                    };
+
+                    if !cursor_in_keyword {
+                        // No cursor conflict: write entire keyword in yellow.
+                        let keyword_bytes = &row_bytes[byte_pos..keyword_end_byte];
+
+                        stdout.write_all(DEFINITION_COLOUR).map_err(|e| {
+                            LinesError::DisplayError(stack_format_it(
+                                "rURWC kw write: {}",
+                                &[&e.to_string()],
+                                "rURWC kw write",
+                            ))
+                        })?;
+                        stdout.write_all(keyword_bytes).map_err(|e| {
+                            LinesError::DisplayError(stack_format_it(
+                                "rURWC kw write: {}",
+                                &[&e.to_string()],
+                                "rURWC kw write",
+                            ))
+                        })?;
+                        stdout.write_all(RESET_U8).map_err(|e| {
+                            LinesError::DisplayError(stack_format_it(
+                                "rURWC kw write: {}",
+                                &[&e.to_string()],
+                                "rURWC kw write",
+                            ))
+                        })?;
+
+                        // Advance byte_pos and char_index past the keyword.
+                        let keyword_slice = &row_content[byte_pos..keyword_end_byte];
+                        let keyword_char_count = keyword_slice.chars().count();
+                        byte_pos = keyword_end_byte;
+                        char_index += keyword_char_count;
+                        continue;
+                    }
+                    // If cursor IS inside keyword, fall through to write
+                    // this single character normally — the next loop iteration
+                    // for the cursor character will hit PRIORITY 1 above.
+                    // For this current character (which is the first char of
+                    // the keyword, and is NOT the cursor), write it in yellow.
+                    stdout.write_all(YELLOW_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC kw partial: {}",
+                            &[&e.to_string()],
+                            "rURWC kw partial",
+                        ))
+                    })?;
+                    stdout.write_all(char_bytes).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC kw partial: {}",
+                            &[&e.to_string()],
+                            "rURWC kw partial",
+                        ))
+                    })?;
+                    stdout.write_all(RESET_U8).map_err(|e| {
+                        LinesError::DisplayError(stack_format_it(
+                            "rURWC kw partial: {}",
+                            &[&e.to_string()],
+                            "rURWC kw partial",
+                        ))
+                    })?;
+
+                    byte_pos = char_end;
+                    char_index += 1;
+                    continue;
+                }
+
+                SyntaxHighlight::None => {
+                    // Fall through to PRIORITY 4 below.
+                }
+            }
+        }
+
+        // // =====================================================================
+        // // PRIORITY 4: PLAIN CHARACTER — no styling
+        // // =====================================================================
+        // stdout.write_all(char_bytes).map_err(|e| {
+        //     LinesError::DisplayError(stack_format_it(
+        //         "rURWC plain write: {}",
+        //         &[&e.to_string()],
+        //         "rURWC plain write",
+        //     ))
+        // })?;
+
+        // =====================================================================
+        // PRIORITY 4: PLAIN CHARACTER — default green text
+        // =====================================================================
+        // Green is the default colour for all unstyled content characters.
+        // Cursor (priority 1), selection (priority 2), and syntax highlighting
+        // (priority 3) each apply their own colours and reset afterwards.
+        // Plain characters get green as the baseline readable colour.
+        stdout.write_all(DEFAULT_TEXT_COLOUR).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC plain write: {}",
+                &[&e.to_string()],
+                "rURWC plain write",
+            ))
+        })?;
+        stdout.write_all(char_bytes).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC plain write: {}",
+                &[&e.to_string()],
+                "rURWC plain write",
+            ))
+        })?;
+        stdout.write_all(RESET_U8).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC plain write: {}",
+                &[&e.to_string()],
+                "rURWC plain write",
+            ))
+        })?;
+
+        byte_pos = char_end;
+        char_index += 1;
     }
 
-    // Handle cursor at/past end of line
-    if cursor_on_this_row && cursor_col >= chars.len() {
-        // result.push_str(&format!("{}{}{}█{}", BOLD, RED, BG_WHITE, RESET));
-
-        result.push_str(&stack_format_it(
-            "{}{}{}█{}",
-            &[&BOLD, &RED, &BG_WHITE, &RESET],
-            "NNN█N",
-        ));
+    // =========================================================================
+    // CURSOR AT/PAST END OF LINE
+    // =========================================================================
+    // When the cursor column is at or beyond the last character, show a
+    // cursor block at the end position. This allows the user to position
+    // the cursor after the last character for appending.
+    if cursor_on_this_row && effective_cursor_col >= total_chars {
+        stdout.write_all(BOLD_U8).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC eol cursor: {}",
+                &[&e.to_string()],
+                "rURWC eol cursor",
+            ))
+        })?;
+        stdout.write_all(RED_U8).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC eol cursor: {}",
+                &[&e.to_string()],
+                "rURWC eol cursor",
+            ))
+        })?;
+        stdout.write_all(BG_WHITE_U8).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC eol cursor: {}",
+                &[&e.to_string()],
+                "rURWC eol cursor",
+            ))
+        })?;
+        stdout.write_all("█".as_bytes()).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC eol cursor: {}",
+                &[&e.to_string()],
+                "rURWC eol cursor",
+            ))
+        })?;
+        stdout.write_all(RESET_U8).map_err(|e| {
+            LinesError::DisplayError(stack_format_it(
+                "rURWC eol cursor: {}",
+                &[&e.to_string()],
+                "rURWC eol cursor",
+            ))
+        })?;
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Initializes the session directory structure for this editing session
@@ -21654,7 +22874,7 @@ fn parse_file_with_line(input: &str) -> (String, Option<usize>) {
     }
 }
 */
-/// Recovery-reboot wrapper for lines_fullfileeditor_core
+/// Recovery-reboot wrapper for lines_fullfile_editor_core
 pub fn lines_full_file_editor(
     original_file_path: Option<PathBuf>,
     starting_line: Option<usize>,
@@ -21722,7 +22942,7 @@ pub fn lines_full_file_editor(
         }
 
         // Call core with SAME session directory
-        match lines_fullfileeditor_core(
+        match lines_fullfile_editor_core(
             Some(target_path.clone()),
             starting_line,
             Some(session_dir.clone()),
@@ -21778,7 +22998,7 @@ pub fn lines_full_file_editor(
 /// - Creates parent directories if needed
 /// - Initializes new files with timestamp header
 /// - Creates read-copy for safety
-pub fn lines_fullfileeditor_core(
+pub fn lines_fullfile_editor_core(
     original_file_path: Option<PathBuf>,
     starting_line: Option<usize>,
     use_this_session: Option<PathBuf>,
