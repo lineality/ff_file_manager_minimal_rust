@@ -1,5 +1,6 @@
-// lines is minimal text editor
-// test files in: src/tests.rs
+//! lines_editor_module.rs
+//! lines is minimal text editor
+//! test files in: src/tests.rs
 
 /*
 See: "diagnostic" flag for debugging inspection
@@ -1232,8 +1233,6 @@ pub enum LinesError {
     /// Invalid user input or argument
     InvalidInput(String),
 
-    // /// String formatting or display error
-    // FormatError(String),
     /// UTF-8 encoding/decoding error
     Utf8Error(String),
 
@@ -1383,21 +1382,6 @@ pub fn log_error(error_msg: &str, context: Option<&str>) {
         }
     }
 }
-
-// /// Gets the path to today's error log file
-// fn get_error_log_path() -> io::Result<PathBuf> {
-//     let home = get_home_directory()?;
-//     let timestamp = get_short_underscore_timestamp()?;
-
-//     let mut log_path = home;
-//     log_path.push("Documents");
-//     log_path.push("lines_editor");
-//     log_path.push("lines_data");
-//     log_path.push("error_logs");
-//     log_path.push(format!("{}.log", timestamp));
-
-//     Ok(log_path)
-// }
 
 /// Gets the path to today's error log file
 ///
@@ -2046,57 +2030,6 @@ pub fn stack_format_byte_escape<'a>(byte: u8, buf: &'a mut [u8]) -> Option<&'a s
 
     // Return slice (guaranteed valid UTF-8 - we only write ASCII)
     std::str::from_utf8(&buf[..len]).ok()
-}
-#[cfg(test)]
-mod hex_format_tests {
-    use super::*;
-
-    #[test]
-    fn test_hex_zero_normal() {
-        let mut buf = [0u8; 64];
-        let result = stack_format_hex(0x42, &mut buf, false, "", "", "", "");
-        assert_eq!(result, Some("42 "));
-    }
-
-    #[test]
-    fn test_hex_zero_highlighted() {
-        let mut buf = [0u8; 64];
-        let result = stack_format_hex(0x42, &mut buf, true, "[B]", "[R]", "[W]", "[RST]");
-        assert_eq!(result, Some("[B][R][W]42[RST] "));
-    }
-
-    #[test]
-    fn test_hex_zero_buffer_too_small() {
-        let mut buf = [0u8; 2]; // Too small
-        let result = stack_format_hex(0x42, &mut buf, false, "", "", "", "");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_byte_escape_zero_printable() {
-        let mut buf = [0u8; 4];
-        assert_eq!(stack_format_byte_escape(b'H', &mut buf), Some("H"));
-    }
-
-    #[test]
-    fn test_byte_escape_zero_special() {
-        let mut buf = [0u8; 4];
-        assert_eq!(stack_format_byte_escape(0x0A, &mut buf), Some("\\n"));
-        assert_eq!(stack_format_byte_escape(0x09, &mut buf), Some("\\t"));
-    }
-
-    #[test]
-    fn test_byte_escape_zero_nonprintable() {
-        let mut buf = [0u8; 4];
-        assert_eq!(stack_format_byte_escape(0xFF, &mut buf), Some("\\xFF"));
-    }
-
-    #[test]
-    fn test_byte_escape_zero_buffer_too_small() {
-        let mut buf = [0u8; 1]; // Too small for \xHH
-        let result = stack_format_byte_escape(0xFF, &mut buf);
-        assert_eq!(result, None);
-    }
 }
 
 /// Formats a message with placeholders supporting alignment and width specifiers.
@@ -3778,412 +3711,6 @@ pub fn create_unique_temp_name_and_file_filepathbuf(
     ))
 }
 
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tempname_tests {
-    use super::*;
-    use std::fs;
-
-    /// Test basic functionality: can we create a temp file with standard parameters?
-    #[test]
-    fn test_create_temp_file_basic() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "test", 5, 1);
-
-        assert!(result.is_ok(), "Should successfully create temp file");
-
-        let path = result.unwrap();
-        assert!(path.exists(), "Created file should exist");
-        assert!(
-            path.starts_with(&temp_dir),
-            "File should be in temp directory"
-        );
-
-        // Cleanup
-        let _ = fs::remove_file(path);
-    }
-
-    /// Test that multiple files created rapidly are unique
-    #[test]
-    fn test_create_multiple_unique_files() {
-        let temp_dir = std::env::temp_dir();
-        let mut paths = Vec::new();
-
-        // Create 5 temp files in rapid succession
-        for _ in 0..5 {
-            let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "multi", 5, 1);
-            assert!(result.is_ok(), "Should create file");
-            paths.push(result.unwrap());
-        }
-
-        // Verify all paths are unique
-        for i in 0..paths.len() {
-            for j in (i + 1)..paths.len() {
-                assert_ne!(paths[i], paths[j], "Paths should be unique");
-            }
-        }
-
-        // Verify all files exist
-        for path in &paths {
-            assert!(path.exists(), "File should exist");
-        }
-
-        // Cleanup
-        for path in paths {
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test that function returns error for non-existent directory
-    #[test]
-    fn test_nonexistent_directory() {
-        let bad_path = Path::new("/this/path/definitely/does/not/exist/nowhere/12345");
-
-        let result = create_unique_temp_name_and_file_filepathbuf(bad_path, "test", 3, 1);
-
-        assert!(result.is_err(), "Should fail for non-existent directory");
-    }
-
-    /// Test filename format contains expected components
-    #[test]
-    fn test_filename_format() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "prefix", 5, 1);
-        assert!(result.is_ok(), "Should create file");
-
-        let path = result.unwrap();
-        let filename = path.file_name().unwrap().to_str().unwrap();
-
-        // Verify filename contains prefix
-        assert!(
-            filename.starts_with("prefix_"),
-            "Filename should start with prefix"
-        );
-
-        // Verify filename ends with .tmp
-        assert!(filename.ends_with(".tmp"), "Filename should end with .tmp");
-
-        // Verify filename contains underscores (pid_threadid_timestamp structure)
-        assert!(
-            filename.matches('_').count() >= 3,
-            "Filename should have at least 3 underscores"
-        );
-
-        // Cleanup
-        let _ = fs::remove_file(path);
-    }
-
-    /// Test with zero attempts parameter (should return error immediately)
-    #[test]
-    fn test_zero_attempts() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "zero", 0, 1);
-
-        assert!(result.is_err(), "Should fail with zero attempts");
-
-        if let Err(e) = result {
-            let error_msg = format!("{}", e);
-            assert!(error_msg.contains("CUTF"), "Error should have CUTF prefix");
-            assert!(
-                error_msg.contains("greater than zero") || error_msg.contains("number_of_attempts"),
-                "Error should mention invalid attempt count"
-            );
-        }
-    }
-
-    /// Test with single attempt (should work in low-contention)
-    #[test]
-    fn test_single_attempt() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "single", 1, 1);
-
-        assert!(
-            result.is_ok(),
-            "Should succeed with single attempt in low contention"
-        );
-
-        if let Ok(path) = result {
-            assert!(path.exists(), "File should exist");
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test with different delay values (ensures parameter is used)
-    #[test]
-    fn test_different_delays() {
-        let temp_dir = std::env::temp_dir();
-
-        // Test with zero delay
-        let result1 = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "delay0", 3, 0);
-        assert!(result1.is_ok(), "Should work with zero delay");
-        if let Ok(path) = result1 {
-            let _ = fs::remove_file(path);
-        }
-
-        // Test with larger delay
-        let result2 = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "delay100", 3, 100);
-        assert!(result2.is_ok(), "Should work with 100ms delay");
-        if let Ok(path) = result2 {
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test with high number of attempts (stress test)
-    #[test]
-    fn test_many_attempts() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "many", 20, 1);
-
-        assert!(result.is_ok(), "Should work with many attempts");
-
-        if let Ok(path) = result {
-            assert!(path.exists(), "File should exist");
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test prefix with special characters (edge case)
-    #[test]
-    fn test_prefix_with_special_chars() {
-        let temp_dir = std::env::temp_dir();
-
-        // Test with prefix containing hyphens and underscores
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "my-app_v2", 5, 1);
-
-        assert!(result.is_ok(), "Should handle prefix with special chars");
-
-        if let Ok(path) = result {
-            let filename = path.file_name().unwrap().to_str().unwrap();
-            assert!(
-                filename.starts_with("my-app_v2_"),
-                "Filename should preserve prefix"
-            );
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test that created file is actually writable
-    #[test]
-    fn test_file_is_writable() {
-        let temp_dir = std::env::temp_dir();
-
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "writable", 5, 1);
-        assert!(result.is_ok(), "Should create file");
-
-        let path = result.unwrap();
-
-        // Try to open and write to the file
-        let write_result = OpenOptions::new().write(true).open(&path);
-
-        assert!(
-            write_result.is_ok(),
-            "Should be able to open file for writing"
-        );
-
-        // Cleanup
-        let _ = fs::remove_file(path);
-    }
-
-    /// Test concurrent creation from multiple threads
-    #[test]
-    fn test_concurrent_creation() {
-        use std::sync::Arc;
-
-        let temp_dir = Arc::new(std::env::temp_dir());
-        let mut handles = vec![];
-
-        // Spawn 5 threads that each create 2 files
-        for thread_num in 0..5 {
-            let temp_dir_clone = Arc::clone(&temp_dir);
-
-            let handle = thread::spawn(move || {
-                let mut created_paths = Vec::new();
-
-                for file_num in 0..2 {
-                    let prefix = format!("concurrent_t{}_f{}", thread_num, file_num);
-                    let result = create_unique_temp_name_and_file_filepathbuf(
-                        &temp_dir_clone,
-                        &prefix,
-                        10,
-                        5,
-                    );
-
-                    assert!(result.is_ok(), "Should create file from thread");
-                    created_paths.push(result.unwrap());
-                }
-
-                created_paths
-            });
-
-            handles.push(handle);
-        }
-
-        // Collect all created paths
-        let mut all_paths = Vec::new();
-        for handle in handles {
-            let paths = handle.join().expect("Thread should complete");
-            all_paths.extend(paths);
-        }
-
-        // Verify all paths are unique
-        for i in 0..all_paths.len() {
-            for j in (i + 1)..all_paths.len() {
-                assert_ne!(
-                    all_paths[i], all_paths[j],
-                    "All paths from all threads should be unique"
-                );
-            }
-        }
-
-        // Verify all files exist
-        for path in &all_paths {
-            assert!(path.exists(), "All created files should exist");
-        }
-
-        // Cleanup
-        for path in all_paths {
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Test error message format for debugging
-    #[test]
-    fn test_error_messages_have_cutf_prefix() {
-        let temp_dir = std::env::temp_dir();
-
-        // Test zero attempts error
-        let result = create_unique_temp_name_and_file_filepathbuf(&temp_dir, "test", 0, 1);
-        if let Err(e) = result {
-            assert!(
-                format!("{}", e).contains("CUTF"),
-                "Error should have CUTF prefix"
-            );
-        }
-    }
-}
-
-// /// Formats the navigation legend with color-coded keyboard shortcuts
-// ///
-// /// # Purpose
-// /// Creates a formatted legend string showing all available keyboard commands
-// /// with color highlighting (RED for command keys, YELLOW for descriptions).
-// ///
-// /// # Returns
-// /// * `Ok(String)` - The formatted legend string with ANSI color codes
-// /// * `Err(FileFantasticError)` - If string formatting fails (defensive programming)
-// ///
-// /// # Color Scheme
-// /// - RED: Single letter command keys (q, b, t, d, f, n, s, m, g, v, y, p)
-// /// - YELLOW: Command descriptions and separators
-// /// - RESET: Applied at end to restore terminal defaults
-// ///
-// /// # Legend Commands
-// /// - q: quit the application
-// /// - b: navigate back/parent directory
-// /// - t: open terminal in current directory
-// /// - d: filter to show directories only
-// /// - f: filter to show files only
-// /// - n: sort by name
-// /// - s: sort by size
-// /// - m: sort by modified date
-// /// - g: get-send file operations
-// /// - v,y,p: additional file operations
-// /// - str: search functionality
-// /// - enter: reset filters/search
-// ///
-// /// # Example
-// /// ```rust
-// /// match write_formatted_navigation_legend_to_tui() {
-// ///     Ok(legend) => println!("{}", legend),
-// ///     Err(e) => eprintln!("Failed to format legend: {}", e),
-// /// }
-// /// ```
-// fn write_formatted_navigation_legend_to_tui() -> Result<String> {
-//     // Pre-allocate string capacity based on expected legend size
-//     // Legend is approximately 200 characters plus color codes
-//     let mut legend = String::with_capacity(300);
-
-//     // // Build the legend string with error handling for format operations
-//     // // quit save undo norm ins vis del wrap relative raw byt wrd,b,end /commnt hjkl
-//     // let formatted_legend = format!(
-//     //     "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
-//     //     // YELLOW, // Overall legend color
-//     //     RED,
-//     //     YELLOW, // RED q + YELLOW uit
-//     //     RED,
-//     //     GREEN, // RED b + YELLOW ack
-//     //     YELLOW,
-//     //     RED,
-//     //     YELLOW, // RED b + YELLOW ack
-//     //     RED,
-//     //     YELLOW, // RED t + YELLOW erm
-//     //     RED,
-//     //     YELLOW, // RED d + YELLOW ir
-//     //     RED,
-//     //     YELLOW, // RED f + YELLOW ile
-//     //     RED,
-//     //     YELLOW, // RED n + YELLOW ame
-//     //     RED,
-//     //     YELLOW, // RED s + YELLOW ize
-//     //     RED,
-//     //     YELLOW, // RED m + YELLOW od
-//     //     RED,
-//     //     YELLOW, // RED m + YELLOW od
-//     //     RED,
-//     //     YELLOW, // RED g + YELLOW et
-//     //     RED,
-//     //     YELLOW, // RED v + YELLOW ,
-//     //     RED,
-//     //     YELLOW, // RED y + YELLOW ,
-//     //     RED,
-//     //     YELLOW, // RED p + YELLOW ,
-//     //     RED,
-//     //     YELLOW, // RED str + YELLOW ...
-//     //     RED,
-//     //     YELLOW,
-//     //     RED,
-//     //     // YELLOW, // RED enter + YELLOW ...
-//     //     GREEN,  // RED b + YELLOW ack
-//     //     YELLOW, // RED enter + YELLOW ...
-//     //     RED,
-//     //     YELLOW, // RED enter + YELLOW ...
-//     //     RED,
-//     //     YELLOW, // RED enter + YELLOW ...
-//     //     RESET
-//     // );
-
-//     let formatted_legend = stack_format_it(
-//         "{}q{}uit {}s{}a{}v {}re{},{}u{}ndo {}d{}el|{}n{}rm {}i{}ns {}v{}is {}hex{}{}{}{} r{}aw|{}p{}asty {}cvy{}|{}w{}rd,{}b{},{}e{}nd {}/{}/{}/cmnt {}[]{}idnt {}hjkl{}{}",
-//         &[
-//             &RED, &YELLOW, &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
-//             &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED,
-//             &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW,
-//             &RED, &GREEN, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RESET,
-//         ],
-//         "quit sav re,undo del|nrm ins vis hex raw|pasty cvy|wrd,b,end ///cmnt []idnt hjkl",
-//     );
-//     // Check if the formatted string is reasonable
-//     // (defensive programming against format! macro issues)
-//     if formatted_legend.is_empty() {
-//         return Err(LinesError::FormatError(String::from(
-//             "Legend formatting produced empty string",
-//         )));
-//     }
-
-//     // TODO (push in smaller segments?)
-//     legend.push_str(&formatted_legend);
-
-//     Ok(legend)
-// }
-
 /// Makes, verifies, or creates a directory path relative to the executable directory location.
 ///
 /// This function performs the following sequential steps:
@@ -4422,17 +3949,6 @@ pub enum EditorMode {
     HexMode,
     RawMode,
 }
-
-// /// Line wrap mode setting
-// #[derive(Debug, Clone, Copy, PartialEq)]
-// pub enum WrapMode {
-//     /// Lines wrap at terminal width
-//     Wrap,
-//     /// Lines extend beyond terminal width (horizontal scroll)
-//     NoWrap,
-// }
-
-// const TOFILE_INSERTBUFFER_CHUNK_SIZE: usize = 256;// not used
 
 /// Represents valid user input commands and selections in Pasty mode
 ///
@@ -8027,15 +7543,6 @@ impl EditorState {
         Ok(keep_editor_loop_running)
     }
 
-    // /// Gets the first valid text column for cursor's current row
-    // ///
-    // /// # Returns
-    // /// * Column position where text starts (after line number)
-    // pub fn get_text_start_column(&self) -> usize {
-    //     let line_number = self.line_count_at_top_of_window + self.cursor.tui_row;
-    //     calculate_line_number_width(line_number + 1, self.effective_rows) // +1 for 1-indexed display
-    // }
-
     /// Writes a message into the info bar message buffer
     ///
     /// # Purpose
@@ -8274,163 +7781,163 @@ fn is_leap_year(year: u64) -> bool {
     }
 }
 
-// /// Main editing loop for the lines text editor (pre-allocated buffer version)
-// ///
-// /// # Arguments
-// /// * `original_file_path` - Path to the file being edited
-// ///
-// /// # Returns
-// /// * `io::Result<()>` - Success or error status of the editing session
-// ///
-// /// # Memory Safety
-// /// - Uses pre-allocated 256-byte buffer for stdin chunks
-// /// - Never loads entire file into memory
-// /// - Processes input chunk-by-chunk using bucket brigade pattern
-// ///
-// /// # Behavior
-// /// 1. Creates file with timestamp if it doesn't exist
-// /// 2. Displays TUI with file path and last ~10 lines
-// /// 3. Enters input loop where user can:
-// ///    - Type text and press enter - appended immediately
-// ///    - Enter 'q', 'quit', 'exit', or 'exit()' to close editor
-// /// 4. After each append, refreshes TUI display
-// ///
-// /// # Errors
-// /// Returns error if:
-// /// - Cannot create/access the file
-// /// - Cannot read user input
-// /// - Cannot append to file
-// /// - Cannot display TUI
-// ///
-// /// # Example
-// /// ```no_run
-// /// let path = Path::new("notes.txt");
-// /// memo_mode_mini_editor_loop(&path)?;
-// /// ```
-// pub fn memo_mode_mini_editor_loop(original_file_path: &Path) -> Result<()> {
-//     // Pre-allocated buffer for bucket brigade stdin reading
-//     const STDIN_CHUNK_SIZE: usize = 64;
-//     const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
+/// Main editing loop for the lines text editor (pre-allocated buffer version)
+///
+/// # Arguments
+/// * `original_file_path` - Path to the file being edited
+///
+/// # Returns
+/// * `io::Result<()>` - Success or error status of the editing session
+///
+/// # Memory Safety
+/// - Uses pre-allocated 256-byte buffer for stdin chunks
+/// - Never loads entire file into memory
+/// - Processes input chunk-by-chunk using bucket brigade pattern
+///
+/// # Behavior
+/// 1. Creates file with timestamp if it doesn't exist
+/// 2. Displays TUI with file path and last ~10 lines
+/// 3. Enters input loop where user can:
+///    - Type text and press enter - appended immediately
+///    - Enter 'q', 'quit', 'exit', or 'exit()' to close editor
+/// 4. After each append, refreshes TUI display
+///
+/// # Errors
+/// Returns error if:
+/// - Cannot create/access the file
+/// - Cannot read user input
+/// - Cannot append to file
+/// - Cannot display TUI
+///
+/// # Example
+/// ```no_run
+/// let path = Path::new("notes.txt");
+/// memo_mode_mini_editor_loop(&path)?;
+/// ```
+pub fn memo_mode_mini_editor_loop(original_file_path: &Path) -> Result<()> {
+    // Pre-allocated buffer for bucket brigade stdin reading
+    const STDIN_CHUNK_SIZE: usize = 64;
+    const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
 
-//     let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
+    let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
 
-//     let stdin = io::stdin();
-//     let mut stdin_handle = stdin.lock(); // Lock stdin once for entire session
+    let stdin = io::stdin();
+    let mut stdin_handle = stdin.lock(); // Lock stdin once for entire session
 
-//     // Create file with simple timestamp header if it doesn't exist
-//     if !original_file_path.exists() {
-//         let timestamp = create_readable_archive_timestamp(SystemTime::now());
+    // Create file with simple timestamp header if it doesn't exist
+    if !original_file_path.exists() {
+        let timestamp = create_readable_archive_timestamp(SystemTime::now());
 
-//         // Create file with timestamp header
-//         let mut file = OpenOptions::new()
-//             .create(true)
-//             .write(true)
-//             .open(original_file_path)?;
+        // Create file with timestamp header
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(original_file_path)?;
 
-//         file.write_all(timestamp.as_bytes())?;
-//         file.write_all(b"\n")?; // Blank line after header
-//         file.flush()?;
-//     }
+        file.write_all(timestamp.as_bytes())?;
+        file.write_all(b"\n")?; // Blank line after header
+        file.flush()?;
+    }
 
-//     // Open file in append mode once (keeps handle open for session)
-//     let mut file = OpenOptions::new()
-//         .create(true)
-//         .append(true)
-//         .open(original_file_path)?;
+    // Open file in append mode once (keeps handle open for session)
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(original_file_path)?;
 
-//     // Bootstrap: Display initial TUI
-//     build_memo_mode_tui(original_file_path)?;
+    // Bootstrap: Display initial TUI
+    build_memo_mode_tui(original_file_path)?;
 
-//     let mut chunk_counter = 0;
+    let mut chunk_counter = 0;
 
-//     // Main editor loop
-//     loop {
-//         // Defensive: prevent infinite loop
-//         chunk_counter += 1;
-//         if chunk_counter > MAX_CHUNKS {
-//             return Err(LinesError::Io(io::Error::new(
-//                 io::ErrorKind::Other,
-//                 "Maximum iteration limit exceeded",
-//             )));
-//         }
+    // Main editor loop
+    loop {
+        // Defensive: prevent infinite loop
+        chunk_counter += 1;
+        if chunk_counter > MAX_CHUNKS {
+            return Err(LinesError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "Maximum iteration limit exceeded",
+            )));
+        }
 
-//         // Clear buffer before reading (defensive: prevent data leakage)
-//         for i in 0..STDIN_CHUNK_SIZE {
-//             stdin_chunk_buffer[i] = 0;
-//         }
+        // Clear buffer before reading (defensive: prevent data leakage)
+        for i in 0..STDIN_CHUNK_SIZE {
+            stdin_chunk_buffer[i] = 0;
+        }
 
-//         // Read next chunk from stdin
-//         let bytes_read = match stdin_handle.read(&mut stdin_chunk_buffer) {
-//             Ok(n) => n,
-//             Err(e) => {
-//                 eprintln!("Error reading input: {}", e);
-//                 continue;
-//             }
-//         };
+        // Read next chunk from stdin
+        let bytes_read = match stdin_handle.read(&mut stdin_chunk_buffer) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                continue;
+            }
+        };
 
-//         //    =================================================
-//         // // Debug-Assert, Test-Asset, Production-Catch-Handle
-//         //    =================================================
-//         // This is not included in production builds
-//         // assert: only when running in a debug-build: will panic
-//         debug_assert!(
-//             bytes_read <= STDIN_CHUNK_SIZE,
-//             "bytes_read ({}) exceeded buffer size ({})",
-//             bytes_read,
-//             STDIN_CHUNK_SIZE
-//         );
-//         // This is not included in production builds
-//         // assert: only when running cargo test: will panic
-//         #[cfg(test)]
-//         assert!(
-//             bytes_read <= STDIN_CHUNK_SIZE,
-//             "bytes_read ({}) exceeded buffer size ({})",
-//             bytes_read,
-//             STDIN_CHUNK_SIZE
-//         );
-//         // Catch & Handle without panic in production
-//         // This IS included in production to safe-catch
-//         if !bytes_read <= STDIN_CHUNK_SIZE {
-//             // state.set_info_bar_message("Config error");
-//             return Err(LinesError::GeneralAssertionCatchViolation(
-//                 "bytes_read <= STDIN_CHUNK_SIZE".into(),
-//             ));
-//         }
+        //    =================================================
+        // // Debug-Assert, Test-Asset, Production-Catch-Handle
+        //    =================================================
+        // This is not included in production builds
+        // assert: only when running in a debug-build: will panic
+        debug_assert!(
+            bytes_read <= STDIN_CHUNK_SIZE,
+            "bytes_read ({}) exceeded buffer size ({})",
+            bytes_read,
+            STDIN_CHUNK_SIZE
+        );
+        // This is not included in production builds
+        // assert: only when running cargo test: will panic
+        #[cfg(test)]
+        assert!(
+            bytes_read <= STDIN_CHUNK_SIZE,
+            "bytes_read ({}) exceeded buffer size ({})",
+            bytes_read,
+            STDIN_CHUNK_SIZE
+        );
+        // Catch & Handle without panic in production
+        // This IS included in production to safe-catch
+        if !bytes_read <= STDIN_CHUNK_SIZE {
+            // state.set_info_bar_message("Config error");
+            return Err(LinesError::GeneralAssertionCatchViolation(
+                "bytes_read <= STDIN_CHUNK_SIZE".into(),
+            ));
+        }
 
-//         // Check for exit command before writing to file
-//         // Only check if valid UTF-8 (don't fail on binary data)
-//         if let Ok(text_input_str) = std::str::from_utf8(&stdin_chunk_buffer[..bytes_read]) {
-//             let trimmed = text_input_str.trim();
+        // Check for exit command before writing to file
+        // Only check if valid UTF-8 (don't fail on binary data)
+        if let Ok(text_input_str) = std::str::from_utf8(&stdin_chunk_buffer[..bytes_read]) {
+            let trimmed = text_input_str.trim();
 
-//             // Exit commands: q, quit, exit, exit()
-//             if trimmed == "q" || trimmed == "quit" || trimmed == "exit" || trimmed == "exit()" {
-//                 println!("Exiting editor...");
-//                 break;
-//             }
-//         }
+            // Exit commands: q, quit, exit, exit()
+            if trimmed == "q" || trimmed == "quit" || trimmed == "exit" || trimmed == "exit()" {
+                println!("Exiting editor...");
+                break;
+            }
+        }
 
-//         // Write chunk directly to file (bucket brigade pattern)
-//         let bytes_written = file.write(&stdin_chunk_buffer[..bytes_read])?;
+        // Write chunk directly to file (bucket brigade pattern)
+        let bytes_written = file.write(&stdin_chunk_buffer[..bytes_read])?;
 
-//         // Defensive assertion: all bytes should be written
-//         assert_eq!(
-//             bytes_written, bytes_read,
-//             "File write incomplete: wrote {} of {} bytes",
-//             bytes_written, bytes_read
-//         );
+        // Defensive assertion: all bytes should be written
+        assert_eq!(
+            bytes_written, bytes_read,
+            "File write incomplete: wrote {} of {} bytes",
+            bytes_written, bytes_read
+        );
 
-//         // Flush to disk immediately (durability)
-//         file.flush()?;
+        // Flush to disk immediately (durability)
+        file.flush()?;
 
-//         // Refresh TUI after append
-//         build_memo_mode_tui(original_file_path)?;
-//     }
+        // Refresh TUI after append
+        build_memo_mode_tui(original_file_path)?;
+    }
 
-//     // Final flush before exit
-//     file.flush()?;
+    // Final flush before exit
+    file.flush()?;
 
-//     Ok(())
-// }
+    Ok(())
+}
 
 /// Lets users do N multi-line pastes, works like append-mode
 pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) -> Result<()> {
@@ -8545,193 +8052,193 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
     Ok(())
 }
 
-// /// Builds and displays the memo mode TUI (Text User Interface)
-// ///
-// /// # Arguments
-// /// * `file_path` - Path to the file being edited
-// ///
-// /// # Display Format
-// /// ```text
-// /// lines text editor: Type 'q' to (q)uit
-// /// file path -> /path/to/file.txt
-// ///
-// /// [last ~10 lines of file content]
-// ///
-// /// >
-// /// ```
-// ///
-// /// # Memory Safety
-// /// - Uses pre-allocated 512-byte buffer
-// /// - Never loads entire file into memory
-// /// - Seeks to end of file and reads backwards
-// ///
-// /// # Algorithm
-// /// 1. Clear screen and display header (editor name, file path)
-// /// 2. Read last 512 bytes of file (or entire file if smaller)
-// /// 3. Scan forward through buffer to find newline positions
-// /// 4. If ≥10 lines: display from 10th-to-last line to end
-// /// 5. If <10 lines: display entire buffer content
-// /// 6. Display prompt `> `
-// ///
-// /// # Edge Cases
-// /// - Empty file: Shows only header and prompt
-// /// - File < 512 bytes: Shows entire file content
-// /// - Invalid UTF-8: Uses lossy conversion (shows � for invalid bytes)
-// /// - No newlines in buffer: Displays entire buffer as single "line"
-// ///
-// /// # Returns
-// /// * `Ok(())` on successful display
-// /// * `Err(io::Error)` if file cannot be opened or read
-// ///
-// /// # Example
-// /// ```no_run
-// /// # use std::path::Path;
-// /// # fn build_memo_mode_tui(p: &Path) -> std::io::Result<()> { Ok(()) }
-// /// let path = Path::new("notes.txt");
-// /// build_memo_mode_tui(&path)?;
-// /// ```
-// fn build_memo_mode_tui(file_path: &Path) -> io::Result<()> {
-//     // Pre-allocated buffer for reading file tail
-//     const TAIL_BUFFER_SIZE: usize = 512;
-//     let mut tail_buffer = [0u8; TAIL_BUFFER_SIZE];
+/// Builds and displays the memo mode TUI (Text User Interface)
+///
+/// # Arguments
+/// * `file_path` - Path to the file being edited
+///
+/// # Display Format
+/// ```text
+/// lines text editor: Type 'q' to (q)uit
+/// file path -> /path/to/file.txt
+///
+/// [last ~10 lines of file content]
+///
+/// >
+/// ```
+///
+/// # Memory Safety
+/// - Uses pre-allocated 512-byte buffer
+/// - Never loads entire file into memory
+/// - Seeks to end of file and reads backwards
+///
+/// # Algorithm
+/// 1. Clear screen and display header (editor name, file path)
+/// 2. Read last 512 bytes of file (or entire file if smaller)
+/// 3. Scan forward through buffer to find newline positions
+/// 4. If ≥10 lines: display from 10th-to-last line to end
+/// 5. If <10 lines: display entire buffer content
+/// 6. Display prompt `> `
+///
+/// # Edge Cases
+/// - Empty file: Shows only header and prompt
+/// - File < 512 bytes: Shows entire file content
+/// - Invalid UTF-8: Uses lossy conversion (shows � for invalid bytes)
+/// - No newlines in buffer: Displays entire buffer as single "line"
+///
+/// # Returns
+/// * `Ok(())` on successful display
+/// * `Err(io::Error)` if file cannot be opened or read
+///
+/// # Example
+/// ```no_run
+/// # use std::path::Path;
+/// # fn build_memo_mode_tui(p: &Path) -> std::io::Result<()> { Ok(()) }
+/// let path = Path::new("notes.txt");
+/// build_memo_mode_tui(&path)?;
+/// ```
+fn build_memo_mode_tui(file_path: &Path) -> io::Result<()> {
+    // Pre-allocated buffer for reading file tail
+    const TAIL_BUFFER_SIZE: usize = 512;
+    let mut tail_buffer = [0u8; TAIL_BUFFER_SIZE];
 
-//     // Clear screen
-//     print!("\x1B[2J\x1B[1;1H");
+    // Clear screen
+    print!("\x1B[2J\x1B[1;1H");
 
-//     // Display header
-//     println!("lines text editor: Type 'q' to (q)uit");
-//     println!("file path -> {}", file_path.display());
-//     println!(); // Blank line after header
+    // Display header
+    println!("lines text editor: Type 'q' to (q)uit");
+    println!("file path -> {}", file_path.display());
+    println!(); // Blank line after header
 
-//     // Open file (read-only)
-//     let mut file = File::open(file_path)?;
+    // Open file (read-only)
+    let mut file = File::open(file_path)?;
 
-//     // Get file size
-//     let file_size = file.metadata()?.len();
+    // Get file size
+    let file_size = file.metadata()?.len();
 
-//     // Handle empty file
-//     if file_size == 0 {
-//         println!("> ");
-//         io::stdout().flush()?;
-//         return Ok(());
-//     }
+    // Handle empty file
+    if file_size == 0 {
+        println!("> ");
+        io::stdout().flush()?;
+        return Ok(());
+    }
 
-//     // Calculate how many bytes to read (512 or less if file is smaller)
-//     let bytes_to_read = if file_size < TAIL_BUFFER_SIZE as u64 {
-//         file_size as usize
-//     } else {
-//         TAIL_BUFFER_SIZE
-//     };
+    // Calculate how many bytes to read (512 or less if file is smaller)
+    let bytes_to_read = if file_size < TAIL_BUFFER_SIZE as u64 {
+        file_size as usize
+    } else {
+        TAIL_BUFFER_SIZE
+    };
 
-//     // Seek to position: file_size - bytes_to_read
-//     let seek_position = file_size - bytes_to_read as u64;
-//     file.seek(SeekFrom::Start(seek_position))?;
+    // Seek to position: file_size - bytes_to_read
+    let seek_position = file_size - bytes_to_read as u64;
+    file.seek(SeekFrom::Start(seek_position))?;
 
-//     // Clear buffer (defensive)
-//     for i in 0..TAIL_BUFFER_SIZE {
-//         tail_buffer[i] = 0;
-//     }
+    // Clear buffer (defensive)
+    for i in 0..TAIL_BUFFER_SIZE {
+        tail_buffer[i] = 0;
+    }
 
-//     // Read the tail portion
-//     let bytes_read = file.read(&mut tail_buffer[..bytes_to_read])?;
+    // Read the tail portion
+    let bytes_read = file.read(&mut tail_buffer[..bytes_to_read])?;
 
-//     // Defensive assertion
-//     assert_eq!(
-//         bytes_read, bytes_to_read,
-//         "File read incomplete: expected {}, got {}",
-//         bytes_to_read, bytes_read
-//     );
+    // Defensive assertion
+    assert_eq!(
+        bytes_read, bytes_to_read,
+        "File read incomplete: expected {}, got {}",
+        bytes_to_read, bytes_read
+    );
 
-//     // Scan forward and record newline positions
-//     const MAX_NEWLINES: usize = 100; // Upper bound for line counting
-//     let mut newline_positions = [0usize; MAX_NEWLINES];
-//     let mut newline_count = 0;
+    // Scan forward and record newline positions
+    const MAX_NEWLINES: usize = 100; // Upper bound for line counting
+    let mut newline_positions = [0usize; MAX_NEWLINES];
+    let mut newline_count = 0;
 
-//     for i in 0..bytes_read {
-//         if tail_buffer[i] == b'\n' {
-//             if newline_count < MAX_NEWLINES {
-//                 newline_positions[newline_count] = i;
-//                 newline_count += 1;
-//             }
-//         }
-//     }
+    for i in 0..bytes_read {
+        if tail_buffer[i] == b'\n' {
+            if newline_count < MAX_NEWLINES {
+                newline_positions[newline_count] = i;
+                newline_count += 1;
+            }
+        }
+    }
 
-//     // Determine display start position
-//     let display_start = if newline_count >= 10 {
-//         // Find the position after the (newline_count - 10)th newline
-//         // This gives us the last 10 lines
-//         let target_newline_index = newline_count - 10;
-//         newline_positions[target_newline_index] + 1 // Start after that newline
-//     } else {
-//         // Less than 10 lines, show entire buffer
-//         0
-//     };
+    // Determine display start position
+    let display_start = if newline_count >= 10 {
+        // Find the position after the (newline_count - 10)th newline
+        // This gives us the last 10 lines
+        let target_newline_index = newline_count - 10;
+        newline_positions[target_newline_index] + 1 // Start after that newline
+    } else {
+        // Less than 10 lines, show entire buffer
+        0
+    };
 
-//     // Convert buffer slice to string (lossy conversion for invalid UTF-8)
-//     let display_text = String::from_utf8_lossy(&tail_buffer[display_start..bytes_read]);
+    // Convert buffer slice to string (lossy conversion for invalid UTF-8)
+    let display_text = String::from_utf8_lossy(&tail_buffer[display_start..bytes_read]);
 
-//     // Display the content
-//     print!("{}", display_text);
+    // Display the content
+    print!("{}", display_text);
 
-//     // Ensure there's a newline before prompt if content doesn't end with one
-//     if !tail_buffer[..bytes_read].ends_with(&[b'\n']) {
-//         println!();
-//     }
+    // Ensure there's a newline before prompt if content doesn't end with one
+    if !tail_buffer[..bytes_read].ends_with(&[b'\n']) {
+        println!();
+    }
 
-//     // Display prompt
-//     print!("> ");
-//     io::stdout().flush()?;
+    // Display prompt
+    print!("> ");
+    io::stdout().flush()?;
 
-//     Ok(())
-// }
+    Ok(())
+}
 
-// /// Gets or creates the default file path for the line editor.
-// /// If a custom filename is provided, appends the date to it.
-// ///
-// /// # Arguments
-// /// * `custom_name` - Optional custom filename to use as prefix
-// ///
-// /// # Returns
-// /// - For default: `{home}/Documents/lines_editor/yyyy_mm_dd.txt`
-// /// - For custom: `{home}/Documents/lines_editor/custom_name_yyyy_mm_dd.txt`
-// pub fn get_default_filepath(custom_name: Option<&str>) -> io::Result<PathBuf> {
-//     // Try to get home directory from environment variables
-//     let home = env::var("HOME")
-//         .or_else(|_| env::var("USERPROFILE"))
-//         .map_err(|e| {
-//             io::Error::new(
-//                 io::ErrorKind::NotFound,
-//                 // format!("get_default_filepath Could not find home directory: {}", e),
-//                 stack_format_it(
-//                     "get_default_filepath Could not find home directory: {}",
-//                     &[&e.to_string()],
-//                     "get_default_filepath Could not find home directory",
-//                 ),
-//             )
-//         })?;
+/// Gets or creates the default file path for the line editor.
+/// If a custom filename is provided, appends the date to it.
+///
+/// # Arguments
+/// * `custom_name` - Optional custom filename to use as prefix
+///
+/// # Returns
+/// - For default: `{home}/Documents/lines_editor/yyyy_mm_dd.txt`
+/// - For custom: `{home}/Documents/lines_editor/custom_name_yyyy_mm_dd.txt`
+pub fn get_default_filepath(custom_name: Option<&str>) -> io::Result<PathBuf> {
+    // Try to get home directory from environment variables
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                // format!("get_default_filepath Could not find home directory: {}", e),
+                stack_format_it(
+                    "get_default_filepath Could not find home directory: {}",
+                    &[&e.to_string()],
+                    "get_default_filepath Could not find home directory",
+                ),
+            )
+        })?;
 
-//     // Build the base directory path
-//     let mut base_path = PathBuf::from(home);
-//     base_path.push("Documents");
-//     base_path.push("lines_editor");
+    // Build the base directory path
+    let mut base_path = PathBuf::from(home);
+    base_path.push("Documents");
+    base_path.push("lines_editor");
 
-//     // Create all directories in the path if they don't exist
-//     fs::create_dir_all(&base_path)?;
+    // Create all directories in the path if they don't exist
+    fs::create_dir_all(&base_path)?;
 
-//     // Get timestamp for filename
-//     let timestamp = get_short_underscore_timestamp()?;
+    // Get timestamp for filename
+    let timestamp = get_short_underscore_timestamp()?;
 
-//     // Create filename based on whether custom_name is provided
-//     let filename = match custom_name {
-//         // Some(name) => format!("{}_{}.txt", name, timestamp),
-//         // None => format!("{}.txt", timestamp),
-//         Some(name) => stack_format_it("{}_{}.txt", &[&name, &timestamp.to_string()], "N_N.txt"),
-//         None => stack_format_it("{}.txt", &[&timestamp.to_string()], "N_N.txt"),
-//     };
+    // Create filename based on whether custom_name is provided
+    let filename = match custom_name {
+        // Some(name) => format!("{}_{}.txt", name, timestamp),
+        // None => format!("{}.txt", timestamp),
+        Some(name) => stack_format_it("{}_{}.txt", &[&name, &timestamp.to_string()], "N_N.txt"),
+        None => stack_format_it("{}.txt", &[&timestamp.to_string()], "N_N.txt"),
+    };
 
-//     // Join the base path with the filename
-//     Ok(base_path.join(filename))
-// }
+    // Join the base path with the filename
+    Ok(base_path.join(filename))
+}
 
 /// Module for detecting double-width (full-width) UTF-8 characters in terminal display.
 ///
@@ -9142,8 +8649,11 @@ pub fn build_windowmap_nowrap(state: &mut EditorState, readcopy_file_path: &Path
     }
 
     // Assertion: State should have valid dimensions
-    debug_assert!(state.effective_rows > 0, "Effective rows must be positive");
-    debug_assert!(state.effective_cols > 0, "Effective cols must be positive");
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(state.effective_rows > 0, "Effective rows must be positive");
+        debug_assert!(state.effective_cols > 0, "Effective cols must be positive");
+    }
 
     // Clear existing buffers and map before building
     state.clear_utf8_displaybuffers();
@@ -10881,98 +10391,98 @@ fn process_line_with_offset(
     Ok(bytes_written)
 }
 
-// /// Determines if the current working directory is the user's home directory
-// ///
-// /// # Purpose
-// /// Used to decide whether to enter memo mode (when in home) or require
-// /// a file path (when elsewhere).
-// ///
-// /// # Returns
-// /// * `Ok(true)` - Currently in home directory
-// /// * `Ok(false)` - Not in home directory
-// /// * `Err(io::Error)` - Cannot determine home or current directory
-// ///
-// /// # Platform Support
-// /// - Linux/macOS: Uses $HOME environment variable
-// /// - Windows: Uses %USERPROFILE% environment variable
-// ///
-// /// # Errors
-// /// - Missing HOME/USERPROFILE environment variable
-// /// - Cannot determine current working directory
-// pub fn is_in_home_directory() -> io::Result<bool> {
-//     // Get current working directory
-//     let cwd = env::current_dir()
-//         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cannot determine current directory"))?;
+/// Determines if the current working directory is the user's home directory
+///
+/// # Purpose
+/// Used to decide whether to enter memo mode (when in home) or require
+/// a file path (when elsewhere).
+///
+/// # Returns
+/// * `Ok(true)` - Currently in home directory
+/// * `Ok(false)` - Not in home directory
+/// * `Err(io::Error)` - Cannot determine home or current directory
+///
+/// # Platform Support
+/// - Linux/macOS: Uses $HOME environment variable
+/// - Windows: Uses %USERPROFILE% environment variable
+///
+/// # Errors
+/// - Missing HOME/USERPROFILE environment variable
+/// - Cannot determine current working directory
+pub fn is_in_home_directory() -> io::Result<bool> {
+    // Get current working directory
+    let cwd = env::current_dir()
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cannot determine current directory"))?;
 
-//     // Get home directory
-//     let home = get_home_directory()?;
+    // Get home directory
+    let home = get_home_directory()?;
 
-//     // Compare canonical paths to handle symlinks
-//     let canonical_cwd = fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
-//     let canonical_home = fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+    // Compare canonical paths to handle symlinks
+    let canonical_cwd = fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+    let canonical_home = fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
 
-//     Ok(canonical_cwd == canonical_home)
-// }
+    Ok(canonical_cwd == canonical_home)
+}
 
-// /// Gets the user's home directory path
-// ///
-// /// # Purpose
-// /// Cross-platform function to reliably find user's home directory.
-// /// Used for memo mode detection and default file location.
-// ///
-// /// # Returns
-// /// * `Ok(PathBuf)` - Absolute path to user's home directory
-// /// * `Err(io::Error)` - Cannot determine home directory
-// ///
-// /// # Platform Behavior
-// /// - Linux/macOS: Reads $HOME environment variable
-// /// - Windows: Reads %USERPROFILE% environment variable
-// ///
-// /// # Fallback Strategy
-// /// If primary variable missing, tries alternative methods before failing.
-// fn get_home_directory() -> io::Result<PathBuf> {
-//     // Try primary home variable for platform
-//     let home_result = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
+/// Gets the user's home directory path
+///
+/// # Purpose
+/// Cross-platform function to reliably find user's home directory.
+/// Used for memo mode detection and default file location.
+///
+/// # Returns
+/// * `Ok(PathBuf)` - Absolute path to user's home directory
+/// * `Err(io::Error)` - Cannot determine home directory
+///
+/// # Platform Behavior
+/// - Linux/macOS: Reads $HOME environment variable
+/// - Windows: Reads %USERPROFILE% environment variable
+///
+/// # Fallback Strategy
+/// If primary variable missing, tries alternative methods before failing.
+fn get_home_directory() -> io::Result<PathBuf> {
+    // Try primary home variable for platform
+    let home_result = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
 
-//     match home_result {
-//         Ok(home_str) => {
-//             let home_path = PathBuf::from(home_str);
+    match home_result {
+        Ok(home_str) => {
+            let home_path = PathBuf::from(home_str);
 
-//             // Defensive: Verify the directory exists
-//             if !home_path.exists() {
-//                 return Err(io::Error::new(
-//                     io::ErrorKind::NotFound,
-//                     "Home directory does not exist",
-//                 ));
-//             }
+            // Defensive: Verify the directory exists
+            if !home_path.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Home directory does not exist",
+                ));
+            }
 
-//             // Defensive: Verify it's a directory
-//             if !home_path.is_dir() {
-//                 return Err(io::Error::new(
-//                     io::ErrorKind::InvalidInput,
-//                     "Home path is not a directory",
-//                 ));
-//             }
+            // Defensive: Verify it's a directory
+            if !home_path.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Home path is not a directory",
+                ));
+            }
 
-//             Ok(home_path)
-//         }
-//         Err(_) => {
-//             // Fallback: try USER environment variable with common paths
-//             if let Ok(user) = env::var("USER") {
-//                 let mut possible_home = PathBuf::from("/home");
-//                 possible_home.push(&user);
-//                 if possible_home.exists() && possible_home.is_dir() {
-//                     return Ok(possible_home);
-//                 }
-//             }
+            Ok(home_path)
+        }
+        Err(_) => {
+            // Fallback: try USER environment variable with common paths
+            if let Ok(user) = env::var("USER") {
+                let mut possible_home = PathBuf::from("/home");
+                possible_home.push(&user);
+                if possible_home.exists() && possible_home.is_dir() {
+                    return Ok(possible_home);
+                }
+            }
 
-//             Err(io::Error::new(
-//                 io::ErrorKind::NotFound,
-//                 "Cannot determine home directory: neither HOME nor USERPROFILE set",
-//             ))
-//         }
-//     }
-// }
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Cannot determine home directory: neither HOME nor USERPROFILE set",
+            ))
+        }
+    }
+}
 
 // Stretech goal TODO: try to make non-heap stdin read...
 /// Prompts user for a filename when a directory path is provided
@@ -12585,6 +12095,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
             // =================================================
+            /*
+            Edge case:
+            adding a new-line at the bottom of the TUI
+            */
             let _: bool = match button_safe_clear_all_redo_logs(&base_edit_filepath) {
                 Ok(success) => success,
                 Err(_e) => {
@@ -12603,6 +12117,21 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             };
 
             insert_newline_at_cursor_chunked(lines_editor_state, edit_file_path)?;
+
+            // insert_newline_at_cursor_chunked advances cursor.tui_row by 1
+            // but does NOT scroll the window. If the cursor was on the bottom
+            // visible row, tui_row now equals effective_rows (off-screen).
+            // We must either:
+            //   (a) leave tui_row alone if it's still in range, OR
+            //   (b) clamp tui_row to bottom_edge and scroll window down by 1
+            // ─────────────────────────────────────────────────────────────────
+            let bottom_edge = lines_editor_state.effective_rows.saturating_sub(1);
+            if lines_editor_state.cursor.tui_row > bottom_edge {
+                // Cursor went off the bottom — scroll window down to reveal new line
+                let overflow = lines_editor_state.cursor.tui_row - bottom_edge;
+                lines_editor_state.line_count_at_top_of_window += overflow;
+                lines_editor_state.cursor.tui_row = bottom_edge;
+            }
 
             // Rebuild window to show the change
             build_windowmap_nowrap(lines_editor_state, edit_file_path)?;
@@ -19271,97 +18800,6 @@ fn format_pasty_tui_legend() -> Result<()> {
     Ok(())
 }
 
-// /// Formats the Pasty legend with color-coded commands
-// fn format_pasty_tui_legend2() -> io::Result<String> {
-//     // Ok(format!(
-//     //     "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
-//     //     YELLOW,
-//     //     RED,
-//     //     YELLOW,
-//     //     RED,
-//     //     YELLOW,
-//     //     RED,
-//     //     YELLOW,
-//     //     YELLOW,
-//     //     RED,
-//     //     YELLOW,
-//     //     RED,
-//     //     RESET,
-//     //     RED,
-//     //     YELLOW,
-//     //     RESET
-//     // ))
-
-//     let stack_formatted_legend = stack_format_it(
-//         "{}Have a Pasty!! {}b{}ack paste{}N{} {}str{}{}(any file) {}clear{}all|{}clear{}N {}Empty{}(Add Freshest!){}",
-//         &[
-//             &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &RED, &YELLOW, &YELLOW, &RED, &YELLOW, &RED,
-//             &RESET, &RED, &YELLOW, &RESET,
-//         ],
-//         "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
-//     );
-
-//     Ok(stack_formatted_legend)
-// }
-
-// /// Formats the Pasty info bar with count, pagination, and error messages
-// fn format_pasty_info_bar(
-//     total_count: usize,
-//     first_count_visible: usize,
-//     last_count_visible: usize,
-//     info_bar_message: &str,
-// ) -> io::Result<String> {
-//     let infobar_message_display = if !info_bar_message.is_empty() {
-//         stack_format_it(" {}", &[&info_bar_message], "")
-//     } else {
-//         String::new()
-//     };
-
-//     // Ok(format!(
-//     //     // "{}{}{}Total, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{} >{} ",  // minimal
-//     //     "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item # to paste, or a file-path to paste file text {}> ",
-//     //     RED,
-//     //     total_count,
-//     //     YELLOW,
-//     //     YELLOW,
-//     //     RED,
-//     //     first_count_visible,
-//     //     YELLOW,
-//     //     RED,
-//     //     last_count_visible,
-//     //     YELLOW,
-//     //     infobar_message_display,
-//     //     YELLOW,
-//     //     RESET
-//     // ))
-
-//     let string_totalcount = total_count.to_string();
-//     let string_firstcount_visible = first_count_visible.to_string();
-//     let string_last_count_visible = last_count_visible.to_string();
-
-//     let stack_formatted_infobar = stack_format_it(
-//         "{}{}{} Clipboard Items, {}Showing{} {}{}-{}{}{} (Page up/down k/j) {}{}\nEnter clipboard item #, 'paste', or file-path to paste file text {}> ",
-//         &[
-//             &RED,
-//             &string_totalcount,
-//             &YELLOW,
-//             &YELLOW,
-//             &RED,
-//             &string_firstcount_visible,
-//             &YELLOW,
-//             &RED,
-//             &string_last_count_visible,
-//             &YELLOW,
-//             &infobar_message_display,
-//             &YELLOW,
-//             &RESET,
-//         ],
-//         "Have a Pasty!! back pasteN str(any file) clearall|clearN Empty(Add Freshest!)",
-//     );
-
-//     Ok(stack_formatted_infobar)
-// }
-
 /// Displays the Pasty info bar with count, pagination, and error messages.
 /// Writes directly to stdout with zero heap allocation.
 ///
@@ -20027,112 +19465,112 @@ fn create_new_draft_copy(
     Ok(draft_path)
 }
 
-// /// Prints help message to stdout
-// ///
-// /// # Purpose
-// /// Displays usage information and available commands.
-// /// Called when user runs `lines --help`.
-// pub fn print_help() {
-//     println!("About Lines Editor: (note: ctrl+s can block terminal, ctrl+z unblocks)");
-//     println!("USAGE:");
-//     println!("    lines [FILE]");
-//     println!("    lines FILE:LINE          # Open at : specific line");
-//     println!("OPTIONS:");
-//     println!("    --help, -h      Show this help message");
-//     println!("    --version, -v   Show version information");
-//     println!("HELP MENU:");
-//     println!("    help            For a help menue with sections.)");
-//     println!("QUIT & SAVE:");
-//     println!("                    If you 'quit' without saving, your work is gone.)");
-//     println!("                    If session ends without 'quit' then a backup exists.");
-//     println!("    q               quit");
-//     println!("    wq              save and quit (same as 'write and quit')");
-//     println!("    s               save / write (same thing), (w alone is 'word' jump)");
-//     println!("MODES:");
-//     println!("    Memo Mode:      Run from home directory, Append-only quickie");
-//     println!("                    Creates dated files in ~/Documents/lines_editor/");
-//     println!("    Full Editor:    Run from any other directory");
-//     println!("    n               Normal-Mode (navigation)");
-//     println!("    i               Insert-Mode (typing in text)");
-//     println!("    v               Visual/Select-Mode (select and act on selections");
-//     println!("    hex             Hex Editor Mode");
-//     println!("    p | pasty       Clipboard / Paste Mode");
-//     println!("DELETE: d");
-//     println!("                 All delete operations can be undone/redone at char level");
-//     println!("    Normal Mode: 'd' deletes a WHOLE file-line");
-//     println!("    Insert Mode: delete-key for Backspace-Style Delete");
-//     println!("    Visual Mode  'd' deletes whole selection, not surrounding spaces/items");
-//     println!("                   then the cursor returns to line start, to re-sync");
-//     println!("    Visual & Normal: delete-key: deletes a single char backspace-style");
+/// Prints help message to stdout
+///
+/// # Purpose
+/// Displays usage information and available commands.
+/// Called when user runs `lines --help`.
+pub fn print_help() {
+    println!("About Lines Editor: (note: ctrl+s can block terminal, ctrl+z unblocks)");
+    println!("USAGE:");
+    println!("    lines [FILE]");
+    println!("    lines FILE:LINE          # Open at : specific line");
+    println!("OPTIONS:");
+    println!("    --help, -h      Show this help message");
+    println!("    --version, -v   Show version information");
+    println!("HELP MENU:");
+    println!("    help            For a help menue with sections.)");
+    println!("QUIT & SAVE:");
+    println!("                    If you 'quit' without saving, your work is gone.)");
+    println!("                    If session ends without 'quit' then a backup exists.");
+    println!("    q               quit");
+    println!("    wq              save and quit (same as 'write and quit')");
+    println!("    s               save / write (same thing), (w alone is 'word' jump)");
+    println!("MODES:");
+    println!("    Memo Mode:      Run from home directory, Append-only quickie");
+    println!("                    Creates dated files in ~/Documents/lines_editor/");
+    println!("    Full Editor:    Run from any other directory");
+    println!("    n               Normal-Mode (navigation)");
+    println!("    i               Insert-Mode (typing in text)");
+    println!("    v               Visual/Select-Mode (select and act on selections");
+    println!("    hex             Hex Editor Mode");
+    println!("    p | pasty       Clipboard / Paste Mode");
+    println!("DELETE: d");
+    println!("                 All delete operations can be undone/redone at char level");
+    println!("    Normal Mode: 'd' deletes a WHOLE file-line");
+    println!("    Insert Mode: delete-key for Backspace-Style Delete");
+    println!("    Visual Mode  'd' deletes whole selection, not surrounding spaces/items");
+    println!("                   then the cursor returns to line start, to re-sync");
+    println!("    Visual & Normal: delete-key: deletes a single char backspace-style");
 
-//     println!("Resize-Tui: (Works with Enter-Key-to-Repeat");
-//     println!("    wide+           +1 wider");
-//     println!("    wide-           -1 wide");
-//     println!("    tall+           +1 taller");
-//     println!("    tall-           -1 tall");
-//     println!("NAVIGATION:");
-//     println!("    Esc | N         Normal Mode");
-//     println!("    hjkl            Move cursor");
-//     println!("    5j, 10l         Move with repeat count");
-//     println!("    [Empty Enter]   Repeat last command (Normal/Visual/ ...?)");
-//     println!("MOVE CURSOR: Normal-Mode move, Visual-Mode highlight");
-//     println!("                    Arrow keys (+ Enter) work too!");
-//     println!("    j               down");
-//     println!("    k               up");
-//     println!("    h               left");
-//     println!("    l               right");
-//     println!("    w               jump AHEAD to start of next word/symbol");
-//     println!("    e               jump AHEAD to end of this word/symbol");
-//     println!("    b               go BACK to beginning of this/next word/symbol");
-//     println!("GOTO:");
-//     println!("    g[int] =>       go to line number");
-//     println!("                     in Hex-Mode: Go To File Byte");
-//     println!("    gg     =>       go to start of file");
-//     println!("    ge | G =>       go to last line of file");
-//     println!("    gh | 0 =>       go to start of file");
-//     println!("    gl | $ =>       go to end of this line");
-//     println!("INDENT/UINDENT :");
-//     println!("    [               Indent");
-//     println!("    ]               Unindent");
-//     println!("COMMENT/UNCOMMENT:");
-//     println!("    /               Toggle Simple Comment (individual line(s))");
-//     println!("                     normal-mode or blocks in visual-mode)");
-//     println!("    //              Comment/Uncomment Block (visual-mode ");
-//     println!("                     include markers for Uncomment)");
-//     println!("    ///             Rust Doc-String Comment");
-//     println!("DELETE:");
-//     println!("                    Backspace key does not work with input buffer");
-//     println!("    d               Normal-Mode: like backspace");
-//     println!("                    Visual-Mode: removes selection");
-//     println!("    delete(key)     Only like backspace, not remove section");
-//     println!("UNDO/REDO:");
-//     println!("    u               undo");
-//     println!("    r               redo");
-//     println!("Cut/Past/Clipboard: Pasty!!");
-//     println!("    c | y           copy, yank (same thing)");
-//     println!("    v | p | pasty   go to Pasty-Mode (to paste)");
-//     println!("PASTEY MODE:");
-//     println!("    Enter           paste last copied/yanked item");
-//     println!("    [int]           clipboard items are numbered");
-//     println!("                     that number to past that item)");
-//     println!("    path            path to any other file to paste in");
-//     println!("    clear           clear whole clipboard");
-//     println!("    clear[int]      delete clipboard item by number");
-//     println!("    paste           to paste multi-line block from outside lines");
-//     println!("    b               go BACK");
-//     println!("HEX EDIT: Careful, Edit With The Safety!");
-//     println!("    hex         Enter hex-edit mode from Normal-Mode");
-//     println!("    [NN]            Enter two 'digit' hex number to change current byte");
-//     println!("                     this is standard hex-edit funcationality, in place");
-//     println!("    [NN]-i          *Insert* New Byte (byte-hex dash i)");
-//     println!("    d               Delete/Remove current byte");
-//     println!("    g[int]          Go To File Byte");
-//     println!("Examples in terminal/shell:");
-//     println!("  lines                Memo mode (if in home)");
-//     println!("  lines notes.txt      Create/open notes.txt");
-//     println!("  lines notes.txt:42   Open to line 42");
-//     println!("  lines mydir/ Create new file in directory");
-// }
+    println!("Resize-Tui: (Works with Enter-Key-to-Repeat");
+    println!("    wide+           +1 wider");
+    println!("    wide-           -1 wide");
+    println!("    tall+           +1 taller");
+    println!("    tall-           -1 tall");
+    println!("NAVIGATION:");
+    println!("    Esc | N         Normal Mode");
+    println!("    hjkl            Move cursor");
+    println!("    5j, 10l         Move with repeat count");
+    println!("    [Empty Enter]   Repeat last command (Normal/Visual/ ...?)");
+    println!("MOVE CURSOR: Normal-Mode move, Visual-Mode highlight");
+    println!("                    Arrow keys (+ Enter) work too!");
+    println!("    j               down");
+    println!("    k               up");
+    println!("    h               left");
+    println!("    l               right");
+    println!("    w               jump AHEAD to start of next word/symbol");
+    println!("    e               jump AHEAD to end of this word/symbol");
+    println!("    b               go BACK to beginning of this/next word/symbol");
+    println!("GOTO:");
+    println!("    g[int] =>       go to line number");
+    println!("                     in Hex-Mode: Go To File Byte");
+    println!("    gg     =>       go to start of file");
+    println!("    ge | G =>       go to last line of file");
+    println!("    gh | 0 =>       go to start of file");
+    println!("    gl | $ =>       go to end of this line");
+    println!("INDENT/UINDENT :");
+    println!("    [               Indent");
+    println!("    ]               Unindent");
+    println!("COMMENT/UNCOMMENT:");
+    println!("    /               Toggle Simple Comment (individual line(s))");
+    println!("                     normal-mode or blocks in visual-mode)");
+    println!("    //              Comment/Uncomment Block (visual-mode ");
+    println!("                     include markers for Uncomment)");
+    println!("    ///             Rust Doc-String Comment");
+    println!("DELETE:");
+    println!("                    Backspace key does not work with input buffer");
+    println!("    d               Normal-Mode: like backspace");
+    println!("                    Visual-Mode: removes selection");
+    println!("    delete(key)     Only like backspace, not remove section");
+    println!("UNDO/REDO:");
+    println!("    u               undo");
+    println!("    r               redo");
+    println!("Cut/Past/Clipboard: Pasty!!");
+    println!("    c | y           copy, yank (same thing)");
+    println!("    v | p | pasty   go to Pasty-Mode (to paste)");
+    println!("PASTEY MODE:");
+    println!("    Enter           paste last copied/yanked item");
+    println!("    [int]           clipboard items are numbered");
+    println!("                     that number to past that item)");
+    println!("    path            path to any other file to paste in");
+    println!("    clear           clear whole clipboard");
+    println!("    clear[int]      delete clipboard item by number");
+    println!("    paste           to paste multi-line block from outside lines");
+    println!("    b               go BACK");
+    println!("HEX EDIT: Careful, Edit With The Safety!");
+    println!("    hex         Enter hex-edit mode from Normal-Mode");
+    println!("    [NN]            Enter two 'digit' hex number to change current byte");
+    println!("                     this is standard hex-edit funcationality, in place");
+    println!("    [NN]-i          *Insert* New Byte (byte-hex dash i)");
+    println!("    d               Delete/Remove current byte");
+    println!("    g[int]          Go To File Byte");
+    println!("Examples in terminal/shell:");
+    println!("  lines                Memo mode (if in home)");
+    println!("  lines notes.txt      Create/open notes.txt");
+    println!("  lines notes.txt:42   Open to line 42");
+    println!("  lines mydir/ Create new file in directory");
+}
 
 /// Help section identifiers for menu navigation
 ///
@@ -20363,29 +19801,27 @@ within the input-buffer (the characters you type BEFORE
 The 'backspace' key does not work to modify a file. 'backspace'
 does work while you are tying a command, before hitting Enter."#;
 
-// /// Configuration help section content
-// const HELP_SECTION_CONFIGURATION: &str = r#"
 //  ═══ PARTNER PROGRAMS CONFIGURATION ═══
-
+//
 //  You may want to call your own applications or other applications
 //  that are not fully 'installed' on your system. "Partner Programs"
 //  allows you to tell File Fantastic where these binary-executible
 //  files are, wherever they are. Just list each file-path in this file,
 //  which FF will create:
-
+//
 //  CONFIGURATION FILE:
 //    ~/.ff_data/absolute_paths_to_local_partner_fileopening_executables.txt
-
+//
 //  FILE FORMAT:
 //    - One program path per line
 //    - Use absolute paths
 //    - Comments with #, and blank lines, are ignored
-
+//
 //  EXAMPLE CONFIGURATION:
 //    /usr/bin/emacs
 //    # This is a comment
 //    /home/user/bin/custom-editor
-
+//
 //  Press Enter to return to help menu... "#;
 
 /// Wait for user to press Enter key
@@ -22987,6 +22423,63 @@ pub fn lines_full_file_editor(
     return Ok(());
 }
 
+/// Ensures a file is in a state the line editor can open for editing.
+///
+/// # Purpose / Project Context
+/// The line editor's loading logic cannot correctly open a completely
+/// empty (zero-byte) file (e.g. one created by `touch`). To handle this
+/// edge case without changing the editor's loading invariants, any
+/// existing zero-byte regular file has a single newline appended so it
+/// contains exactly one (empty) line.
+///
+/// # Arguments
+/// * `target_path` - Absolute path to the file to normalize.
+///
+/// # Returns
+/// * `Ok(true)`  - File existed and was empty; a newline was written.
+/// * `Ok(false)` - No action required (file missing, not a regular file,
+///                 or non-empty).
+/// * `Err(_)`    - File existed and was empty, but the newline could not
+///                 be written or flushed. The caller must decide whether
+///                 to proceed.
+///
+/// # Notes
+/// - No action is taken for non-existent files; file creation is the
+///   responsibility of the caller.
+/// - A small TOCTOU window exists between the size check and the append;
+///   concurrent external writers are not expected for editor targets.
+fn ensure_file_is_editor_ready(target_path: &Path) -> Result<bool> {
+    // Existence + file-type guard (defensive: do not append to a directory).
+    let metadata = match fs::metadata(target_path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            // Cannot determine state; surface so caller can react.
+            return Err(LinesError::Io(e));
+        }
+    };
+    if !metadata.is_file() {
+        return Ok(false);
+    }
+    if metadata.len() != 0 {
+        return Ok(false);
+    }
+
+    // Known-empty regular file: append exactly one newline.
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(target_path)
+        .map_err(|e| {
+            // EFER = Ensure File Editor-Ready (unique per-function prefix)
+            io::Error::new(e.kind(), "EFER: cannot open empty file for normalization")
+        })?;
+    file.write_all(b"\n")
+        .map_err(|e| io::Error::new(e.kind(), "EFER: newline write failed"))?;
+    file.flush()
+        .map_err(|e| io::Error::new(e.kind(), "EFER: flush failed"))?;
+    Ok(true)
+}
+
 /// Line-Editor, Full-Mode for editing files
 ///
 /// # Purpose
@@ -23011,6 +22504,12 @@ pub fn lines_full_file_editor(
 /// - Creates parent directories if needed
 /// - Initializes new files with timestamp header
 /// - Creates read-copy for safety
+///
+/// # Edge Cases
+/// - Zero-byte existing files (e.g. created by `touch`) are normalized
+///   to contain a single newline before opening, because the line-loader
+///   cannot correctly open a truly empty file.
+///
 pub fn lines_fullfile_editor_core(
     original_file_path: Option<PathBuf>,
     starting_line: Option<usize>,
@@ -23022,9 +22521,29 @@ pub fn lines_fullfile_editor_core(
 
     // Resolve target file path (all path handling logic extracted)
     let target_path = resolve_target_file_path(original_file_path)?;
-    // // Diagnostic
-    // println!("\n=== Opening Lines Editor ==="); // TODO remove/commentout debug print
-    // println!("File: {}", target_path.display());
+
+    #[cfg(debug_assertions)]
+    {
+        println!("\n=== Opening Lines Editor ===");
+        println!("File: {}", target_path.display());
+    }
+
+    // Normalize zero-byte files so the editor's loader can open them.
+    // See ensure_file_is_editor_ready for project-context rationale.
+    match ensure_file_is_editor_ready(&target_path) {
+        Ok(_) => {} // No action, or newline successfully appended.
+        Err(_e) => {
+            // Could not normalize an existing empty file; log terse
+            // diagnostic in debug builds only (no path leaked in prod).
+            #[cfg(debug_assertions)]
+            eprintln!("lines_fullfile_editor_core: normalization skipped: {}", _e);
+            // Continue: the subsequent open may still succeed, and if it
+            // fails the editor's normal error path will report it.
+
+            // safe log
+            eprintln!("lines_fullfile_editor_core: normalization skipped");
+        }
+    }
 
     // Create file if it doesn't exist
     if !target_path.exists() {
@@ -23045,8 +22564,13 @@ pub fn lines_fullfile_editor_core(
     let (session_time_stamp1, session_time_stamp2) =
         match split_timestamp_no_heap(&session_time_base) {
             Ok((ts4, ts5)) => (ts4, ts5),
-            Err(e) => {
-                eprintln!("Error: {}", e);
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("lines_fullfile_editor_core: split_timestamp failed: {}", _e);
+
+                // safe log
+                eprintln!("lines_fullfile_editor_core: split_timestamp failed");
+
                 // Create two empty FixedSize32Timestamp structs as defaults
                 let empty =
                     FixedSize32Timestamp::from_str("err01_01_01_01_01").unwrap_or_else(|_| {
