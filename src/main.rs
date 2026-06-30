@@ -15,6 +15,7 @@ mod buffy_format_write_module;
 mod buttons_reversible_edit_changelog_module;
 mod lines_editor_module;
 mod toggle_comment_indent_module;
+mod raw_terminal_x86_module;
 
 // Share Source
 mod source_it_module;

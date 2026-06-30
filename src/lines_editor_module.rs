@@ -1,9 +1,156 @@
 //! lines_editor_module.rs
 //! lines is minimal text editor
 //! test files in: src/tests.rs
-
+//!
+//! Originally lines used a byte-to-tui lookup table to interface TUI
+//! and user actions and the file bytes. Now that lookup functionality is done
+//! using a virtual-lookup-table calculated on the fly to conserve memory.
+//!
+//! There are multiple types of 'positions' and 'coordinates' and making
+//! these clear is important.
+//!
+//! # Coordinate Spaces —  reference for cursor/position math
+//!
+//! This editor displays UTF-8 text in a non-wrapping, line-by-line terminal
+//! window. UTF-8 forces three things apart that were one and the same in the
+//! ASCII era:
+//!
+//! ```text
+//!   bytes        ≠   characters      ≠   visual terminal cells
+//!   (1–4 bytes       (one Unicode         (1 cell normal,
+//!    per char)        scalar value)        2 cells for double-width: CJK/emoji)
+//! ```
+//!
+//! Conflating these is THE bug class this module exists to prevent. Every
+//! function that touches a position MUST state, in its own doc, which of the
+//! spaces below each input and output uses. Do not assume; the same integer
+//! (e.g. "75") is a different location in each space.
+//!
+//! ## The six coordinate spaces
+//!
+//! | # | Name (this doc)            | Unit            | Measured from        | Stored in (canonical fields)                                             |
+//! |---|----------------------------|-----------------|----------------------|--------------------------------------------------------------------------|
+//! | 1 | **file byte (absolute)**   | bytes           | start of the file    | `FilePosition::byte_offset_linear_file_absolute_position`, `file_position_of_topline_start`, `windowmap_line_byte_start_end_position_pairs`, `file_position_of_vis_select_*` |
+//! | 2 | **in-line byte**           | bytes           | start of that line   | `FilePosition::byte_in_line`                                             |
+//! | 3 | **line number**            | lines (0-idx)   | start of the file    | `FilePosition::line_number`, `line_count_at_top_of_window`               |
+//! | 4 | **in-line char index**     | characters      | start of that line   | `tui_window_horizontal_utf8txt_line_char_offset` (the horizontal scroll) |
+//! | 5 | **visual cell column**     | terminal cells  | left edge of the row | `cursor.tui_visual_col`; window width is `effective_cols`                |
+//! | 6 | **TUI display row**        | rows (0-idx)    | top of the window    | `cursor.tui_row`; window height is `effective_rows`                      |
+//!
+//! Definitions in detail:
+//!
+//! - **#1 file byte (absolute):** linear byte offset into the file. The ground
+//!   truth for *where an edit happens*. Example: the last char of a line might
+//!   be file byte 8659.
+//!
+//! - **#2 in-line byte:** byte offset of a position measured from the start of
+//!   its own line. `file_byte = line_start_byte + line_byte`. For a multibyte
+//!   character this is the offset of its FIRST byte.
+//!
+//! - **#3 line number:** which line of the file (0-indexed internally; the info
+//!   bar shows it +1 for humans). The display row `r` shows file line
+//!   `line_count_at_top_of_window + r`.
+//!
+//! - **#4 in-line char index:** the Nth UTF-8 character of a line, counting one
+//!   per character regardless of byte length or cell width. The horizontal
+//!   scroll offset lives here: scrolling skips whole CHARACTERS, never cells or
+//!   bytes (see `process_line_with_offset`). This is why the offset is in
+//!   characters even though the cursor column is in cells.
+//!
+//! - **#5 visual cell column:** how many terminal CELLS from the row's left edge
+//!   a position occupies. ASCII/normal characters take 1 cell; double-width
+//!   characters (CJK, emoji) take 2 cells. This column INCLUDES the line-number
+//!   prefix: cells `[0, line_num_width)` are the prefix, and the line's first
+//!   CONTENT cell is at column `line_num_width`. Under the project's **Option A**
+//!   decision, `cursor.tui_visual_col` is a VISUAL column (not a character
+//!   count), so it compares directly against `effective_cols` with no
+//!   conversion, and the terminal draws the cursor where this column points.
+//!
+//! - **#6 TUI display row:** the row within the visible window (0 = top content
+//!   row). `cursor.tui_row` plus `line_count_at_top_of_window` gives the file
+//!   line (#3).
+//!
+//! ## Sources of truth vs. derived
+//!
+//! **Sources of truth (the ONLY stored cursor/window state):**
+//! - `cursor.tui_row`                                   (#6)
+//! - `cursor.tui_visual_col`                            (#5)
+//! - `tui_window_horizontal_utf8txt_line_char_offset`   (#4)
+//! - `line_count_at_top_of_window`                      (#3, top of window)
+//!
+//! Plus one file-byte CACHE, rebuilt each window refresh:
+//! - `windowmap_line_byte_start_end_position_pairs`     (#1 per display row)
+//!
+//! **Everything else is DERIVED on demand — never stored as a parallel counter.**
+//! Storing redundant per-space counters is forbidden here: a single such counter
+//! (`in_row_abs_horizontal_0_index_cursor_position`) drifted out of sync and was
+//! removed for exactly that reason. Derive instead:
+//! - cursor's file byte (#1), in-line byte (#2), line number (#3):
+//!   `EditorState::get_row_col_file_position(tui_row, tui_visual_col)` — the one
+//!   canonical converter from (#6, #5) into (#1, #2, #3). It reads the read-copy
+//!   file on demand; it does not keep a resident grid.
+//! - line-number prefix width `line_num_width` (in cells):
+//!   `calculate_line_number_width(line_count_at_top_of_window, tui_row,
+//!   effective_rows)`. Cells == characters here because the prefix is ASCII.
+//! - content visual column (cells past the prefix):
+//!   `content_visual_col = tui_visual_col - line_num_width`.
+//! - visual width of the char at / left of the cursor:
+//!   `cursor_char_visual_width()` / `char_to_left_visual_width()`.
+//!
+//! ## How #5 is converted to a file byte (the central derivation)
+//!
+//! Given a display row and a VISUAL column (#6, #5):
+//! 1. `content_visual_col = tui_visual_col - line_num_width`   (strip the prefix)
+//! 2. seek to the row's line-start byte (from the windowmap cache),
+//! 3. skip `tui_window_horizontal_utf8txt_line_char_offset` CHARACTERS (#4),
+//! 4. then walk content, summing VISUAL widths (1 or 2 per char), until the
+//!    accumulated width reaches `content_visual_col`; that character's first
+//!    byte is the result (#1/#2).
+//! Two trailing virtual cells extend the line so the cursor can sit at the
+//! newline glyph and one past end-of-line (for appending). `goto_line_end`,
+//! `MoveLeft`/`MoveRight`, and the renderer all rely on this being the single
+//! conversion path.
+//!
+//! ## Worked example
+//!
+//! Line content `ab危ない` shown unscrolled with a 4-cell prefix `"166 "`:
+//!
+//! ```text
+//!   prefix │ a  b  危    な    い
+//!   cell:  0123 4  5  6 7  8 9 10 11      ← #5 visual cell column (tui_visual_col)
+//!   char:        0  1  2    3    4        ← #4 in-line char index
+//!   line%        0  1  2..4 5..7 8..10    ← #2 in-line byte (危/な/い are 3 bytes)
+//! ```
+//! - Cursor ON `危`: `tui_visual_col = 6`, `content_visual_col = 2`,
+//!   char index 2, in-line byte 2. Crossing it rightward advances
+//!   `tui_visual_col` by **2** (it is double-width), landing on `な` at cell 8.
+//!
+//! ## Naming convention (so a name reveals its space)
+//!
+//! - bytes  → name contains **`byte`**         (`file_byte`, `line_byte`, `byte_in_line`)
+//! - line   → **`line_number`** / **`line_count`**
+//! - char index → name contains **`char`**     (`..._char_offset`, `line_char_index`)
+//! - visual cells → name contains **`visual`** (`tui_visual_col`, `content_visual_col`, `..._visual_width`)
+//! - display row → **`tui_row`**
+//!
+//! When in doubt, prefer a longer name that names the space over a short
+//! ambiguous one. The cost of `tui_col` meaning two things was this entire
+//! refactor.
 /*
 See: "diagnostic" flag for debugging inspection
+
+```
+| # | Space | Unit | What it measures | Example (`'` ending line 166) | Lives in (current names) |
+|---|-------|------|------------------|-------------------------------|--------------------------|
+| 1 | **File byte (absolute)** | bytes | offset from start of file | 8662 | `byte_offset_linear_file_absolute_position`, `file_position_of_topline_start`, `windowmap_line_byte_start_end_position_pairs`, `file_position_of_vis_select_*` |
+| 2 | **In-line byte** | bytes | offset from start of the line | 128 | `byte_in_line` |
+| 3 | **Line number** | lines | which line in the file (0-idx) | 165 | `line_number`, `line_count_at_top_of_window` |
+| 4 | **In-line character index** | characters | Nth UTF-8 char in the line (multibyte = 1) | ~125 | **`tui_window_horizontal_utf8txt_line_char_offset`** (the horizontal scroll lives here) |
+| 5 | **Visual cell column** | terminal cells | cells from row left, incl. prefix; double-width = 2 | 75 | **`cursor.tui_visual_col`** (since Option A), compared with `effective_cols` |
+| 6 | **TUI display row** | rows | display row within the window | 4 | `cursor.tui_row`, count = `effective_rows` |
+```
+
+Derived coordinates vs. source of truth: tui_row, tui_visual_col, & char_offset
 
 # Abstract
 Lines is a minimal terminal text/hex file-editor,
@@ -36,7 +183,8 @@ full IDE competing with Zed, Helix, vsCode, etc.
 - Where possible, as in legacy-mini-lines-editor, do not leave a file 'open' to read/write/append. Read what you need, when you need to, then stop reading the file, close out the read/write process so that the file is not locked or conflicted for another application or process (outside or inside of Lines).
 
 
-# Rust rules:
+
+# 🦀 Rust rules 🦀:
 - Always best practice.
 - Always extensive doc strings: what the code is doing with project context
 - Always clear comments.
@@ -46,56 +194,121 @@ full IDE competing with Zed, Helix, vsCode, etc.
 - Always absolute file paths.
 - Always error handling.
 - Never unsafe code.
-- Never use unwrap.
+- Never use unwrap (in production builds).
 
-- Load what is needed when it is needed: Do not ever load a whole file or line, rarely load a whole anything. increment and load only what is required pragmatically. Do not fill 'state' with every possible piece of un-used information. Do not insecurity output information broadly in the case of errors and exceptions.
+Theory and real life are completely different in production code.
+Production code must be designed for bitflips, hardware failures, OS errors, etc.  Not pure platonic nirvana.
+E.g. According to Linus Torvalds, many or most windows blue screen of death issues in 1990-2010 happened because code did not account for real-world physical hard drive behaviors (including memory errors). According to Steve Gibson (and maybe Designing Data-Intensive Applications: by Martin Kleppmann) many network and database issues are caused by hard-radiation ("cosmic-ray") bitflips.
 
-- Always defensive best practice
-- Always error and exception handling: Every part of code, every process, function, and operation will fail at some point, if only because of cosmic-ray bit-flips (which are common), hardware failure, power-supply failure, adversarial attacks, etc. There must always be fail-safe error handling where production-release-build code handles issues and moves on without panic-crashing ever. Every failure must be handled smoothly: let it fail and move on. This does not mean that no function can return an error. Handling should occur where needed, e.g. before later functions are reached.
+Power failures happen. Hardware failures happen. Cyberattacks happen. Misbehaving applications happen. Rare edge cases happen. Race conditions happen. Undefined behavior happens. Most code does not have guardrails like either Rust or NASA's 'Power of Ten rules'. Etc.
 
-Somehow there seems to be no clear vocabulary for 'Do not stop.' When you come to something to handle, handle it:
+Much code is only for R&D and internal one-off use, and that is fine. Printing 'hello world' to test should not require elaborate production-hardening. Not all code is or needs to be "production" code. But production code must be smart.
+
+In production: Every line of code will fail eventually. Not 'if': every line of code will fail eventually. Production code is written to handle the failures when, (not 'if,' when) they happen. There is no 'should not fail.' There is no 'can not fail.' Every function will fail. Every call to every function will malfunction. Everything (in production) must be checked and handled so that when (not 'if,' when) these expected errors happen the process does not misbehave, crash, abort, or escalate malfunction, etc.
+
+Empirical processes are more "statistical," less tautological; and "statistical" quickly reaches into the unknown and the undefined.
+
+### Rules of Thumb (there will be exceptions and edge cases):
+
+- Classic ~quote from Sid Meyer's Civilization Game: "The bureaucracy has expanded to meet the needs of the expanding bureaucracy." Bloat and project collapse due to nihilist mismanagement and bad project skills is not new to computer science.
+
+#### Rules Require Context:
+- Rules such as 'Don't Repeat Yourself' or 'Separation of Concerns' require a context to be coherent and a compelling reason: Do not repeat yourself IF there is a compelling reason in a clear context. Does aerospace engineering have a blind policy of zero redundancy? No, it does not. Context matters.
+
+
+#### Flat is better than nested. (Just like in the zen of python.)
+- Always consider the flat option first.
+- Be wary of ever-more nested structs that claim to infinitely 'separate concerns' for the sake of 'separating concerns.'
+
+
+#### 'Get [what is] needed, when [it is] needed.':
+- Do not load more into state than you need.
+- Do not store more information than you need.
+- Do not use more storage capacity than you need.
+- Do not keep a hold/handle on a file longer than is needed (e.g. forever).
+
+
+#### Grace Hopper ~"The most damaging phrase in the language is 'we've always done it this way.' The second most damaging is 'storage is cheap.'"
+- Be as caring and vigilant about memory-economics as Grace Hopper (who famously walked around with a piece of wire 30 cm long — "a nanosecond" — to make engineers physically feel the cost of waste). Before suggesting the size for a variable (such as apathetically using more memory than is needed) imagine you are suggesting this to Grace Hopper to her face. Only use as much memory as you are absolutely required to use.
+
+- Load what is needed when it is needed: Do not ever load a whole file or line, rarely load a whole anything. Increment and load only what is required pragmatically. Do not fill 'state' with anything that is not both necessary and actually used. Do not insecurity output information broadly in the case of production errors and exceptions (testing and debugging.
+
+- Always use defensive best practice.
+
+- Smoothly handle everything: Every part of every function will eventually fail, if only due to hardware failures or bit-flip noise (both of which are common in reality). As Linus Torvalds has explained, at the root of many 'blue screen of death' incessant window crashes in year's past were hardware irregularities that were not 'handled' by software. Production functions are not pure logic bubbles, they are physical engines that must account for all physically-possible (not just ideally-logically pure) outcomes. If a function gets a result from another function that is (for whatever reason, however logically impossible) malformed and broken, this needs to be handled, e.g. with the classic "let it fail and try again" resiliency model. Every return should be checked for what can be checked, with issues handled (structs and enums can be useful here to define what a healthy return value is allowed to be).
+
+Always error and exception handling: Every part of code, every process, function, and operation will fail at some point, if only because of cosmic-ray bit-flips (which are common), hardware failures, power-supply failures, adversarial attacks, etc. There must always be fail-safe error handling where production-release-build code handles issues and moves on without panic-crashing ever. Every failure must be handled smoothly: let it fail and move on. This does not mean that no function can return an error, nor does this mean that errors cannot be logged or reported. Case by case, a process can be retried or skipped, but the overall program must smoothly continue.
+
+## "Do not stop" in production: Case Handling
+Somehow there seems to be no clear vocabulary for 'Do not stop.' In production build code, when you come to something to handle, handle it:
 - Handle and move on: Do not halt the program.
 - Handle and move on: Do not terminate the program.
 - Handle and move on: Do not exit the program.
 - Handle and move on: Do not crash the program.
 - Handle and move on: Do not panic the program.
 - Handle and move on: Do not coredump the program.
-- Handle and move on: Do not stop the program.
 - Handle and move on: Do not finish the program.
+- Handle and move on: Do not spiral into undefined behavior of the program.
+- Handle and move on: Do not stop the program.
 
-Comments and docs for functions and groups of functions must include project level information: To paraphrase Jack Welch, "The most dangerous thing in the world is a flawless operation that should never have been done in the first place." For projects, functions are not pure platonic abstractions; the project has a need that the function is or is not meeting. It happens constantly that a function does the wrong thing well and so this 'bug' is never detected. Project-level documentation and logic-level documentation are two different things that must both exist such that discrepancies must be identifiable; Project-level documentation, logic-level documentation, and the code, must align and align with user-needs, real conditions, and future conditions.
+## Project-Level Context For Functions, Comments, & Doc-Strings
+Comments and docs for functions and groups of functions must include project level information: To paraphrase Jack Welch, "The most dangerous thing in the world is a flawless operation that should never have been done in the first place." For projects, functions are not pure platonic abstractions; the project has a need that the function is or is not meeting. It happens constantly that a function does 'the wrong thing' well and so this 'bug' is never detected when functions are examined in isolation. Project-level (strategic level, architecture level) documentation and logic-level (tactical level) documentation are two different things that must both exist such that discrepancies must be identifiable; Project-level documentation, logic-level documentation, and the code, must align and align with user-needs, real conditions, the results of tests, and future conditions.
 
-Safety, reliability, maintainability, fail-safe, communication-documentation, are the goals: not ideology, aesthetics, popularity, momentum-tradition, bad habits, convenience, nihilism, lazyness, lack of impulse control, etc.
+Safety, reliability, maintainability, fail-safe, communication-documentation, are the goals: not ideology, aesthetics, popularity, momentum-tradition, bad habits, convenience, nihilism, lazyness, lack of impulse control, cooties, etc.
 
-## No third party libraries (or very strictly avoid third party libraries where possible).
+## No third party libraries (or very very strictly avoid third party libraries where possible).
 
-## Rule of Thumb, ideals not absolute rules: Follow NASA's 'Power of 10 rules' where possible and sensible (as updated for 2025 and Rust (not narrowly 2006 c for embedded systems):
+## Scale: Code should be future-proof and scale well. The Y2K bug was not a wonderful feature, it was a horrendous mistake. Scale and size should be handled in a modular no-load way, not arbitrarily capped so that everything breaks.
+
+## Power-of-10-style Rules of Thumb
+We can derive a list of '10 Rust Production Rules' updated for general systems programming in 2026 (derived) from NASA's 2006 'Power of 10' rules that were originally narrowly framed for c for embedded-systems.
+
+These are ideals to be followed where possible and sensible, not absolute pedantic rules:
+
 1. no unsafe stuff:
 - no recursion
 - no goto
 - no pointers
-- no preprocessor
+- no preprocessor branching
+(Term collision: Technically an 'unsafe code' block in Rust may be required for cases such as naked/assembly code or to interact with a Posix-OS, as in the case of raw-terminals. While use of jargon-'unsafe' blocks should be avoided where possible, the term 'unsafe' does not mean that a specific best-practice rule was violated.)
 
-2. upper bound on all normal-loops, failsafe for all always-loops
+2. Loops: either firmly bounded or unbounded:
+- Upper bound on all normal-loops (to make sure they do **not** keep looping)
+- Failsafe for all always-loops to make sure they **do** keep looping (e.g. additional restart layer)
 
 3. Pre-allocate all memory (no dynamic memory allocation)
+- Production code should minimize or eliminate use of heap (e.g. very terse error messages that do not leak any user-data)
+- Debug and testing often make sense to use heap and this code is not in production-binaries (e.g. detailed error messages)
+- Clearly separate lazy-convension from real-need. With tools such as "Buffy'
+github.com/lineality/buffy_stack_format_write_module, it is not necessary to use heap for string formatting.
 
-4. Clear function scope and Data Ownership: Part of having a function be 'focused' means knowing if the function is in scope. Functions should be neither swiss-army-knife functions that do too many things, nor scope-less micro-functions that may be doing something that should not be done. Many functions should have a narrow focus and a short length, but definition of actual-project scope functionality must be explicit. Replacing one long clear in-scope function with 50 scope-agnostic generic sub-functions with no clear way of telling if they are in scope or how they interact (e.g. hidden indirect recursion) is unsafe. Rust's ownership and borrowing rules focus on Data ownership and hidden dependencies, making it even less appropriate to scatter borrowing and ownership over a spray of microfunctions purely for the ideology of turning every operation into a microfunction just for the sake of doing so. (See more in rule 9.)
+4. Clear Function Scope and Data Ownership:
+Part of having a function be 'focused' means knowing if the function is in scope. Functions should be neither swiss-army-knife functions that do too many things, nor scope-less micro-functions that may be doing something that should not be done. Many functions should have a narrow focus and a short length, but definition of actual-project scope functionality must be explicit. Replacing one long clear in-scope function with 50 scope-agnostic generic sub-functions with no clear way of telling if they are in scope or how they interact (e.g. hidden indirect recursion) is dangerous. Rust's ownership and borrowing rules focus on Data ownership and hidden dependencies, making it even less appropriate to scatter borrowing and ownership over a spray of microfunctions purely for the ideology of turning every sub-operation into a microfunction just for the sake of doing so. (See more in rule 9.)
 
-5. Defensive programming: debug-assert, test-assert, prod safely check & handle, not 'assert!' panic
+5. 'Case Handling' & Defensive Programming: debug-assert, test-assert, prod safely check & handle, not 'assert!' panic in production
 
-Note: Terminology varies across "error" / "fail" / "exception" / "catch" / "case" et al. The standard terminology is 'error handling' but 'case handling' or 'issue handling' may be a more accurate description, especially where 'error' refers to the output when unable to handle a case (which becomes semantically paradoxical). The goal is not terminating / halting / ending / shutting down / stopping, etc., or crashing / failing / panicking / coredumping / undefined-behavior-ing, etc. the program when an expected case occurs. Here production and debugging/testing starkly diverge: during testing you want to see how (and where in the code) the program may 'fail' and where and when cases are encountered. In production the satellite must not fall out of the sky ever, regardless of how pedantically beautiful the error-message in the ball of flames may have been.
+Note: Terminology varies across "error" / "fail" / "exception" / "catch" / "case" et al. The standard terminology is 'error handling' but 'case handling' or 'issue handling' may be a more accurate description, especially where 'error' refers to the output when unable to handle a case (which becomes semantically paradoxical). The goal is that a program will not terminate / halt / end / shut down / stop, etc., or crash / fail / panick / coredump / do undefined-behavior, etc. when 'expected' cases occur. Here production and debugging/testing starkly diverge: during testing you **DO** want/need to see how (and where in the code) the program may 'fail' and where and when cases are encountered. In testing you need to stop with extensive details. In debugging you want to show extensive issue-details. But in production you need to never stop and you need to keep logs memory-terse and privacy-safe.
+The proverbial satellite must never fall out of the sky, ever, regardless of how pedantically beautiful the error-message in the ball of flames may have been.
 
+#### Six aspects of case-handlng (Rule 5 of revised 'power of 10' for Rust)
 For production-release code:
-1. check and handle without panic/halt in production
-2. return result (such as Result<T, E>) and smoothly handle errors (not halt-panic stopping the application): no assert!() outside of test-only code
-3. test assert: use #[cfg(test)] assert!() to test production binaries (not in prod)
-4. debug assert: use debug_assert to test debug builds/runs (not in prod)
-5. use defensive programming with recovery of all issues at all times
+
+1 of 6: Check and handle without stop/panic/halt in production
+
+2 of 6: return result (such as Result<T, E>) and smoothly handle "errors" (not halt-panic stopping the application): no assert!() outside of test-only code
+Return Result<T, E>, with case/error/exception handling, so long as that is caught somewhere. Only in cases where there is no way (or no where) to handle the error-output should the function always return OK(), failing completely silently (sometimes internal-to-function error logging is best). Allow-to-fail and handle is not the same as no-handling. This is case-by case.
+
+3 of 6: test assert: use #[cfg(test)] assert!() to test production binaries (not in prod builds, not in debug builds)
+
+4 of 6: debug assert: use debug_assert! with  #[cfg(all(debug_assertions, not(test)))] to run tests in debug builds (not in prod, not in test)
+
+5 of 6: Note: #[cfg(debug_assertions)] and debug_assert! ARE active in test builds
+
+6 of 6: Use defensive programming with recovery of all issues at all times
 - use cargo tests
 - use debug_asserts
-- do not leave assertions in production code.
-- use no-panic error handling
+- do not leave test-panic assertions in production code
+- use no-panic error/case handling in production code
 - use Option
 - use enums and structs
 - check bounds
@@ -107,19 +320,57 @@ assert!(
 ```
 
 e.g.
-# "Assert & Catch-Handle" 3-part System
+# "Assert & Catch-Handle" 3-part System for organizing production behavior, debug behavior, and cargo-test behavior:
+
+A three-part rule of thumb:
+
+1 of 3: For Debug assertions: Only in debug builds, NOT in tests - use: #[cfg(all(debug_assertions, not(test)))]
+
+2 of 3:. For Test assertions: use in test functions themselves, not in the function body (easy to conflict with debug/prod handling)
+E.g.
+When we run a cargo test:
+- The #[cfg(test)] assert compiles and is active
+- the cargo-test calls string_concat_list_function()
+- an assert! in the abc_function (not in the test) panics immediately inside the abc_function
+- abc_function never reaches the production error handling
+- so abc_function never returns an Err(...)
+- so the cargo-test 'fails' with a panic, not with a cargo-test error result
+
+3 of 3:. Production catches: Always present, return production-safe no-heap terse errors (no panic, no open-ended data exfiltration), with unique error prefixes to identify the function, e.g. 'SCLF error: arg empty' for string_concat_list_function()
+
+
+Note: Buffy may be useful in production error string formatting https://github.com/lineality/buffy_stack_format_write_module
 
 // template/example for check/assert format
 //    =================================================
-// // Debug-Assert, Test-Asset, Production-Catch-Handle
+//    Debug-Assert, Test-Asset, Production-Catch-Handle
 //    =================================================
 // This is not included in production builds
-// assert: only when running in a debug-build: will panic
+// debug_assert: IS also active during test-builds
+// use #[cfg(not(test))] to run in debug-build only: will panic
+#[cfg(all(debug_assertions, not(test)))]
 debug_assert!(
     INFOBAR_MESSAGE_BUFFER_SIZE > 0,
     "Info bar buffer must have non-zero capacity"
 );
-// This is not included in production builds
+
+// this is included in debug builds AND in test builds
+#[cfg(debug_assertions)]
+{
+xyz
+}
+
+// Production safe output example (Buffy is a no-heap alternative)
+Err(_e) => {
+    #[cfg(debug_assertions)]
+    eprintln!("function-acronym: process-name: {}", _e);
+
+    // safe log
+    buffy_println!("function-acronym: process-name: failed", &[])?;
+}
+
+// Note: This is located only in cargo test functions.
+// This is not included in production builds.
 // assert: only when running cargo test: will panic
 #[cfg(test)]
 assert!(
@@ -135,33 +386,43 @@ if !INFOBAR_MESSAGE_BUFFER_SIZE == 0 {
     ));
 }
 
+Depending on the test, you may need a test-assert to be in a cargo-test function and not in the main function.
+
+Warning: Do not collide or mix up test-asserts and debug asserts, or forget that debug code also runs in test builds by default.;
+use #[cfg(all(debug_assertions, not(test)))] for debug build only (not test build).
+use #[cfg(test)] assert!(  for test build only, not debug).
+Give descriptive non-colliding names to cargo-tests and test sets.
+
+Note: production-use characters and strings can be formatted, written, printed using modules such as Buffy
+https://github.com/lineality/buffy_stack_format_write_module
+instead of using standard Rust macros such as format! print! write! that use heap-memory.
 
 Note: Error messages must be unique per function (e.g. name of function (or abbreviation) in the error message). Colliding generic error messages that cannot be traced to a specific function are a significant liability.
 
 
 Avoid heap for error messages and for all things:
-Is heap used for error messages because that is THE best way, the most secure, the most efficient, proper separate of debug testing vs. secure production code?
+Is heap used for error messages because that is THE best way, the most secure, the most efficient, proper separation of debug testing vs. secure production code?
 Or is heap used because of oversights and apathy: "it's future dev's problem, let's party."
-We can use heap in debug/test modes/builds only.
+
+We can use heap in debug/test builds only.
+
 Production software must not insecurely output debug diagnostics.
-Debug information must not be included in production builds: "developers accidentally left development code in the software" is a classic error (not a desired design spec) that routinely leads to security and other issues. That is NOT supposed to happen. It is not coherent to insist the open ended heap output 'must' or 'should' be in a production build.
+Debug information must not be included in production builds: "developers accidentally left development code in the software" is a classic error (not a desired design spec) that routinely leads to security and other issues. That is NOT supposed to happen. It is not coherent to insist that open ended heap output 'must' or 'should' be in a production build.
 
 This is central to the question about testing vs. a pedantic ban on conditional compilation; not putting full traceback insecurity into production code is not a different operational process logic tree for process operations.
 
-Just like with the pedantic "all loops being bounded" rule, there is a fundamental exception: always-on loops must be the opposite.
-With conditional compilations: code NEVER to EVER be in production-builds MUST be always "conditionally" excluded. This is not an OS conditional compilation or a hardware conditional compilation. This is an 'unsafe-testing-only or safe-production-code' condition.
-
-Error messages and error outcomes in 'production' 'release' (real-use, not debug/testing) must not ever contain any information that could be a security vulnerability or attack surface. Failing to remove debugging inspection is a major category of security and hygiene problems.
+Just like with the pedantic "all loops being bounded" rule, there is a fundamental exception with conditional compilations: code that must NEVER be in production-builds must ALWAYS be excluded using conditional-compilation flags. This is not an OS or algo-tree conditional compilation, or a hardware conditional compilation; This is an 'unsafe-testing-only' vs. 'safe-production-code' condition. This includes several types of items, such as panic-inducing 'assert' statements (as opposed to proverbial-assert checks that do not panic-halt), and error-message data: Error messages and error outcomes in 'production' 'release' (real-use, not debug/testing) must not ever contain any information that could be a security vulnerability or attack surface. Failing to remove debugging inspection is a major category of security and hygiene problems.
 
 Security: Error messages in production must NOT contain:
 - File paths (can reveal system structure)
 - File contents
 - environment variables
 - user, file, state, data
+- pii data
 - internal implementation details
 - etc.
 
-All debug-prints not for production must be tagged with
+All debug-prints not for production must be tagged with:
 ```
 #[cfg(debug_assertions)]
 ```
@@ -169,12 +430,15 @@ All debug-prints not for production must be tagged with
 Production output following an error / exception / case must be managed and defined, not not open to whatever an api or OS-call wants to dump out.
 
 6. Manage ownership and borrowing
+- Rust is designed to greatly assist here (vs. c).
 
 7. Manage return values:
 - use null-void return values
 - check non-void-null returns
+- see above for designing and checking return values to handle cases of invalid other return-value cases.
+- always have functions return a 'result' so errors and cases can be handled
 
-8. Navigate debugging and testing on the one hand and not-dangerous conditional-compilation on the other hand:
+8. Manage conditional compilation: Navigate debugging and testing on the one hand and not-dangerous conditional-compilation on the other hand:
 - Here 'conditional compilation' is interpreted as significant changes to the overall 'tree' of operation depending on build settings/conditions, such as using different modules and basal functions. E.g. "GDPR compliance mode compilation"
 - Any LLVM type compilation or build-flag will modify compilation details, but not the target tree logic of what the software does (arguably).
 - 2025+ "compilation" and "conditions" cannot be simplistically compared with single-architecture 1970 pdp-11-only C or similar embedded device compilation.
@@ -182,10 +446,17 @@ Production output following an error / exception / case must be managed and defi
 9. Communicate:
 - Use doc strings; use comments.
 - Document use-cases, edge-cases, and policies (These are project specific and cannot be telepathed from generic micro-function code. When a Mars satellite failed because one team used SI-metric units and another team did not, that problem could not have been detected by looking at, and auditing, any individual function in isolation without documentation. Breaking a process into innumerable undocumented micro-functions can make scope and policy impossible to track. To paraphrase Jack Welch: "The most dangerous thing in the world is a flawless operation that should never have been done in the first place.")
+- Rather than using '?' for terse function calling, when possible have detailed error handling.
+- Rather than having a result hidden in let _ =, allow that result to be shown in debugging
 
 10. Use state-less operations when possible:
 - a seemingly invisibly small increase in state often completely destroys projects
 - expanding state destroys projects with unmaintainable over-reach
+
+
+Also: As per Mara Bos's 'Rust Atomics and Locks' (O'Reilly) note the specific use-case and needs for threads, parallelism, concurrency, atomics, async, etc. Distributed processing varies significantly per project, and implementations of production functions, algorithms, and data structures, are rarely the same as abstract text-book examples.
+🦀Vigilance🦀: Properly written code supports users, developers, and the people who depend upon maintainable software. Maintainable software supports the future for us all.
+
 
 
 */
@@ -252,6 +523,30 @@ Any code that violates the roles and policies is wrong or placeholder-code.
 - Byte viewing mode
 - Byte editing
 - some way to 'view raw characters' e.g. so that escape characters are shown and ideally entered to
+
+// ========================================================================
+// Get file position from cursor (defensive)
+// ========================================================================
+
+let current_file_pos = match lines_editor_state
+    .get_row_col_file_position(lines_editor_state.cursor.tui_row, lines_editor_state.cursor.tui_visual_col)
+{
+    Ok(Some(pos)) => pos,
+    Ok(None) => {
+        // handling None case
+        let _ = lines_editor_state.set_info_bar_message("gh cursor position unavailable");
+        return Ok(());
+    }
+    Err(e) => {
+        let _ = lines_editor_state.set_info_bar_message("cannot get cursor position");
+        log_error(
+            &format!("goto_line_start window_map error: {}", e),
+            Some("goto_line_start"),
+        );
+        return Ok(());
+    }
+};
+let line_number_for_display = current_file_pos.line_number + 1; // Convert to 1-indexed
 
 */
 
@@ -998,6 +1293,29 @@ use super::buffy_format_write_module::{
     buffy_is_plain_text_extension, buffy_print, buffy_println,
 };
 
+// ============================================================================
+// RAW TERMINAL IMPORT (for KeystrokeInputMode only)
+// ============================================================================
+//
+// ## Project Context
+//
+// This is the FIRST and ONLY use of raw-terminal mode in the entire lines
+// editor. Every other editor mode (Normal, Insert, VisualSelect, Pasty, Hex,
+// reads from a cooked/canonical StdinLock acquired once in
+// lines_fullfile_editor_core.
+//
+// IMPORTANT NAMING NOTE FOR FUTURE DEVS:
+//   - RawTerminal (imported here) IS Linux termios raw mode (no line buffering,
+//     no echo, byte-by-byte input). These two unrelated concepts share the
+//     word "raw" by historical accident. Do not conflate them.
+//
+// RawTerminal is owned transiently inside handle_keystroke_input_session().
+// It is NEVER stored in EditorState (minimal-state rule) and NEVER created at
+// the main-loop level (that would break all the cooked-input modes). Its Drop
+// implementation restores the terminal on every exit path, including panic.
+// ============================================================================
+use crate::raw_terminal_x86_module::RawTerminal;
+
 /// Style for line numbers - green, no bold
 const LINE_NUMBER_STYLE: BuffyStyles = BuffyStyles {
     fg_color: Some("\x1b[32m"), // GREEN
@@ -1035,7 +1353,7 @@ const CURSOR_BLOCK_STYLE: BuffyStyles = BuffyStyles {
 ///
 /// Also, as line number grows, more columns lost to that
 ///
-const FILE_TUI_WINDOW_MAP_BUFFER_SIZE: usize = 8192; // 2**13=8192
+const FILE_TUI_WINDOW_MAP_BUFFER_SIZE: usize = 64; // 2**13=8192
 
 // for commands such as "n"
 const WHOLE_COMMAND_BUFFER_SIZE: usize = 16; //
@@ -1069,8 +1387,8 @@ pub const MAX_ZERO_INDEX_TUI_ROWS: usize = MAX_TUI_ROWS - 1;
 
 /// Maximum number of columns (utf-8 char across) in largest supported TUI
 /// of which 157 can be file text
-pub const MAX_TUI_COLS: usize = 160;
-pub const MIN_TUI_COLS: usize = 1;
+pub const MAX_TUI_VIZ_COLS: usize = 160;
+pub const MIN_TUI_VIZ_COLS: usize = 1;
 /// Default terminal is 24 x 80
 /// Default TUI text dimensions will be
 /// +/- 3 header footer,
@@ -1107,6 +1425,18 @@ const RESET_U8: &[u8] = b"\x1b[0m";
 const DEFAULT_TEXT_COLOUR: &[u8] = GREEN_U8;
 const DEFINITION_COLOUR: &[u8] = YELLOW_U8;
 const SYMBOL_COLOUR: &[u8] = MAGENTA_U8;
+
+/// Blue foreground for tab character highlighting.
+/// Tabs mixed with spaces are a common source of indentation bugs.
+/// We render tabs visibly (as →) in blue so they are unambiguous.
+///
+/// ANSI: ESC [ 3 4 m  — blue foreground
+pub const TAB_COLOUR: &[u8] = b"\x1b[34m";
+
+/// The visible glyph written in place of a raw tab byte.
+/// Using a visible arrow makes tab positions unambiguous.
+/// The byte sequence is the UTF-8 encoding of U+2192 RIGHTWARDS ARROW.
+pub const TAB_GLYPH: &[u8] = "→".as_bytes();
 
 /*
 Foreground Colors (Text Color):
@@ -1183,7 +1513,7 @@ let file = File::open(path).map_err(|e| LinesError::Io(e))?;
 
 // template/example for check/assert format
 //    =================================================
-// // Debug-Assert, Test-Asset, Production-Catch-Handle
+//    Debug-Assert, Test-Asset, Production-Catch-Handle
 //    =================================================
 // This is not included in production builds
 // assert: only when running in a debug-build: will panic
@@ -1358,13 +1688,6 @@ pub fn log_error(error_msg: &str, context: Option<&str>) {
         let formatted_string_2 = stack_format_it("[{}] {}\n", &[&num_1, &num_2], "[N] N\n");
         formatted_string_2
     };
-
-    // // Build log entry
-    // let log_entry = if let Some(ctx) = context {
-    //     format!("[{}] [{}] {}\n", timestamp, ctx, error_msg)
-    // } else {
-    //     format!("[{}] {}\n", timestamp, error_msg)
-    // };
 
     // Attempt to write to log file
     match OpenOptions::new().create(true).append(true).open(&log_path) {
@@ -1686,6 +2009,10 @@ pub fn is_retryable_error(error: &io::Error) -> bool {
 /// - **Fail-fast**: Permanent errors don't waste time with retries
 ///
 /// # Usage Examples
+/// (TODO: this is an inflamatory example...
+/// loading an entire file into memory
+/// and desecrating the entire point of
+/// of this project????????????????????)
 ///
 /// ## Reading from file
 /// ```no_run
@@ -1739,7 +2066,7 @@ where
     F: FnMut() -> io::Result<T>,
 {
     //    =================================================
-    // // Debug-Assert, Test-Asset, Production-Catch-Handle
+    //    Debug-Assert, Test-Asset, Production-Catch-Handle
     //    =================================================
     // This is not included in production builds
     // assert: only when running in a debug-build: will panic
@@ -1845,12 +2172,12 @@ where
 /// ```rust
 /// let mut buf = [0u8; 64];
 ///
-/// // Normal byte
+///  // Normal byte
 /// if let Some(hex) = stack_format_hex_zero(0x42, &mut buf, false, "", "", "", "") {
 ///     print!("{}", hex); // "42 "
 /// }
 ///
-/// // Highlighted byte
+///  // Highlighted byte
 /// if let Some(hex) = stack_format_hex_zero(0x42, &mut buf, true, BOLD, RED, BG_WHITE, RESET) {
 ///     print!("{}", hex); // "\x1b[1m\x1b[31m\x1b[47m42\x1b[0m "
 /// }
@@ -1911,126 +2238,6 @@ pub fn stack_format_hex<'a>(
     // Return slice of buffer (guaranteed valid ASCII, thus valid UTF-8)
     std::str::from_utf8(&buf[..pos]).ok()
 }
-/// Converts byte to raw string representation with escape sequences.
-/// **ZERO HEAP ALLOCATION**
-///
-/// ## Project Context
-/// Used in hex editor to display bytes as readable escape sequences.
-/// Shows special characters (\n, \t) and non-printable bytes (\xHH) in a
-/// human-readable format. Writes directly to provided stack buffer - NO heap.
-///
-/// ## Operation
-/// - Printable ASCII (0x20-0x7E) → writes as single character
-/// - Special chars (newline, tab, etc.) → writes escape sequence
-/// - Non-printable bytes → writes hex escape \xHH
-/// - Pure stack-based: Uses only provided buffer
-///
-/// ## Safety & Error Handling
-/// - No panic: Returns None if buffer too small
-/// - No heap: Uses only caller-provided stack buffer
-/// - Bounded output: Maximum 4 bytes (\xHH)
-/// - Pre-validated: All paths write valid UTF-8
-///
-/// ## Parameters
-/// - `byte`: Single byte to convert (0x00-0xFF)
-/// - `buf`: Mutable stack buffer to write into (min 4 bytes)
-///
-/// ## Returns
-/// - `Some(&str)`: Formatted string borrowing from buf (1-4 chars)
-/// - `None`: Buffer too small (< 4 bytes)
-///
-/// ## Examples
-/// ```rust
-/// let mut buf = [0u8; 4];
-///
-/// stack_format_byte_escape(0x0A, &mut buf) // Some("\\n")
-/// stack_format_byte_escape(0x48, &mut buf) // Some("H")
-/// stack_format_byte_escape(0x00, &mut buf) // Some("\\0")
-/// stack_format_byte_escape(0x09, &mut buf) // Some("\\t")
-/// ```
-pub fn stack_format_byte_escape<'a>(byte: u8, buf: &'a mut [u8]) -> Option<&'a str> {
-    let len: usize;
-
-    match byte {
-        0x0A => {
-            // Newline: \n
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b'n';
-            len = 2;
-        }
-        0x09 => {
-            // Tab: \t
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b't';
-            len = 2;
-        }
-        0x0D => {
-            // Carriage return: \r
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b'r';
-            len = 2;
-        }
-        0x5C => {
-            // Backslash: \\
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b'\\';
-            len = 2;
-        }
-        0x22 => {
-            // Quote: \"
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b'"';
-            len = 2;
-        }
-        0x00 => {
-            // Null: \0
-            if buf.len() < 2 {
-                return None;
-            }
-            buf[0] = b'\\';
-            buf[1] = b'0';
-            len = 2;
-        }
-        0x20..=0x7E => {
-            // Printable ASCII
-            if buf.is_empty() {
-                return None;
-            }
-            buf[0] = byte;
-            len = 1;
-        }
-        _ => {
-            // Non-printable: \xHH
-            if buf.len() < 4 {
-                return None;
-            }
-            let hex_chars = b"0123456789ABCDEF";
-            buf[0] = b'\\';
-            buf[1] = b'x';
-            buf[2] = hex_chars[(byte >> 4) as usize];
-            buf[3] = hex_chars[(byte & 0x0F) as usize];
-            len = 4;
-        }
-    }
-
-    // Return slice (guaranteed valid UTF-8 - we only write ASCII)
-    std::str::from_utf8(&buf[..len]).ok()
-}
 
 /// Formats a message with placeholders supporting alignment and width specifiers.
 ///
@@ -2069,7 +2276,7 @@ pub fn stack_format_byte_escape<'a>(byte: u8, buf: &'a mut [u8]) -> Option<&'a s
 ///
 /// ## Use Examples:
 /// ```rust
-/// // Table-like alignment
+///  // Table-like alignment
 /// let id = "42";
 /// let name = "Alice";
 /// let row = stack_format_it(
@@ -2077,7 +2284,7 @@ pub fn stack_format_byte_escape<'a>(byte: u8, buf: &'a mut [u8]) -> Option<&'a s
 ///     &[id, name],
 ///     "Data unavailable"
 /// );
-/// // Result: "ID: 42    Name: Alice     "
+///  // Result: "ID: 42    Name: Alice     "
 /// ```
 ///
 ///
@@ -2112,6 +2319,7 @@ pub fn stack_format_it(template: &str, inserts: &[&str], fallback: &str) -> Stri
     let mut buf = [0u8; 256];
 
     // Maximum number of inserts to prevent abuse
+    // does this need to be usize?
     const MAX_INSERTS: usize = 128;
 
     // Check insert count
@@ -2393,7 +2601,7 @@ Naming Convention:
 /// - Must fit on stack without overflow
 /// - Typical stack size: 2MB-8MB
 /// - This buffer: 8KB (0.4% of 2MB stack)
-const SAVE_AS_COPY_BUFFER_SIZE: usize = 8192;
+const SAVE_AS_COPY_BUFFER_SIZE: usize = 64;
 
 /// Maximum retry attempts for transient I/O failures in save-as-copy
 ///
@@ -2440,43 +2648,14 @@ const SAVE_AS_COPY_MAX_RETRY_ATTEMPTS: usize = 3;
 /// ```
 const SAVE_AS_COPY_RETRY_DELAY_MS: u64 = 200;
 
-/// Maximum chunks to process in save-as-copy operation
-///
-/// # Purpose
-/// Safety limit to prevent infinite loops from filesystem corruption,
-/// cosmic ray bit flips, or malformed file metadata.
-///
-/// # Capacity Calculation
-/// At 8KB buffer size:
-/// - 16,777,216 chunks × 8KB = 134,217,728 KB
-/// - = 131,072 MB
-/// - = ~128 GB maximum file size
-///
-/// # Rationale
-/// - Protects against infinite loops (NASA Power of 10, rule 2)
-/// - Allows copying very large files (128GB covers most use cases)
-/// - Typical text files: < 10MB (< 1,300 chunks)
-/// - Large log files: < 1GB (< 131,000 chunks)
-/// - Extreme cases: up to 128GB supported
-///
-/// # Failure Mode
-/// If exceeded, function returns error:
-/// - Logs to error file (production)
-/// - Returns LinesError::StateError
-/// - Does not panic or halt program
-///
-/// # Related Constants
-/// - FILE_APPEND_MAX_CHUNKS: 16,777,216 (same value, different operation)
-/// - Both ensure consistent safety limits across file operations
-const SAVE_AS_COPY_MAX_CHUNKS: usize = 16_777_216;
-
 // ============================================================================
 // (end) SAVE-AS-COPY OPERATION: Configuration Constants
 // ============================================================================
 
+// TODO: Why does this exist? Why not use normal constants??
 /// Defensive programming limits to prevent infinite loops and resource exhaustion
 /// Following NASA Power of 10 rules: all loops must have explicit upper bounds
-mod limits {
+pub mod limits {
     /// Maximum iterations for binary search through double-width character ranges
     /// Based on: log2(128) = 7, rounded up to 8 for safety margin
     pub const DOUBLE_WIDTH_BINARY_SEARCH: usize = 8;
@@ -2492,10 +2671,10 @@ mod limits {
 
     /// Maximum bytes to read when processing a single line
     /// Matches the line buffer size
-    pub const LINE_READ_BYTES: usize = 4096;
+    pub const LINE_CHUNK_READ_BYTES: usize = 32; // original: 4096
 
     /// Maximum iterations when skipping characters for horizontal offset
-    /// Allows scrolling very far right in long lines
+    /// Allows scrolling very far right in losng lines
     pub const HORIZONTAL_SCROLL_CHARS: usize = 10_000;
 
     /// Maximum cursor movement iterations in a single command
@@ -2515,6 +2694,8 @@ mod limits {
     pub const COMMAND_PARSE_MAX_CHARS: usize = 20;
 
     pub const TEXT_INPUT_CHUNKS: usize = 10_000_000;
+
+    pub const MAX_CHUNKS: usize = usize::MAX; // e.g. 16_777_216 allows ~4GB at 256-byte chunks
 }
 
 // STEM values ensuring reproducibility
@@ -2677,7 +2858,7 @@ fn create_readable_archive_timestamp(time: SystemTime) -> String {
 /// # Purpose
 /// Provides accurate date/time calculation that properly handles:
 /// - Leap years (including century rules)
-/// - Correct days per month
+/// - days per month
 /// - Time zones (UTC)
 ///
 /// # Arguments
@@ -2712,7 +2893,7 @@ fn epoch_seconds_to_datetime_components(epoch_seconds: u64) -> (u32, u32, u32, u
 ///
 /// # Purpose
 /// Accurate calendar calculation that properly handles leap years
-/// and correct month lengths.
+/// and month lengths.
 ///
 /// # Arguments
 /// * `days_since_epoch` - Days since 1970-01-01
@@ -2916,18 +3097,6 @@ pub fn createarchive_timestamp_with_precision(
         "YYYY_MM_DD_HH_MM_OOPS",
     );
 
-    // // Build base timestamp with YYYY prefix
-    // let base_timestamp = format!(
-    //     "{:04}_{:02}_{:02}_{:02}_{:02}_{:02}_{:02}",
-    //     year,       // Four-digit year
-    //     year % 100, // Two-digit year
-    //     month,
-    //     day,
-    //     hour,
-    //     minute,
-    //     second
-    // );
-
     if !include_microseconds {
         return base_timestamp;
     }
@@ -2935,24 +3104,20 @@ pub fn createarchive_timestamp_with_precision(
     // Add microseconds component
     let microseconds = duration_since_epoch.as_micros() % 1_000_000;
 
-    // // TODO add formatting ability?
-    // stack_format_it(
-    //     "{}_{:06}",
-    //     &[&base_timestamp.to_string(), &base_timestamp.to_string()],
-    //     "{}_{:06}",
-    // )
-
     format!("{}_{:06}", base_timestamp, microseconds)
 }
 
 /*
- * The attempt is to follow NASA's only-preallocated-memory rule.
- */
+The attempt is to follow NASA's only-preallocated-memory rule.
+*/
+
+const FIXED_SIZE_32_TIMESTAMP_CAPACITY: usize = 32;
+const FIXED_SIZE_32_TIMESTAMP_MAX_LEN: usize = FIXED_SIZE_32_TIMESTAMP_CAPACITY - 1; // 31, reserves one byte (e.g. for null termination)
 
 /// Fixed-size timestamp type - stack allocated, no heap
 #[derive(Copy, Clone)]
 pub struct FixedSize32Timestamp {
-    data: [u8; 32],
+    data: [u8; FIXED_SIZE_32_TIMESTAMP_CAPACITY],
     len: usize,
 }
 
@@ -2968,26 +3133,26 @@ impl FixedSize32Timestamp {
     /// # Errors
     /// Returns error if string exceeds 31 bytes
     pub fn from_str(s: &str) -> Result<Self> {
-        const MAX_LEN: usize = 31;
-
         // Assertion 1: Check length
-        if s.len() > MAX_LEN {
+        if s.len() > FIXED_SIZE_32_TIMESTAMP_MAX_LEN {
             return Err(LinesError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 stack_format_it(
                     "impl FixedSize32Timestamp String too long: {} bytes, max: {}",
-                    &[&s.len().to_string(), &MAX_LEN.to_string()],
+                    &[
+                        &s.len().to_string(),
+                        &FIXED_SIZE_32_TIMESTAMP_MAX_LEN.to_string(),
+                    ],
                     "impl FixedSize32Timestamp String too long: __ bytes, max: __",
                 ),
             )));
         }
 
-        // Assertion 2: Verify valid UTF-8 (already guaranteed by &str type)
-        let mut data = [0u8; 32];
+        let mut data = [0u8; FIXED_SIZE_32_TIMESTAMP_CAPACITY];
         let bytes = s.as_bytes();
 
         // Bounded copy loop
-        for i in 0..s.len().min(MAX_LEN) {
+        for i in 0..s.len().min(FIXED_SIZE_32_TIMESTAMP_MAX_LEN) {
             data[i] = bytes[i];
         }
 
@@ -3004,27 +3169,21 @@ impl FixedSize32Timestamp {
     pub fn as_str(&self) -> Result<&str> {
         // Internal invariant check
         //    =================================================
-        // // Debug-Assert, Test-Asset, Production-Catch-Handle
+        //    Debug-Assert, Test-Asset, Production-Catch-Handle
         //    =================================================
         // This is not included in production builds
         // assert: only when running in a debug-build: will panic
         debug_assert!(
-            self.len <= 32,
+            self.len <= FIXED_SIZE_32_TIMESTAMP_CAPACITY,
             "Internal invariant violated: length exceeds buffer size"
         );
-        // This is not included in production builds
-        // assert: only when running cargo test: will panic
-        #[cfg(test)]
-        assert!(
-            self.len <= 32,
-            "Internal invariant violated: length exceeds buffer size"
-        );
+
         // Catch & Handle without panic in production
         // This IS included in production to safe-catch
-        if !self.len <= 32 {
+        if self.len > FIXED_SIZE_32_TIMESTAMP_CAPACITY {
             // state.set_info_bar_message("Config error");
             return Err(LinesError::GeneralAssertionCatchViolation(
-                "NOTlen<=32buf".into(),
+                "is len > 32buf".into(),
             ));
         }
 
@@ -3190,13 +3349,13 @@ pub fn split_timestamp_no_heap(
 /// # Edge Cases
 /// - Empty file (0 bytes): returns `Ok((0, 0))`
 /// - File with no newlines: returns `Ok((0, 0))`
-/// - File ending with newline: counted correctly
-/// - File ending without newline: counted correctly (last line still exists)
+/// - File ending with newline
+/// - File ending without newline  (last line still exists)
 ///
 /// # Example
 /// ```ignore
 /// let (total_lines, _) = count_lines_in_file(Path::new("/path/to/file.txt"))?;
-/// // Now jump to last line
+///  // Now jump to last line
 /// execute_command(state, Command::GotoLine(total_lines))?;
 /// ```
 pub fn count_lines_in_file(file_path: &Path) -> Result<(usize, u64)> {
@@ -3441,7 +3600,6 @@ fn write_red_green_hotkey(hotkey_1: &str, hotkey_2: &str, description: &str) -> 
 /// - ins: insert mode
 /// - vis: visual mode
 /// - hex: hex editor mode
-/// - raw: raw view
 /// - pasty: paste operation
 /// - cvy: copy operation
 /// - wrd,b,end: word navigation
@@ -3451,7 +3609,7 @@ fn write_red_green_hotkey(hotkey_1: &str, hotkey_2: &str, description: &str) -> 
 ///
 /// ## Example
 /// ```rust
-/// // In main display loop:
+///  // In main display loop:
 /// write_formatted_navigation_legend_to_tui()?;
 /// ```
 fn write_formatted_navigation_legend_to_tui() -> Result<()> {
@@ -3466,7 +3624,8 @@ fn write_formatted_navigation_legend_to_tui() -> Result<()> {
     // Mode operations group
     write_red_hotkey("d", "el|")?;
     write_red_hotkey("n", "rm ")?;
-    write_red_hotkey("i", "ns ")?;
+    // write_red_hotkey("i", "ns ")?;
+    write_red_green_hotkey("k", "i", "ns ")?;
     write_red_hotkey("v", "is ")?;
     write_red_hotkey("hex", "|")?;
 
@@ -3562,7 +3721,7 @@ fn write_formatted_navigation_legend_to_tui() -> Result<()> {
 ///
 /// let base = Path::new("/tmp");
 ///
-/// // Standard usage
+///  // Standard usage
 /// match create_unique_temp_name_and_file_filepathbuf(base, "myapp", 5, 1) {
 ///     Ok(path) => {
 ///         println!("Created: {:?}", path);
@@ -3576,7 +3735,7 @@ fn write_formatted_navigation_legend_to_tui() -> Result<()> {
 ///     }
 /// }
 ///
-/// // High-contention scenario
+///  // High-contention scenario
 /// match create_unique_temp_name_and_file_filepathbuf(base, "distributed", 10, 10) {
 ///     Ok(path) => { /* use file */ },
 ///     Err(e) => { /* handle gracefully */ }
@@ -3736,10 +3895,10 @@ pub fn create_unique_temp_name_and_file_filepathbuf(
 /// - If path canonicalization fails
 ///
 /// use example:
-/// // Ensure the project graph data directory exists relative to the executable
+///  // Ensure the project graph data directory exists relative to the executable
 /// let project_graph_directory_result = make_verify_or_create_executabledirectoryrelative_canonicalized_dir_path("project_graph_data");
 
-/// // Handle any errors that might occur during directory creation or verification
+///  // Handle any errors that might occur during directory creation or verification
 /// let project_graph_directory = match project_graph_directory_result {
 ///     Ok(directory_path) => directory_path,
 ///     Err(io_error) => {
@@ -3850,7 +4009,7 @@ pub fn abs_executable_directory_relative_exists<P: AsRef<Path>>(path_to_check: P
 /// ```
 /// use manage_absolute_executable_directory_relative_paths::make_input_path_name_abs_executabledirectoryrelative_nocheck;
 ///
-/// // Get an absolute path for "data/config.json" relative to the executable directory
+///  // Get an absolute path for "data/config.json" relative to the executable directory
 /// let abs_path = make_input_path_name_abs_executabledirectoryrelative_nocheck("data/config.json").unwrap();
 /// println!("Absolute path: {}", abs_path.display());
 /// ```
@@ -3930,7 +4089,7 @@ pub struct WindowPosition {
     /// Row in terminal (0-indexed, 0-95 max)
     pub tui_row: usize,
     /// Column in terminal (0-indexed, 0-319 max)
-    pub tui_col: usize,
+    pub tui_visual_col: usize,
 }
 
 /// Current editor mode
@@ -3944,10 +4103,33 @@ pub enum EditorMode {
     VisualSelectMode,
     /// Visual selection mode
     PastyMode,
-
     /// Hex Edict!
     HexMode,
-    RawMode,
+    /// Keystroke-input mode: byte-by-byte ASCII input via
+    /// Linux termios "raw terminal".
+    ///
+    /// # Project Context
+    /// This mode is the only place in the editor that uses a real raw terminal
+    /// (`RawTerminal`). It functions like Insert mode (immediate cursor updates,
+    /// per-character undo logging, display refresh after each edit) but reads
+    /// individual keystroke bytes instead of cooked/Enter-terminated lines.
+    ///
+    /// # Entry / Exit
+    /// - Entered via the `ki` command from Normal mode.
+    /// - Exited by pressing ESC (0x1B), which routes through
+    ///   `Command::EnterNormalMode` and flips this back to `Normal`. The session
+    ///   loop watches `self.mode == KeystrokeInputMode` and exits when it flips.
+    /// - Also exited (defensively, set back to Normal) on terminal EOF or read
+    ///   error inside the session loop.
+    ///
+    /// # Accepted Input
+    /// - Printable ASCII (0x20..=0x7E): inserted as a single byte.
+    /// - Backspace (0x08) and DEL (0x7F): backspace-style delete.
+    /// - LF (0x0A) and CR (0x0D): insert a single '\n'.
+    /// - ESC (0x1B): exit to Normal mode.
+    /// - Everything else (arrow keys, Tab 0x09, Ctrl/Alt/Fn combos, multibyte
+    ///   escape-sequence fragments): silently ignored.
+    KeystrokeInputMode,
 }
 
 /// Represents valid user input commands and selections in Pasty mode
@@ -4016,11 +4198,6 @@ fn render_pasty_tui(
 
     // Draw legend (using existing helper)
     let _ = format_pasty_tui_legend();
-
-    // // Padding, print 3 lines // under construction...
-    // for _ in 0..3 {
-    //     println!();
-    // }
 
     // Draw clipboard items with rank numbers
     let end = (offset + items_per_page).min(total_count);
@@ -4097,7 +4274,6 @@ pub struct EditorState {
     /// Effective editing area (minus headers/footers/line numbers)
     pub effective_rows: usize,
     pub effective_cols: usize,
-    pub windowmap_positions: [[Option<FilePosition>; MAX_TUI_COLS]; MAX_TUI_ROWS],
 
     /// start stop Byte positions for each display row in the file
     ///
@@ -4125,19 +4301,19 @@ pub struct EditorState {
     ///
     /// # Usage
     /// ```ignore
-    /// // Jump to end of line for cursor
+    ///  // Jump to end of line for cursor
     /// if let Some((_, line_end)) = window_map.display_line_byte_ranges[row] {
     ///     cursor_position = line_end;
     /// }
     ///
-    /// // Check if cursor at line start
+    ///  // Check if cursor at line start
     /// if let Some((line_start, _)) = window_map.display_line_byte_ranges[row] {
     ///     if cursor_byte == line_start {
     ///         // At start of line
     ///     }
     /// }
     ///
-    /// // Detect line boundary for move-left wrapping
+    ///  // Detect line boundary for move-left wrapping
     /// if let Some((line_start, _)) = window_map.display_line_byte_ranges[current_row] {
     ///     if cursor_byte == line_start {
     ///         // Move to previous line end
@@ -4193,7 +4369,6 @@ pub struct EditorState {
     /// For NoWrap mode: horizontal character offset for all displayed lines
     /// Example: Showing characters 20-97 of each line
     pub tui_window_horizontal_utf8txt_line_char_offset: usize,
-    pub in_row_abs_horizontal_0_index_cursor_position: usize,
 
     // === DISPLAY BUFFERS ===
     /// Pre-allocated buffers for each display row (45 rows × 80 chars)
@@ -4208,21 +4383,16 @@ pub struct EditorState {
     /// Only used when mode == EditorMode::HexMode
     pub hex_cursor: HexCursor,
 
-    // pub raw_cursor: RawCursor,
-    //  /// TODO: Should there be a clear-buffer method?
-    //  /// Pre-allocated buffer for insert mode text input
-    //  /// Used to capture user input before inserting into file
-    // pub tofile_insert_input_chunk_buffer: [u8; TOFILE_INSERTBUFFER_CHUNK_SIZE], // not used
     /// EOF information for the currently displayed window
     /// None = EOF not visible in current window
     /// Some((file_line_of_eof, eof_tui_display_row)) = EOF position
     pub eof_fileline_tuirow_tuple: Option<(usize, usize)>,
 
-    //  /// TODO is this needed?
-    //  /// Number of valid bytes in tofile_insert_input_chunk_buffer
-    // pub tofile_insertinput_chunkbuffer_used: usize, // not used
     /// short message to display in TUI, bottom bar
-    pub info_bar_message_buffer: [u8; INFOBAR_MESSAGE_BUFFER_SIZE], // not used
+    pub info_bar_message_buffer: [u8; INFOBAR_MESSAGE_BUFFER_SIZE],
+
+    /// shared scratch pad buffer for reading line-chunks
+    pub line_chunk_scratch: [u8; limits::LINE_CHUNK_READ_BYTES],
 }
 
 impl EditorState {
@@ -4245,13 +4415,12 @@ impl EditorState {
             effective_rows,
             effective_cols,
 
-            windowmap_positions: [[None; MAX_TUI_COLS]; MAX_TUI_ROWS],
             windowmap_line_byte_start_end_position_pairs: [None; MAX_TUI_ROWS],
             security_mode: false, // default setting, purpose: to force-reset manually clear overwrite buffers
 
             cursor: WindowPosition {
                 tui_row: 0,
-                tui_col: 0,
+                tui_visual_col: 0,
             },
 
             // window_start: FilePosition {
@@ -4276,7 +4445,6 @@ impl EditorState {
             file_position_of_vis_select_end: 0,
 
             tui_window_horizontal_utf8txt_line_char_offset: 0,
-            in_row_abs_horizontal_0_index_cursor_position: 2, // set to 0:0 real text postion after number
 
             // Display buffers - initialized to zero
             utf8_txt_display_buffers: [[0u8; MAX_DISPLAY_BUFFER_BYTES]; MAX_TUI_ROWS],
@@ -4284,76 +4452,7 @@ impl EditorState {
             hex_cursor: HexCursor::new(),
             eof_fileline_tuirow_tuple: None, // Time is like a banana, it had no end...
             info_bar_message_buffer: [0u8; INFOBAR_MESSAGE_BUFFER_SIZE],
-        }
-    }
-
-    /// Sets the file position for a window position
-    ///
-    /// # Arguments
-    /// * `row` - Terminal row (0-indexed)
-    /// * `col` - Terminal column (0-indexed)
-    /// * `file_pos` - File position to map to (None for empty)
-    ///
-    /// # Returns
-    /// * `Ok(())` - Successfully set
-    /// * `Err(io::Error)` - If row/col out of bounds
-    pub fn set_file_position(
-        &mut self,
-        // lines_editor_state: &mut EditorState,
-        row: usize,
-        col: usize,
-        file_pos: Option<FilePosition>,
-    ) -> io::Result<()> {
-        // ============================================================
-        // Debug-Assert, Test-Assert, Production-Catch-Handle
-        // ============================================================
-        /*
-        This should be prefiltered for catch-handl
-        in Command::TallMinus => et al
-         */
-
-        if row >= MAX_TUI_ROWS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Row {} exceeds valid rows {}", row, self.effective_rows),
-            ));
-        }
-
-        if col >= MAX_TUI_COLS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "Column {} exceeds valid columns {}",
-                    col, self.effective_cols
-                ),
-            ));
-        }
-        // ==============
-        // Catch & Handle
-        // ==============
-        if row >= MAX_TUI_ROWS {
-            // Do Nothing
-            // Handle as caught case: Do Nothing
-            // let _ = lines_editor_state.set_info_bar_message("row >= MAX_TUI_ROWS");
-        } else if col >= MAX_TUI_COLS {
-            // Do Nothing
-            // let _ = lines_editor_state.set_info_bar_message("col >= MAX_TUI_COLS");
-        } else {
-            // ================
-            // OK: Update State
-            // ================
-            self.windowmap_positions[row][col] = file_pos;
-        }
-        Ok(())
-    }
-
-    /// Clears all mappings
-    pub fn clear_windowmap_positions(&mut self) {
-        // Defensive: explicit loop with bounds
-        for row in 0..MAX_TUI_ROWS {
-            for col in 0..MAX_TUI_COLS {
-                self.windowmap_positions[row][col] = None;
-            }
+            line_chunk_scratch: [0u8; limits::LINE_CHUNK_READ_BYTES],
         }
     }
 
@@ -4379,13 +4478,13 @@ impl EditorState {
     ///
     /// # Examples
     /// ```ignore
-    /// // "hello\n" at bytes [10..15]
+    ///  // "hello\n" at bytes [10..15]
     /// set_line_byte_range(0, 10, 15)?;
     ///
-    /// // Empty line "\n" at byte [20]
+    ///  // Empty line "\n" at byte [20]
     /// set_line_byte_range(1, 20, 20)?;
     ///
-    /// // Last line "world" at bytes [25..29], no newline
+    ///  // Last line "world" at bytes [25..29], no newline
     /// set_line_byte_range(2, 25, 29)?;
     /// ```
     pub fn set_line_byte_range(
@@ -4519,7 +4618,7 @@ impl EditorState {
     /// # Example Usage
     ///
     /// ```ignore
-    /// // In pasty_mode() loop:
+    ///  // In pasty_mode() loop:
     /// match self.handle_pasty_mode_input(&mut stdin_handle, &mut text_buffer) {
     ///     Ok(PastyInputPathOrCommand::Back) => {
     ///         // Exit Pasty mode
@@ -4597,12 +4696,6 @@ impl EditorState {
         stdin_handle: &mut StdinLock,
         text_buffer: &mut [u8; TEXT_BUCKET_BRIGADE_CHUNKING_BUFFER_SIZE],
     ) -> io::Result<PastyInputPathOrCommand> {
-        // // Clear accumulation buffer before use
-        // // (Defensive: ensure no stale data from previous operations)
-        // for i in 0..FILE_TUI_WINDOW_MAP_BUFFER_SIZE {
-        //     self.state_file_tui_window_map_buffer[i] = 0;
-        // }
-
         // Create local accumulation buffer on stack
         // Buffer name matches FILE_TUI_WINDOW_MAP_BUFFER_SIZE constant
         // No clearing needed - accumulated_bytes bounds valid data
@@ -4620,9 +4713,9 @@ impl EditorState {
         let mut found_delimiter = false;
         let mut chunk_count = 0;
 
-        //  ///////////////////
+        //  ===================
         //  Bucket Brigade Loop
-        //  ///////////////////
+        //  ===================
 
         loop {
             chunk_count += 1;
@@ -4694,9 +4787,9 @@ impl EditorState {
             }
         }
 
-        //  ////////////////////////////
+        //  =======================
         //  Parse Accumulated Input
-        //  ////////////////////////////
+        //  =======================
 
         // Convert bytes to UTF-8 string
         // Only process valid bytes [0..accumulated_bytes], rest is unused
@@ -4705,13 +4798,13 @@ impl EditorState {
         // Trim whitespace and newline delimiter
         let trimmed = input_str.trim();
 
-        //  ////////////////////////////
+        //  ==========================
         //  Parse with Priority Order:
         //  1. Empty
         //  2. Explicit commands
         //  3. Numbers (rank selection)
         //  4. Paths (fallback)
-        //  ////////////////////////////
+        //  ==========================
 
         // 1. Empty input → Select most recent clipboard item
         if trimmed.is_empty() {
@@ -4761,68 +4854,647 @@ impl EditorState {
         Ok(PastyInputPathOrCommand::SelectPath(PathBuf::from(trimmed)))
     }
 
-    /// Gets the file position for a window position
+    /// Computes the file position for a given display (row, col) by reading
+    /// the read-copy file on demand — no resident [ROWS][COLS] mapping array.
+    ///
+    /// # Purpose (Project Context)
+    /// Replaces the resident `state_windowmap_positions` grid. The file is the
+    /// single source of truth. We seek to the row's known line-start byte and
+    /// walk forward to resolve the requested column into a file byte position.
+    ///
+    /// # CRITICAL: `col` is a VISUAL column (Option A)
+    /// Under Option A, `cursor.tui_visual_col` is a VISUAL column measured in terminal
+    /// CELLS, not a character count. A double-width character (CJK, emoji) is
+    /// ONE character / ONE cursor stop but consumes TWO visual cells. Therefore
+    /// this function must walk the line content summing `is_double_width` widths
+    /// (1 per ASCII, 2 per double-width) to convert the incoming visual column
+    /// into the character / byte position.
+    ///
+    /// # CRITICAL: the horizontal scroll offset is in CHARACTERS
+    /// `tui_window_horizontal_utf8txt_line_char_offset` skips whole CHARACTERS
+    /// from the line start (this matches `process_line_with_offset` PHASE 1).
+    /// We therefore resolve a column in two stages, mirroring the builder:
+    ///   1. Skip `offset` CHARACTERS from line start (char-based).
+    ///   2. From there, advance summing VISUAL widths until the accumulated
+    ///      visual width reaches the requested content visual column.
+    ///
+    /// # Mid-double-width-cell (defensive)
+    /// Movement never lands the cursor on the SECOND cell of a
+    /// double-width char. If such a `col` arrives anyway, we SNAP to the
+    /// character whose visual span contains it (return that char's start byte),
+    /// via the span test `content_visual_col < accumulated_visual + width`.
+    ///
+    /// # CRITICAL: two trailing virtual cells (this is what made the grid work)
+    /// After the last character, two virtual cursor cells exist:
+    ///   1. NEWLINE GLYPH cell (only if the line has a newline) → the '\n' byte.
+    ///      It occupies ONE visual cell at the line's total visible visual width.
+    ///   2. END-OF-LINE cell (one past) → byte after content (after the '\n' if
+    ///      present; EOF byte on the file's last unterminated line).
+    /// These let the cursor sit at / after end-of-line for appending. The walk
+    /// MUST reproduce them or the cursor cannot reach the end of a line.
+    ///
+    /// # Coordinate Mapping
+    ///   content_visual_col = col - line_num_width        (strip "42 " prefix)
+    ///   then: skip `offset` chars, then walk `content_visual_col` VISUAL cells.
+    ///
+    /// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+    /// - In  `row`           : #6 TUI display row
+    /// - In  `col`           : #5 VISUAL cell column (INCLUDES line-number prefix)
+    /// - Reads `tui_window_horizontal_utf8txt_line_char_offset` : #4 in-line char index
+    /// - Reads `windowmap_line_byte_start_end_position_pairs[row]` : #1 file-byte cache
+    /// - Out `byte_offset_linear_file_absolute_position` : #1 file byte
+    /// - Out `byte_in_line`  : #2 in-line byte
+    /// - Out `line_number`   : #3 line number
+    /// This is THE conversion from (#6,#5) → (#1,#2,#3); no other path may invent one.
+    ///
+    /// # Source of Truth
+    /// - Row → line_start_byte: windowmap_line_byte_start_end_position_pairs[row]
+    /// - Row → file line number: line_count_at_top_of_window + row
+    /// - Bytes: read from the read-copy file at line_start_byte
     ///
     /// # Arguments
-    /// * `row` - Terminal row (0-indexed)
-    /// * `col` - Terminal column (0-indexed)
+    /// * `row` - Display row (0-indexed within window)
+    /// * `col` - FULL VISUAL display column (includes line-number prefix)
     ///
     /// # Returns
-    /// * `Ok(Option<FilePosition>)` - File position if valid, None if empty
-    /// * `Err(io::Error)` - If row/col out of bounds
+    /// * `Ok(Some(FilePosition))` - char, newline glyph cell, or EOL cell
+    /// * `Ok(None)`               - out of bounds, in prefix, or past EOL cell
+    /// * `Err(io::Error)`         - read-copy I/O failure
+    ///
+    /// # Error Handling
+    /// Returns Ok(None) for all "no such cell" cases. Returns Err only for
+    /// I/O failure on the read-copy. Never panics in production.
     pub fn get_row_col_file_position(
         &self,
         row: usize,
         col: usize,
     ) -> io::Result<Option<FilePosition>> {
-        // ============================================================
-        // Debug-Assert, Test-Assert, Production-Catch-Handle
-        // ============================================================
-        #[cfg(test)]
-        assert!(
-            row >= self.effective_rows,
-            "Failed Test: pub fn get_row_col_file_position: assert!(row >= self.valid_rows..."
-        );
-        #[cfg(test)]
-        assert!(
-            col >= self.effective_cols,
-            "Failed Test: pub fn get_row_col_file_position: assert!(col >= self.valid_cols..."
-        );
-        // TODO maybe remove because these are normal cases
-        // // Defensive: Check bounds
-        // #[cfg(debug_assertions)]
-        // if row >= self.effective_rows {
-        //     return Err(io::Error::new(
-        //         io::ErrorKind::InvalidInput,
-        //         format!("Row {} exceeds valid rows {}", row, self.effective_rows),
-        //     ));
-        // }
-        // #[cfg(debug_assertions)]
-        // if col >= self.effective_cols {
-        //     return Err(io::Error::new(
-        //         io::ErrorKind::InvalidInput,
-        //         format!(
-        //             "Column {} exceeds valid columns {}",
-        //             col, self.effective_cols
-        //         ),
-        //     ));
-        // }
-        // ==============
-        // Catch & Handle
-        // ==============
-        if row >= self.effective_rows {
-            // Handle as caught case: Do Nothing
-            // let _ = lines_editor_state.set_info_bar_message("row >= MAX_TUI_ROWS");
-            Ok(None)
-        } else if col >= self.effective_cols {
-            // let _ = lines_editor_state.set_info_bar_message("col >= MAX_TUI_COLS");
-            Ok(None)
-        } else {
-            // ================
-            // OK: Update State
-            // ================
-            Ok(self.windowmap_positions[row][col])
+        // ----- window bounds (caught) -----
+        if row >= self.effective_rows || col >= self.effective_cols {
+            return Ok(None);
         }
+
+        // ----- row's line-start byte (source of truth) -----
+        let (line_start_byte, line_end_byte) =
+            match self.windowmap_line_byte_start_end_position_pairs[row] {
+                Some(pair) => pair,
+                None => return Ok(None),
+            };
+
+        let file_line_number = self.line_count_at_top_of_window + row;
+
+        // ----- line-number prefix width (same logic as renderer) -----
+        let line_num_width =
+            calculate_line_number_width(self.line_count_at_top_of_window, row, self.effective_rows);
+        if col < line_num_width {
+            return Ok(None);
+        }
+
+        // VISUAL column into the visible content area (after the prefix).
+        let content_visual_col = col - line_num_width;
+
+        // Horizontal scroll offset is in CHARACTERS (matches the builder).
+        let char_offset = self.tui_window_horizontal_utf8txt_line_char_offset;
+
+        // extra-check
+        // #[cfg(debug_assertions)]
+        // eprintln!(
+        //     "GRCFP row={} col={} | line_num_width={} content_visual_col={} char_offset={} | line_start={} line_end={}",
+        //     row,
+        //     col,
+        //     line_num_width,
+        //     content_visual_col,
+        //     char_offset,
+        //     line_start_byte,
+        //     line_end_byte,
+        // );
+
+        // ----- read-copy byte source -----
+        let read_copy = match self.read_copy_path.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let mut file = File::open(read_copy)?;
+
+        // content_exclusive_end = first byte AFTER content (where '\n' would be).
+        // line_end_byte is the inclusive last CONTENT byte. For an "empty line"
+        // by convention build stores start == end (the byte is the '\n' itself);
+        // that case is handled in the walk below (lead == b'\n' → no content).
+        let content_exclusive_end = line_end_byte.saturating_add(1);
+
+        // Detect trailing newline at content_exclusive_end.
+        let has_newline = {
+            file.seek(SeekFrom::Start(content_exclusive_end))?;
+            let mut one = [0u8; 1];
+            match file.read(&mut one)? {
+                0 => false, // EOF: last line, no newline
+                _ => one[0] == b'\n',
+            }
+        };
+
+        // ───────────────────────────────────────────────────────────────────
+        // Local reader: resolve the content character at `pos`.
+        // Returns (byte_len, visual_width) for a content char, or None
+        // when there is no content char at `pos` (newline lead, EOF, boundary
+        // crossing, or short read). Width uses the single shared oracle
+        // double_width::is_double_width; invalid UTF-8 is treated as width 1
+        // (matching process_line_with_offset).
+        // ───────────────────────────────────────────────────────────────────
+        fn read_one_content_char(
+            file: &mut File,
+            pos: u64,
+            content_exclusive_end: u64,
+        ) -> io::Result<Option<(u64, usize)>> {
+            if pos >= content_exclusive_end {
+                return Ok(None);
+            }
+
+            file.seek(SeekFrom::Start(pos))?;
+            let mut buf = [0u8; 4];
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                return Ok(None); // EOF
+            }
+
+            let lead = buf[0];
+            if lead == b'\n' {
+                return Ok(None); // empty-line convention / no more content
+            }
+
+            let byte_len: u64 = if lead < 0x80 {
+                1
+            } else if lead < 0xE0 {
+                2
+            } else if lead < 0xF0 {
+                3
+            } else if lead < 0xF8 {
+                4
+            } else {
+                1
+            };
+
+            // Do not cross out of content.
+            if pos + byte_len > content_exclusive_end {
+                return Ok(None);
+            }
+            // Must have read enough bytes to decode this char.
+            if (n as u64) < byte_len {
+                return Ok(None);
+            }
+
+            let width = match std::str::from_utf8(&buf[..byte_len as usize]) {
+                Ok(s) => match s.chars().next() {
+                    Some(ch) => {
+                        if double_width::is_double_width(ch) {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                    None => 1,
+                },
+                Err(_) => 1, // invalid UTF-8 → single width (matches renderer)
+            };
+
+            Ok(Some((byte_len, width)))
+        }
+
+        // Running position state.
+        let mut current_byte = line_start_byte;
+        let mut byte_in_line: usize = 0;
+
+        // Upper bound for the bounded walks (each iteration advances ≥ 1 byte).
+        let content_byte_len = content_exclusive_end.saturating_sub(line_start_byte) as usize;
+
+        // ───────────────────────────────────────────────────────────────────
+        // PHASE A: skip `char_offset` CHARACTERS from the line start so the
+        // walk begins at the first VISIBLE character (matches builder PHASE 1).
+        // ───────────────────────────────────────────────────────────────────
+        let mut chars_skipped: usize = 0;
+        let mut skip_guard: usize = 0;
+        while chars_skipped < char_offset
+            && current_byte < content_exclusive_end
+            && skip_guard < limits::HORIZONTAL_SCROLL_CHARS
+        {
+            skip_guard += 1;
+
+            match read_one_content_char(&mut file, current_byte, content_exclusive_end)? {
+                Some((byte_len, _width)) => {
+                    current_byte += byte_len;
+                    byte_in_line += byte_len as usize;
+                    chars_skipped += 1;
+                }
+                None => break, // no more content to skip (short line / empty line)
+            }
+        }
+
+        // ───────────────────────────────────────────────────────────────────
+        // PHASE B: walk visible content summing VISUAL width. The target is the
+        // character whose visual span [acc, acc + width) contains
+        // content_visual_col (snap-to-containing for mid-double-width cells).
+        // ───────────────────────────────────────────────────────────────────
+        let mut accumulated_visual: usize = 0;
+        let mut walk_guard: usize = 0;
+        loop {
+            if current_byte >= content_exclusive_end {
+                break;
+            }
+
+            walk_guard += 1;
+            if walk_guard > content_byte_len + 2 {
+                // TEMPORARY: remove in Step 5
+                #[cfg(debug_assertions)]
+                eprintln!("GRCFP walk guard tripped");
+                return Ok(None);
+            }
+
+            let (byte_len, width) =
+                match read_one_content_char(&mut file, current_byte, content_exclusive_end)? {
+                    Some(pair) => pair,
+                    None => break, // newline lead / EOF / boundary → content ends
+                };
+
+            // Span of this character: [accumulated_visual, accumulated_visual + width)
+            if content_visual_col < accumulated_visual + width {
+                // extra check
+                // #[cfg(debug_assertions)]
+                // eprintln!(
+                //     "GRCFP HIT real-char: byte={} byte_in_line={} acc_visual={} width={}",
+                //     current_byte, byte_in_line, accumulated_visual, width
+                // );
+                return Ok(Some(FilePosition {
+                    byte_offset_linear_file_absolute_position: current_byte,
+                    line_number: file_line_number,
+                    byte_in_line,
+                }));
+            }
+
+            accumulated_visual += width;
+            current_byte += byte_len;
+            byte_in_line += byte_len as usize;
+        }
+
+        // At this point:
+        //   accumulated_visual = total VISIBLE visual width of content
+        //   current_byte       = content_exclusive_end (the '\n' byte, or EOF)
+        //   byte_in_line       = visible content byte length
+        //   content_visual_col >= accumulated_visual (target not in content)
+
+        // ───────────────────────────────────────────────────────────────────
+        // VIRTUAL CELL 1: NEWLINE GLYPH (1 visual cell, only if line ends in \n)
+        // Span: [accumulated_visual, accumulated_visual + 1) → the '\n' byte.
+        // ───────────────────────────────────────────────────────────────────
+        if has_newline && content_visual_col < accumulated_visual + 1 {
+            // // extra inspect
+            // #[cfg(debug_assertions)]
+            // eprintln!(
+            //     "GRCFP HIT newline-glyph: newline_byte={} byte_in_line={} acc_visual={}",
+            //     current_byte, byte_in_line, accumulated_visual
+            // );
+            return Ok(Some(FilePosition {
+                // current_byte == content_exclusive_end == the '\n' byte
+                byte_offset_linear_file_absolute_position: current_byte,
+                line_number: file_line_number,
+                byte_in_line,
+            }));
+        }
+
+        // ───────────────────────────────────────────────────────────────────
+        // VIRTUAL CELL 2: END-OF-LINE (1 visual cell, one past last content).
+        //   - With a newline: visual cell accumulated_visual + 1, byte after \n.
+        //   - Without a newline (file's last line): visual cell accumulated_visual,
+        //     byte == EOF byte (current_byte).
+        // ───────────────────────────────────────────────────────────────────
+        let eol_visual_col = if has_newline {
+            accumulated_visual + 1
+        } else {
+            accumulated_visual
+        };
+        let eol_byte = if has_newline {
+            current_byte + 1 // skip past the '\n'
+        } else {
+            current_byte // EOF byte
+        };
+        let eol_byte_in_line = if has_newline {
+            byte_in_line + 1 // include the newline byte
+        } else {
+            byte_in_line
+        };
+
+        if content_visual_col < eol_visual_col + 1 {
+            // extra inspect
+            // #[cfg(debug_assertions)]
+            // eprintln!(
+            //     "GRCFP HIT eol-cell: eol_visual_col={} eol_byte={} has_newline={}",
+            //     eol_visual_col, eol_byte, has_newline
+            // );
+            return Ok(Some(FilePosition {
+                byte_offset_linear_file_absolute_position: eol_byte,
+                line_number: file_line_number,
+                byte_in_line: eol_byte_in_line,
+            }));
+        }
+
+        // // extra inspect
+        // #[cfg(debug_assertions)]
+        // eprintln!(
+        //     "GRCFP MISS: content_visual_col={} past all cells (acc_visual={}, eol_visual_col={}, has_newline={})",
+        //     content_visual_col, accumulated_visual, eol_visual_col, has_newline
+        // );
+
+        // Past every mapped cell → no position.
+        Ok(None)
+    }
+
+    /// Returns the VISUAL width (terminal cells) of the character currently
+    /// under the cursor: 1 for normal/ASCII, 2 for double-width (CJK/emoji).
+    ///
+    /// # Purpose (Project Context)
+    /// MoveRight advances `cursor.tui_visual_col` by the visual width of the character
+    /// it crosses (Option A: `tui_visual_col` is a VISUAL column). This reads the
+    /// single character at the cursor's resolved file byte and classifies its
+    /// width with the shared oracle `double_width::is_double_width`. It mirrors
+    /// the read pattern of `is_current_cursor_on_newline` (resolve cursor →
+    /// seek → bounded read at the cursor byte). Stateless and read-only.
+    ///
+    /// # Defensive / Out-of-Bounds (when in doubt, width 1)
+    /// - No read-copy path → Ok(1)
+    /// - Cursor position unmapped → Ok(1)
+    /// - File open/seek/read fails → Ok(1)
+    /// - EOF, ASCII/control, or incomplete sequence → Ok(1)
+    /// Width 1 is the safe default: it never over-advances past a char.
+    ///
+    /// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+    /// - Reads cursor (#6 tui_row, #5 tui_visual_col), derives #1 file byte internally
+    /// - Out: the cursor character's width in #5 VISUAL cells (1 or 2)
+    ///
+    /// # Returns
+    /// * `Ok(1)` or `Ok(2)`
+    /// * `Err(LinesError)` only if the underlying lookup propagates an
+    ///   unrecoverable error.
+    pub fn cursor_char_visual_width(&self) -> Result<usize> {
+        let read_copy_path = match &self.read_copy_path {
+            Some(path) => path,
+            None => return Ok(1),
+        };
+
+        let cursor_file_pos = match self
+            .get_row_col_file_position(self.cursor.tui_row, self.cursor.tui_visual_col)?
+        {
+            Some(pos) => pos,
+            None => return Ok(1),
+        };
+
+        let mut file = match File::open(read_copy_path) {
+            Ok(f) => f,
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("cursor_char_visual_width: open failed: {} (width 1)", _e);
+                return Ok(1);
+            }
+        };
+
+        if let Err(_e) = file.seek(SeekFrom::Start(
+            cursor_file_pos.byte_offset_linear_file_absolute_position,
+        )) {
+            #[cfg(debug_assertions)]
+            eprintln!("cursor_char_visual_width: seek failed: {} (width 1)", _e);
+            return Ok(1);
+        }
+
+        // Read up to 4 bytes (max UTF-8 character length).
+        let mut buf = [0u8; 4];
+        let n = match file.read(&mut buf) {
+            Ok(n) => n,
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("cursor_char_visual_width: read failed: {} (width 1)", _e);
+                return Ok(1);
+            }
+        };
+        if n == 0 {
+            return Ok(1); // EOF
+        }
+
+        let lead = buf[0];
+        // ASCII / newline / control are single-width.
+        if lead < 0x80 {
+            return Ok(1);
+        }
+
+        let char_byte_len = if lead < 0xE0 {
+            2
+        } else if lead < 0xF0 {
+            3
+        } else if lead < 0xF8 {
+            4
+        } else {
+            return Ok(1); // malformed lead byte
+        };
+
+        if n < char_byte_len {
+            return Ok(1); // incomplete sequence at the read boundary
+        }
+
+        let width = match std::str::from_utf8(&buf[..char_byte_len]) {
+            Ok(s) => match s.chars().next() {
+                Some(ch) => {
+                    if double_width::is_double_width(ch) {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                None => 1,
+            },
+            Err(_) => 1,
+        };
+
+        Ok(width)
+    }
+
+    /// Debug-only: print the four cursor SOURCES OF TRUTH plus the key DERIVED
+    /// values, each tagged with its coordinate space (see the project
+    /// "Coordinate Spaces" reference). Compiled out of release builds entirely.
+    ///
+    /// # Call syntax — this is a METHOD, not a free function
+    /// From an `impl EditorState` method:
+    ///     #[cfg(debug_assertions)] self.debug_inspect_position("MoveRight");
+    /// From a free function holding an `EditorState` (e.g. goto_line_end):
+    ///     #[cfg(debug_assertions)] lines_editor_state.debug_inspect_position("GLE");
+    /// Method-call syntax resolves by the receiver's TYPE, so it works in both
+    /// places without passing state in by hand. Do NOT call it as
+    /// `debug_inspect_position(state, label)` — that form needs a module-level
+    /// free fn
+    #[cfg(debug_assertions)]
+    pub fn debug_inspect_position(&self, label: &str) {
+        // ─────────────────────────────────────────────────────────────────
+        // POSITION INSPECTION (debug builds only) — STANDARD BLOCK
+        //
+        // Prints the four SOURCES OF TRUTH for cursor location plus the key
+        // DERIVED values, each tagged with its coordinate space. See the
+        // project "Coordinate Spaces" reference. Sources of truth are the only
+        // stored cursor state; every other coordinate is derived on demand.
+        // ─────────────────────────────────────────────────────────────────
+        #[cfg(debug_assertions)]
+        {
+            let dbg_row = self.cursor.tui_row;
+            let dbg_visual_col = self.cursor.tui_visual_col;
+            let dbg_char_offset = self.tui_window_horizontal_utf8txt_line_char_offset;
+            let dbg_top_line = self.line_count_at_top_of_window;
+            let dbg_line_num_width =
+                calculate_line_number_width(dbg_top_line, dbg_row, self.effective_rows);
+            let dbg_content_visual_col = dbg_visual_col.saturating_sub(dbg_line_num_width);
+
+            println!("── {} position inspection ──", label);
+            // Sources of truth (the only stored cursor state):
+            println!(
+                "  [truth] tui_row              (#6 TUI display row)        = {}",
+                dbg_row
+            );
+            println!(
+                "  [truth] tui_visual_col       (#5 VISUAL cell column)     = {}",
+                dbg_visual_col
+            );
+            println!(
+                "  [truth] line_char_offset     (#4 in-line CHAR index)     = {}",
+                dbg_char_offset
+            );
+            println!(
+                "  [truth] line_count_top_window(#3 top-of-window line no.) = {}",
+                dbg_top_line
+            );
+            // Derived (computed from the sources of truth):
+            println!(
+                "  [deriv] line_num_width       (prefix width, cells)       = {}",
+                dbg_line_num_width
+            );
+            println!(
+                "  [deriv] content_visual_col   (cells past the prefix)     = {}",
+                dbg_content_visual_col
+            );
+            println!(
+                "  [deriv] file_position        (#1 file byte / #2 line byte / #3 line no.) = {:?}",
+                self.get_row_col_file_position(dbg_row, dbg_visual_col)
+            );
+            // File-byte cache the lookup reads from:
+            println!(
+                "  [cache] windowmap_line_byte_start_end_position_pairs     = {:?}",
+                self.windowmap_line_byte_start_end_position_pairs
+            );
+        }
+    }
+
+    /// Returns the VISUAL width (terminal cells) of the character immediately to
+    /// the LEFT of the cursor: 1 for normal/ASCII, 2 for double-width.
+    ///
+    /// # Purpose (Project Context)
+    /// MoveLeft decrements `cursor.tui_visual_col` by the visual width of the character
+    /// it crosses (Option A: `tui_visual_col` is a VISUAL column). It resolves the
+    /// cursor's file byte, then reads up to 4 bytes ending just before that byte
+    /// (never crossing the current line's start) and walks backward over UTF-8
+    /// continuation bytes (0x80..=0xBF) to find the previous character's lead
+    /// byte. Width is classified by the shared oracle
+    /// `double_width::is_double_width`. Stateless and read-only.
+    ///
+    /// # Defensive / Out-of-Bounds (when in doubt, width 1)
+    /// - No read-copy path, unmapped cursor, at line start, or any I/O failure
+    ///   → Ok(1). Width 1 never over-decrements past a character.
+    ///
+    /// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+    /// - Reads cursor (#6 tui_row, #5 tui_visual_col), derives #1 file byte internally,
+    ///   then reads backward within the same #3 line to the previous character
+    /// - Out: that previous character's width in #5 VISUAL cells (1 or 2)
+    ///
+    /// # Returns
+    /// * `Ok(1)` or `Ok(2)`
+    /// * `Err(LinesError)` only if the lookup propagates an unrecoverable error.
+    pub fn char_to_left_visual_width(&self) -> Result<usize> {
+        let read_copy_path = match &self.read_copy_path {
+            Some(path) => path,
+            None => return Ok(1),
+        };
+
+        let pos = match self
+            .get_row_col_file_position(self.cursor.tui_row, self.cursor.tui_visual_col)?
+        {
+            Some(p) => p,
+            None => return Ok(1),
+        };
+
+        let cursor_byte = pos.byte_offset_linear_file_absolute_position;
+        let line_start = cursor_byte.saturating_sub(pos.byte_in_line as u64);
+
+        if cursor_byte <= line_start {
+            return Ok(1); // at line start: no character to the left in this line
+        }
+
+        // Up to 4 bytes available before the cursor, but not before line_start.
+        let want = (cursor_byte - line_start).min(4) as usize;
+        let start = cursor_byte - want as u64;
+
+        let mut file = match File::open(read_copy_path) {
+            Ok(f) => f,
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("char_to_left_visual_width: open failed: {} (width 1)", _e);
+                return Ok(1);
+            }
+        };
+
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return Ok(1);
+        }
+
+        let mut buf = [0u8; 4];
+        let n = match file.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("char_to_left_visual_width: read failed: {} (width 1)", _e);
+                return Ok(1);
+            }
+        };
+        if n == 0 {
+            return Ok(1);
+        }
+
+        // buf[..n] are the bytes [start, cursor_byte). Walk backward to the
+        // previous character's lead byte (first non-continuation byte).
+        let mut i = n;
+        let mut steps = 0;
+        let mut lead_index: Option<usize> = None;
+        while i > 0 && steps < 4 {
+            i -= 1;
+            steps += 1;
+            if buf[i] & 0xC0 != 0x80 {
+                lead_index = Some(i);
+                break;
+            }
+        }
+
+        let li = match lead_index {
+            Some(x) => x,
+            None => return Ok(1),
+        };
+
+        let prev_char_bytes = &buf[li..n];
+        let width = match std::str::from_utf8(prev_char_bytes) {
+            Ok(s) => match s.chars().next() {
+                Some(ch) => {
+                    if double_width::is_double_width(ch) {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                None => 1,
+            },
+            Err(_) => 1,
+        };
+
+        Ok(width)
     }
 
     // ============================================================================
@@ -4857,11 +5529,11 @@ impl EditorState {
     ///
     /// # Examples
     /// ```ignore
-    /// // Cursor on visible newline character ␤
+    ///  // Cursor on visible newline character ␤
     /// let result = state.is_current_cursor_on_newline()?;
     /// assert_eq!(result, true);
     ///
-    /// // Cursor on regular text 'a'
+    ///  // Cursor on regular text 'a'
     /// let result = state.is_current_cursor_on_newline()?;
     /// assert_eq!(result, false);
     /// ```
@@ -4884,14 +5556,14 @@ impl EditorState {
         // DEFENSIVE CHECK 2: Get cursor's current file position
         // ═══════════════════════════════════════════════════════════════════════
         let cursor_file_pos = match self
-            .get_row_col_file_position(self.cursor.tui_row, self.cursor.tui_col)?
+            .get_row_col_file_position(self.cursor.tui_row, self.cursor.tui_visual_col)?
         {
             Some(pos) => pos,
             None => {
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "is_current_cursor_on_newline: cursor ({}, {}) has no valid file position mapping (returning false)",
-                    self.cursor.tui_row, self.cursor.tui_col
+                    self.cursor.tui_row, self.cursor.tui_visual_col
                 );
                 return Ok(false);
             }
@@ -5245,7 +5917,7 @@ impl EditorState {
                     let pasty_paste_path_base: Option<PathBuf> =
                         self.session_directory_path.clone();
 
-                    // // 1: Get clipboard directory
+                    //  // 1: Get clipboard directory
                     // let pasty_paste_path_base = self
                     //     .session_directory_path
                     //     .as_ref()
@@ -5522,7 +6194,7 @@ impl EditorState {
     ///
     /// # Examples
     /// ```
-    /// // User types "3F" at byte position 42 in hex mode
+    ///  // User types "3F" at byte position 42 in hex mode
     /// editor.write_n_log_hex_edit_in_place(42, 0x3F)?;
     /// ```
     pub fn write_n_log_hex_edit_in_place(
@@ -5851,9 +6523,9 @@ impl EditorState {
             self.hex_cursor.byte_offset_linear_file_absolute_position = file_size - 1;
         }
 
-        //  ////////////////////////
+        //  =======================
         //  Parse Hex Mode Commands
-        //  ////////////////////////
+        //  =======================
 
         match trimmed {
             // === HEX BYTE REPLACEMENT: Two hex digits ===
@@ -6490,6 +7162,417 @@ impl EditorState {
         Ok(keep_editor_loop_running)
     }
 
+    /// Runs one keystroke-input session: owns the raw terminal and the read loop.
+    ///
+    /// # Project Context
+    ///
+    /// This is the ONLY place in the entire editor that creates and owns a
+    /// `RawTerminal` (Linux termios raw mode: no line buffering, no echo,
+    /// byte-by-byte input). It is the raw-terminal analogue of the cooked-mode
+    /// `handle_utf8txt_insert_mode_input`.
+    ///
+    /// ## Why RawTerminal Is Owned Here (and nowhere else)
+    ///
+    /// The main loop (`lines_fullfile_editor_core`) acquires a single
+    /// `StdinLock` for the whole session, and every OTHER mode reads cooked,
+    /// Enter-terminated, echoed lines from it. If the terminal were put into raw
+    /// mode at the main-loop level, all those cooked-input modes would break.
+    ///
+    /// Owning `RawTerminal` here means:
+    ///   - Raw mode is active ONLY for the duration of one keystroke session.
+    ///   - `RawTerminal`'s `Drop` restores the original terminal settings on
+    ///     EVERY exit path — clean exit, EOF, read error, propagated error, and
+    ///     even panic. This is exactly what the `#[must_use]` + `Drop` design is
+    ///     built for.
+    ///   - No `RawTerminal` is stored in `EditorState` (minimal-state rule). The
+    ///     handle is a transient local.
+    ///
+    /// ## The Cooked-Render / Raw-Read Cycle (staircase fix)
+    ///
+    /// PROBLEM (the "staircase"):
+    /// `render_tui_utf8txt` writes a bare `\n` (line feed) at the end of each
+    /// display row. In a COOKED terminal the kernel's `OPOST` output flag is on,
+    /// so the driver automatically expands every `\n` into `\r\n` (line feed +
+    /// carriage return); the carriage return is what returns the cursor to
+    /// column 0 at the start of each new line.
+    ///
+    /// In RAW mode `OPOST` is OFF (see `RawTerminal`/`make_raw` docs). A bare
+    /// `\n` then moves the cursor DOWN one line but does NOT return it to
+    /// column 0. Each rendered row therefore starts further to the right than
+    /// the last — a diagonal "staircase" — and the whole frame is geometrically
+    /// corrupted.
+    ///
+    /// SOLUTION (this method):
+    /// We render INSIDE a brief cooked window. Every loop iteration:
+    ///   1. `suspend_raw_mode()` — restore the ORIGINAL (cooked) terminal, so
+    ///      `OPOST` is on and `\n` → `\r\n` again.
+    ///   2. `render_tui_utf8txt(self)` — runs in the same cooked terminal state
+    ///      that Normal/Insert/Visual/Pasty modes render in, so the output is
+    ///      byte-for-byte identical to those modes. No staircase.
+    ///   3. `activate_raw_mode()` — return to raw mode (byte-by-byte, no echo)
+    ///      for the keystroke read. `activate_raw_mode` also re-verifies that
+    ///      ICANON/ECHO are cleared and VMIN is non-zero, giving a per-keystroke
+    ///      check on the terminal state.
+    ///   4. `term.read(one byte)` — blocking single-byte read (VMIN=1, VTIME=0).
+    ///   5. dispatch the byte.
+    ///
+    /// This is the documented suspend/activate pattern the raw-terminal module
+    /// was designed for (the module's `run_subprocess_demo` uses the same cycle
+    /// to hand a cooked terminal to a subprocess and then reclaim raw mode).
+    ///
+    /// COST: two extra ioctl syscalls per keystroke (suspend = 1 write;
+    /// activate = 1 write + 1 read-back verify). At human typing speed this is
+    /// imperceptible. We accept it in exchange for reusing the UNCHANGED shared
+    /// renderer instead of forking a `\r\n` variant.
+    ///
+    /// WHY NOT change `render_tui_utf8txt` to write `\r\n`:
+    /// That function is shared by all the cooked modes. In cooked mode `OPOST`
+    /// would expand a literal `\r\n` into `\r\r\n` (double carriage return), and
+    /// we would be altering a working, shared function. Keeping the renderer
+    /// untouched and toggling the terminal here is the smaller, lower-risk change.
+    ///
+    /// ## Session Loop Shape
+    ///
+    /// ```text
+    /// create RawTerminal (on failure: log, set Normal, return Ok(true))
+    /// loop while self.mode == KeystrokeInputMode:
+    ///     term.suspend_raw_mode()             // -> cooked terminal
+    ///     render_tui_utf8txt(self)            // renders like every other mode
+    ///     term.activate_raw_mode()            // -> raw terminal (verified)
+    ///     n = term.read(&mut [0u8; 3])         // VMIN=1: returns 1..=3 bytes
+    ///     match n:
+    ///         Ok(0)  -> EOF: break, set Normal
+    ///         Ok(k)  -> if classify_arrow_bytes(&buf[0..k]) == Some(dir):
+    ///                       handle_arrow_key_input_mode(self, dir)   // checked
+    ///                   else:
+    ///                       for byte in &buf[0..k]:                  // A2, no drop
+    ///                           handle_single_byte_keystroke_input_mode(self, byte, &read_copy)  // checked
+    ///         Err(_) -> break, set Normal
+    /// (RawTerminal drops here -> terminal restored)
+    /// return Ok(true)
+    /// ```
+    ///
+    /// ## Termination / Recovery (the satellite must not fall out of the sky)
+    ///
+    /// The inner loop ends, and this method returns to the main loop, on any of:
+    ///
+    ///   1. ESC byte: the dispatcher routes it through `EnterNormalMode`, which
+    ///      sets `self.mode = Normal`. The `while self.mode == KeystrokeInputMode`
+    ///      condition then fails -> clean exit.
+    ///
+    ///   2. `term.read` returns `Ok(0)` (EOF): the input source vanished. We
+    ///      MUST break — otherwise the loop would spin forever calling read on a
+    ///      dead terminal, getting Ok(0) every time, never advancing, never
+    ///      exiting. (RawTerminal's docs warn explicitly: "A return of Ok(0)
+    ///      means EOF... Callers MUST check the returned count.") After breaking
+    ///      we explicitly set `self.mode = Normal` so the editor lands in a
+    ///      known-good state.
+    ///
+    ///   3. `term.read` returns `Err`: same treatment — break, set Normal.
+    ///
+    ///   4. `RawTerminal::new()` fails at entry: log terse, set `self.mode =
+    ///      Normal`, set info-bar message, return `Ok(true)`. We do NOT crash and
+    ///      do NOT propagate as the only exit; the editor recovers to Normal mode
+    ///      and the main loop continues.
+    ///
+    /// In every exit path this method returns `Ok(true)` (keep the main editor
+    /// loop running). It never returns `Ok(false)`: keystroke-input mode has no
+    /// quit command. ESC goes to Normal; quitting is done from Normal mode.
+    ///
+    /// ## Suspend / Activate Failure Handling
+    ///
+    /// `suspend_raw_mode` and `activate_raw_mode` can fail (kernel/driver error,
+    /// a transient termios glitch, bit-flip). We handle each failure rather than
+    /// crash:
+    ///   - If `suspend_raw_mode` fails, we still attempt the render. Worst case
+    ///     this single frame staircases; the next iteration retries the suspend.
+    ///   - If `activate_raw_mode` fails, raw mode may not be (re)established. A
+    ///     read in cooked mode would block for a whole line instead of one byte,
+    ///     which would silently break byte-by-byte input. Rather than risk that
+    ///     confusing failure mode, we recover to Normal mode and exit the session
+    ///     cleanly. (RawTerminal::Drop still restores the terminal on the way out.)
+    /// Both failures are logged terse (no PII) in production; debug builds get
+    /// detail.
+    ///
+    /// ## Render Inside the Loop (not just once)
+    ///
+    /// The main loop renders once per outer iteration. But this session stays
+    /// inside its own inner loop across MANY keystrokes without returning to the
+    /// main loop. Therefore it must render itself, once per keystroke, at the top
+    /// of the loop. We use `render_tui_utf8txt` — the same renderer the main loop
+    /// uses for normal text modes — because keystroke-input mode displays normal
+    /// UTF-8 text. The edit functions own their own `build_windowmap_nowrap`
+    /// rebuilds; this method only renders.
+    ///
+    /// ## Bounded vs Always-Loop (Power of 10, Rule 2)
+    ///
+    /// The inner loop is unbounded by design (it waits on external user input),
+    /// but it has clear, multiple exit conditions (ESC, EOF, read error,
+    /// activate failure, mode flip) and never busy-spins: every iteration blocks
+    /// on `term.read` (VMIN=1, VTIME=0), and EOF/Err break immediately rather
+    /// than looping. The failsafe layer is `RawTerminal::Drop`, which restores
+    /// the terminal even if this loop exits abnormally.
+    ///
+    /// # Arguments
+    ///
+    /// * `read_copy_path` - borrow of the read-copy file path. The CALLER (the
+    ///   main loop) owns the clone and passes a borrow. This method passes that
+    ///   same borrow down to `handle_single_byte_keystroke_input_mode` for every keystroke,
+    ///   so the path is cloned exactly once per session (in the main loop), not
+    ///   once per keystroke.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)`  - keep the main editor loop running (always, in this mode)
+    /// * `Err(LinesError)` - an unrecoverable error propagated from rendering or
+    ///   from a keystroke action. On the way out, `RawTerminal::Drop` still
+    ///   restores the terminal. The main loop will surface the error.
+    ///
+    /// # Defensive Notes
+    ///
+    /// - No `unwrap` / no panic.
+    /// - EOF, read errors, and activate-raw failures are handled, not ignored,
+    ///   and always leave the editor in Normal mode.
+    /// - Read buffer `[0u8; 3]` sized for one 3-byte arrow escape sequence.
+    ///   VMIN=1 means read returns 1..=3 bytes (it does NOT wait for 3). An
+    ///   exact 3-byte arrow match is dispatched as one arrow; any other 1..=3
+    ///   bytes are dispatched per-byte so none is dropped (A2). Handler return
+    ///   values are checked, not discarded: Ok(false) is unexpected in this
+    ///   mode and recovers to Normal.
+    fn handle_keystroke_input_session(&mut self, read_copy_path: &Path) -> Result<bool> {
+        // ---------------------------------------------------------------------
+        // Step 1: Enter raw terminal mode (RAII).
+        // ---------------------------------------------------------------------
+        // On failure we recover to Normal mode rather than crashing. The most
+        // common failure is "no controlling terminal" (e.g. stdin redirected or
+        // running headless), in which case keystroke-input mode simply cannot
+        // function and we fall back to Normal mode.
+        let mut term = match RawTerminal::new() {
+            Ok(t) => t,
+            Err(_e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("hkis: RawTerminal::new failed: {:?}", _e);
+
+                // Terse, no-PII production log.
+                log_error(
+                    "raw terminal unavailable",
+                    Some("handle_keystroke_input_session:new"),
+                );
+
+                // Recover to a known-good mode and inform the user.
+                self.mode = EditorMode::Normal;
+                let _ = self.set_info_bar_message("ki unavailable (no tty)");
+
+                // Keep the editor running; the main loop continues in Normal mode.
+                return Ok(true);
+            }
+        };
+
+        // ---------------------------------------------------------------------
+        // Step 2: Keystroke read loop (cooked-render / raw-read cycle).
+        // ---------------------------------------------------------------------
+        // Read buffer is sized for the largest single keystroke unit we classify
+        // atomically: a 3-byte arrow escape sequence (0x1B 0x5B 0x41..=0x44).
+        //
+        // The terminal is configured VMIN=1, VTIME=0: read returns as soon as
+        // AT LEAST one byte is available, delivering up to 3 bytes if that many
+        // have already arrived. Therefore:
+        //   - A one-keypress arrow whose 3 bytes arrive together returns n == 3
+        //     and is classified as a single arrow by classify_arrow_bytes.
+        //   - read does NOT wait for 3 bytes. A lone byte still returns n == 1
+        //     (e.g. one typed character, or the first byte of a FRAGMENTED arrow
+        //     over a slow link — see classify_arrow_bytes' fragmentation note).
+        //   - Fast/pasted typing may return n == 2 or n == 3 printable bytes in
+        //     one read. We MUST dispatch each of those bytes (the per-byte loop
+        //     below), or enlarging this buffer from [0u8; 1] to [0u8; 3] would
+        //     silently drop trailing bytes — a regression we explicitly avoid.
+        let mut byte_buffer = [0u8; 3];
+
+        // Loop while we remain in keystroke-input mode. ESC flips the mode to
+        // Normal (via the dispatcher), which ends this loop.
+        while self.mode == EditorMode::KeystrokeInputMode {
+            // -----------------------------------------------------------------
+            // (a) Suspend raw mode -> cooked terminal for rendering.
+            // -----------------------------------------------------------------
+            // Restores the ORIGINAL terminal (OPOST on), so render_tui_utf8txt's
+            // bare '\n' is expanded to '\r\n' by the driver, exactly as in every
+            // other editor mode. This is the staircase fix.
+            //
+            // If suspend fails, we still render (worst case: one staircased
+            // frame); the next iteration retries. We do not abort on suspend
+            // failure because a single bad frame is recoverable.
+            if let Err(_e) = term.suspend_raw_mode() {
+                #[cfg(debug_assertions)]
+                eprintln!("hkis: suspend_raw_mode failed: {:?}", _e);
+
+                log_error(
+                    "ki suspend failed",
+                    Some("handle_keystroke_input_session:suspend"),
+                );
+                // Continue: attempt the render anyway.
+            }
+
+            // -----------------------------------------------------------------
+            // (b) Render the TUI for the current model state (cooked terminal).
+            // -----------------------------------------------------------------
+            // Unconditional, once per keystroke. The edit functions rebuilt the
+            // windowmap; here we only paint it. Errors propagate (RawTerminal
+            // Drop will still restore the terminal on the way out).
+            render_tui_utf8txt(self)?;
+
+            // -----------------------------------------------------------------
+            // (c) Re-activate raw mode -> raw terminal for byte-by-byte read.
+            // -----------------------------------------------------------------
+            // activate_raw_mode re-applies raw settings derived from the saved
+            // original AND verifies ICANON/ECHO/VMIN. If it fails, raw mode may
+            // not be established; a subsequent read could block for a whole line
+            // instead of one byte (a confusing silent failure). To avoid that,
+            // we recover to Normal mode and exit the session cleanly. Drop still
+            // restores the terminal.
+            if let Err(_e) = term.activate_raw_mode() {
+                #[cfg(debug_assertions)]
+                eprintln!("hkis: activate_raw_mode failed: {:?}; exiting ki mode", _e);
+
+                log_error(
+                    "ki activate failed",
+                    Some("handle_keystroke_input_session:activate"),
+                );
+
+                self.mode = EditorMode::Normal;
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            // (d) Read exactly one byte from the raw terminal.
+            // -----------------------------------------------------------------
+            match term.read(&mut byte_buffer) {
+                // EOF: input source vanished. Break and recover to Normal mode.
+                // We MUST NOT continue looping on Ok(0): read would keep
+                // returning Ok(0) forever (a dead-tty spin). Break immediately.
+                Ok(0) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("hkis: read returned Ok(0) (EOF); exiting ki mode");
+
+                    // Recover to a known-good mode.
+                    self.mode = EditorMode::Normal;
+                    break;
+                }
+
+                // Got at least one byte. First try to classify the whole read as
+                // a single 3-byte arrow escape sequence. If it is NOT an arrow,
+                // dispatch each returned byte individually so no byte is dropped.
+                //
+                // bytes_read is the count read returned (guaranteed 1..=3 here:
+                // Ok(0) is handled by the EOF arm above, and the buffer is 3
+                // bytes wide). We slice byte_buffer to exactly the filled region.
+                Ok(bytes_read) => {
+                    // Defensive: clamp the slice end to the buffer length so a
+                    // bogus oversized count (bit-flip / driver bug) cannot index
+                    // out of bounds. min() makes this branch-safe with no panic.
+                    let filled_end = bytes_read.min(byte_buffer.len());
+                    let filled_buffer = &byte_buffer[0..filled_end];
+
+                    // ---- Arrow path: exact 3-byte escape sequence only. ----
+                    if let Some(arrow_direction) = classify_arrow_bytes(filled_buffer) {
+                        // Map the classified direction to a cursor-move command.
+                        // The returned bool is the keep-running flag; loop exit is
+                        // driven by self.mode, not by this value, but we check it
+                        // defensively rather than discarding it (see below).
+                        match handle_arrow_key_input_mode(self, arrow_direction)? {
+                            true => {
+                                // Expected: keep running. Loop continues; exit is
+                                // governed by self.mode (set to Normal by ESC).
+                            }
+                            false => {
+                                // Not expected in this mode: cursor moves never
+                                // request termination. Treat an Ok(false) as an
+                                // unexpected contract change and recover safely
+                                // rather than silently ignoring it.
+                                #[cfg(debug_assertions)]
+                                eprintln!(
+                                    "hkis: arrow handler returned Ok(false) (unexpected); exiting ki mode"
+                                );
+
+                                log_error(
+                                    "ki arrow unexpected stop",
+                                    Some("handle_keystroke_input_session:arrow"),
+                                );
+
+                                self.mode = EditorMode::Normal;
+                                break;
+                            }
+                        }
+                    } else {
+                        // ---- Per-byte path (A2): dispatch every read byte. ----
+                        // Not an arrow. This covers a single typed character
+                        // (n == 1) AND fast/pasted multi-byte text (n == 2..=3)
+                        // AND the individual bytes of non-arrow escape sequences
+                        // (which the single-byte dispatcher silently ignores).
+                        //
+                        // We iterate over the filled slice so NO byte is dropped.
+                        // ESC (0x1B) appearing here as a lone byte flips self.mode
+                        // to Normal inside the dispatcher; the for-loop then
+                        // finishes its remaining (if any) bytes for this read, and
+                        // the while-condition ends the session next iteration.
+                        for &single_byte in filled_buffer {
+                            // The dispatcher returns Ok(true) to keep running, or
+                            // Err on an unrecoverable edit I/O failure
+                            // (propagated; terminal restored on Drop). We check
+                            // the bool explicitly rather than discarding it.
+                            match handle_single_byte_keystroke_input_mode(
+                                self,
+                                single_byte,
+                                read_copy_path,
+                            )? {
+                                true => {
+                                    // Expected: keep running.
+                                }
+                                false => {
+                                    // Not expected in this mode (no quit command).
+                                    // Recover safely instead of ignoring it.
+                                    #[cfg(debug_assertions)]
+                                    eprintln!(
+                                        "hkis: single-byte handler returned Ok(false) (unexpected); exiting ki mode"
+                                    );
+
+                                    log_error(
+                                        "ki byte unexpected stop",
+                                        Some("handle_keystroke_input_session:byte"),
+                                    );
+
+                                    self.mode = EditorMode::Normal;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Read error: the terminal became unavailable. Break and recover.
+                Err(_e) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("hkis: read error: {:?}; exiting ki mode", _e);
+
+                    // Terse, no-PII production log.
+                    log_error("ki read error", Some("handle_keystroke_input_session:read"));
+
+                    // Recover to a known-good mode.
+                    self.mode = EditorMode::Normal;
+                    break;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Step 3: Leave the session.
+        // ---------------------------------------------------------------------
+        // `term` (RawTerminal) drops here, restoring the original (cooked)
+        // terminal settings. We return Ok(true) so the main editor loop
+        // continues; by now self.mode is Normal (set by ESC, EOF, error, or
+        // activate-raw failure).
+        Ok(true)
+    }
+
     /// Handles all input when the editor is in Insert mode.
     ///
     /// # Overview
@@ -6641,7 +7724,7 @@ impl EditorState {
     ///
     /// **Warning:** The bucket brigade logic has subtle interdependencies with
     /// newline detection. When splitting, ensure the "will_continue_brigade" flag
-    /// is correctly threaded through any sub-methods.
+    /// is threaded through any sub-methods.
     ///
     /// # Example Usage (from main loop)
     ///
@@ -6673,9 +7756,9 @@ impl EditorState {
         stdin_handle: &mut StdinLock,
         text_buffer: &mut [u8; TEXT_BUCKET_BRIGADE_CHUNKING_BUFFER_SIZE],
     ) -> Result<bool> {
-        //  ///////////
+        //  ===========
         //  Insert Mode
-        //  ///////////
+        //  ===========
         /*
         Workflow:
         A: when cwd is os home dir: always memo-mode (old version mode)
@@ -6760,12 +7843,12 @@ impl EditorState {
         // Normal/Visual mode: parse as command
         let trimmed = text_input_str.trim();
 
-        //  ////////////////////////
+        //  ========================
         //  Check for Commands First
-        //  ////////////////////////
+        //  ========================
 
-        // // Check for exit insert mode commands
-        // // Only escape key to leave insert mode
+        // Check for exit insert mode commands
+        // Only escape key to leave insert mode
         // possible to turn off all ascii keys
         if trimmed == "\x1b" {
             keep_editor_loop_running = execute_command(self, Command::EnterNormalMode)?;
@@ -6779,9 +7862,9 @@ impl EditorState {
             keep_editor_loop_running = execute_command(self, Command::InsertNewline('\n'))?;
             build_windowmap_nowrap(self, &read_copy)?; // Rebuild immediately after newline
         } else {
-            //  ///////////////
+            //  ==============
             //  Text to Insert
-            //  ///////////////
+            //  ==============
 
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -6858,7 +7941,7 @@ impl EditorState {
                     // Step 1: Get file position at/of/where  cursor (with graceful error handling)
                     let file_pos = match lines_editor_state.get_row_col_file_position(
                         lines_editor_state.cursor.tui_row,
-                        lines_editor_state.cursor.tui_col,
+                        lines_editor_state.cursor.tui_visual_col,
                     ) {
                         Ok(Some(pos)) => pos,
                         Ok(None) => {
@@ -6886,8 +7969,8 @@ impl EditorState {
                 5. There is also the hex-write system, by which characters are hex-edited in
                 onto blank spaces, which is odd, unless the file is huge then it makes sense.
 
-
-
+                Update:
+                See the pasty paste-in section: "paste multi-line cut and paste"
                 */
 
                 // Find next newline
@@ -7127,13 +8210,14 @@ impl EditorState {
             // Defensive: Check if filename is empty after trimming
             // Catches: "sa", "sa ", "sa   "
             if filename_str.is_empty() {
-                let _ = self.set_info_bar_message("Usage: sa filename");
+                let _ = self.set_info_bar_message("Use: sa FILENAME");
                 return Command::None;
             }
 
             // Defensive: Check filename length to prevent overflow
             // Catches: Extremely long filenames that could cause issues
-            if filename_str.len() > limits::LINE_READ_BYTES {
+            if filename_str.len() > limits::LINE_CHUNK_READ_BYTES {
+                // TODO: this max length is too big?
                 let _ = self.set_info_bar_message("Filename too long");
                 return Command::None;
             }
@@ -7304,7 +8388,7 @@ impl EditorState {
         ```
          */
 
-        if current_mode == EditorMode::Normal || current_mode == EditorMode::RawMode {
+        if current_mode == EditorMode::Normal {
             match command_str {
                 // Single character commands
                 "h" => Command::MoveLeft(count),
@@ -7338,8 +8422,11 @@ impl EditorState {
                 "wide-" => Command::WideMinus,
 
                 "i" => Command::EnterInsertMode,
+                // Keystroke-input mode: byte-by-byte ASCII via raw terminal.
+                // Distinct from "i" (cooked insert mode). See
+                // Command::EnterKeystrokeInputMode and EditorMode::KeystrokeInputMode.
+                "ki" => Command::EnterKeystrokeInputMode,
                 "v" => Command::EnterVisualSelectMode,
-                "raw" => Command::EnterRawMode,
                 // Multi-character commands
                 "wq" | "sq" => Command::SaveAndQuit,
                 "s" | "ww" => Command::SaveFileStandard,
@@ -7402,6 +8489,7 @@ impl EditorState {
             }
         }
     }
+
     /// Handles input when in Normal or Visual mode: a wrapper for parse_commands_for_normal_visualselect_modes()
     ///
     /// Reads a command from stdin, parses it, executes it, and stores it for repeat.
@@ -7429,8 +8517,8 @@ impl EditorState {
     ///
     /// Overflow example:
     /// ```ignore
-    /// // OLD: continue; (skip to next iteration)
-    /// // NEW: return Ok(true); (keep loop running → goes to next iteration)
+    ///  // OLD: continue; (skip to next iteration)
+    ///  // NEW: return Ok(true); (keep loop running → goes to next iteration)
     /// ```
     ///
     /// # Input Overflow and Stdin Draining
@@ -7511,7 +8599,7 @@ impl EditorState {
         }
 
         // Parse command as utf-8 from bytes
-        // // Ignore invalid UTF-8
+        // Ignore invalid UTF-8
         let command_str = std::str::from_utf8(&command_buffer[..bytes_read]).unwrap_or("");
 
         // Normal/Visual mode: parse as command
@@ -7579,9 +8667,9 @@ impl EditorState {
     fn set_info_bar_message(&mut self, message: &str) -> Result<()> {
         // ensure buffer exists and has known capacity
         //
-        //    =================================================
-        // // Debug-Assert, Test-Asset, Production-Catch-Handle
-        //    =================================================
+        //  =================================================
+        //  Debug-Assert, Test-Asset, Production-Catch-Handle
+        //  =================================================
         // This is not included in production builds
         // assert: only when running in a debug-build: will panic
         debug_assert!(
@@ -7696,7 +8784,7 @@ impl EditorState {
             }
         }
 
-        // Write digits in correct order
+        // Write digits in order
         for i in (0..digit_count).rev() {
             self.utf8_txt_display_buffers[row_idx][write_pos] = digit_stack[i];
             write_pos += 1;
@@ -7781,11 +8869,168 @@ fn is_leap_year(year: u64) -> bool {
     }
 }
 
+// /// Main editing loop for the lines text editor (pre-allocated buffer version)
+// ///
+// /// # Arguments
+// /// * `original_file_path` - Path to the file being edited
+// ///
+// /// # Returns
+// /// * `io::Result<()>` - Success or error status of the editing session
+// ///
+// /// # Memory Safety
+// /// - Uses pre-allocated 256-byte buffer for stdin chunks
+// /// - Never loads entire file into memory
+// /// - Processes input chunk-by-chunk using bucket brigade pattern
+// ///
+// /// # Behavior
+// /// 1. Creates file with timestamp if it doesn't exist
+// /// 2. Displays TUI with file path and last ~10 lines
+// /// 3. Enters input loop where user can:
+// ///    - Type text and press enter - appended immediately
+// ///    - Enter 'q', 'quit', 'exit', or 'exit()' to close editor
+// /// 4. After each append, refreshes TUI display
+// ///
+// /// # Errors
+// /// Returns error if:
+// /// - Cannot create/access the file
+// /// - Cannot read user input
+// /// - Cannot append to file
+// /// - Cannot display TUI
+// ///
+// /// # Example
+// /// ```no_run
+// /// let path = Path::new("notes.txt");
+// /// memo_mode_mini_editor_loop(&path)?;
+// /// ```
+// pub fn memo_mode_mini_editor_loop(original_file_path: &Path) -> Result<()> {
+//     // Pre-allocated buffer for bucket brigade stdin reading
+//     const STDIN_CHUNK_SIZE: usize = 4;
+//     const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
+
+//     let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
+
+//     let stdin = io::stdin();
+//     let mut stdin_handle = stdin.lock(); // Lock stdin once for entire session
+
+//     // Create file with simple timestamp header if it doesn't exist
+//     if !original_file_path.exists() {
+//         let timestamp = create_readable_archive_timestamp(SystemTime::now());
+
+//         // Create file with timestamp header
+//         let mut file = OpenOptions::new()
+//             .create(true)
+//             .write(true)
+//             .open(original_file_path)?;
+
+//         file.write_all(timestamp.as_bytes())?;
+//         file.write_all(b"\n")?; // Blank line after header
+//         file.flush()?;
+//     }
+
+//     // Open file in append mode once (keeps handle open for session)
+//     let mut file = OpenOptions::new()
+//         .create(true)
+//         .append(true)
+//         .open(original_file_path)?;
+
+//     // Bootstrap: Display initial TUI
+//     build_memo_mode_tui(original_file_path)?;
+
+//     let mut chunk_counter = 0;
+
+//     // Main editor loop
+//     loop {
+//         // Defensive: prevent infinite loop
+//         chunk_counter += 1;
+//         if chunk_counter > MAX_CHUNKS {
+//             return Err(LinesError::Io(io::Error::new(
+//                 io::ErrorKind::Other,
+//                 "Maximum iteration limit exceeded",
+//             )));
+//         }
+
+//         // Clear buffer before reading (defensive: prevent data leakage)
+//         for i in 0..STDIN_CHUNK_SIZE {
+//             stdin_chunk_buffer[i] = 0;
+//         }
+
+//         // Read next chunk from stdin
+//         let bytes_read = match stdin_handle.read(&mut stdin_chunk_buffer) {
+//             Ok(n) => n,
+//             Err(e) => {
+//                 eprintln!("Error reading input: {}", e);
+//                 continue;
+//             }
+//         };
+
+//         // =================================================
+//         // Debug-Assert, Test-Asset, Production-Catch-Handle
+//         // =================================================
+//         // This is not included in production builds
+//         // assert: only when running in a debug-build: will panic
+//         debug_assert!(
+//             bytes_read <= STDIN_CHUNK_SIZE,
+//             "bytes_read ({}) exceeded buffer size ({})",
+//             bytes_read,
+//             STDIN_CHUNK_SIZE
+//         );
+//         // This is not included in production builds
+//         // assert: only when running cargo test: will panic
+//         #[cfg(test)]
+//         assert!(
+//             bytes_read <= STDIN_CHUNK_SIZE,
+//             "bytes_read ({}) exceeded buffer size ({})",
+//             bytes_read,
+//             STDIN_CHUNK_SIZE
+//         );
+//         // Catch & Handle without panic in production
+//         // This IS included in production to safe-catch
+//         if !bytes_read <= STDIN_CHUNK_SIZE {
+//             // state.set_info_bar_message("Config error");
+//             return Err(LinesError::GeneralAssertionCatchViolation(
+//                 "bytes_read <= STDIN_CHUNK_SIZE".into(),
+//             ));
+//         }
+
+//         // Check for exit command before writing to file
+//         // Only check if valid UTF-8 (don't fail on binary data)
+//         if let Ok(text_input_str) = std::str::from_utf8(&stdin_chunk_buffer[..bytes_read]) {
+//             let trimmed = text_input_str.trim();
+
+//             // Exit commands: q, quit, exit, exit()
+//             if trimmed == "q" || trimmed == "quit" || trimmed == "exit" || trimmed == "exit()" {
+//                 println!("Exiting editor...");
+//                 break;
+//             }
+//         }
+
+//         // Write chunk directly to file (bucket brigade pattern)
+//         let bytes_written = file.write(&stdin_chunk_buffer[..bytes_read])?;
+
+//         // Defensive assertion: all bytes should be written
+//         assert_eq!(
+//             bytes_written, bytes_read,
+//             "File write incomplete: wrote {} of {} bytes",
+//             bytes_written, bytes_read
+//         );
+
+//         // Flush to disk immediately (durability)
+//         file.flush()?;
+
+//         // Refresh TUI after append
+//         build_memo_mode_tui(original_file_path)?;
+//     }
+
+//     // Final flush before exit
+//     file.flush()?;
+
+//     Ok(())
+// }
+
 /// Lets users do N multi-line pastes, works like append-mode
 pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) -> Result<()> {
     // Pre-allocated buffer for bucket brigade stdin reading
     const STDIN_CHUNK_SIZE: usize = 64;
-    const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
 
     let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
 
@@ -7812,7 +9057,7 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 
         // Defensive: prevent infinite loop
         chunk_counter += 1;
-        if chunk_counter > MAX_CHUNKS {
+        if chunk_counter > limits::MAX_CHUNKS {
             return Err(LinesError::Io(io::Error::new(
                 io::ErrorKind::Other,
                 "Maximum iteration limit exceeded",
@@ -7833,9 +9078,9 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
             }
         };
 
-        //    =================================================
-        // // Debug-Assert, Test-Asset, Production-Catch-Handle
-        //    =================================================
+        // =================================================
+        // Debug-Assert, Test-Asset, Production-Catch-Handle
+        // =================================================
         // This is not included in production builds
         // assert: only when running in a debug-build: will panic
         debug_assert!(
@@ -7893,6 +9138,194 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 
     Ok(())
 }
+
+// /// Builds and displays the memo mode TUI (Text User Interface)
+// ///
+// /// # Arguments
+// /// * `file_path` - Path to the file being edited
+// ///
+// /// # Display Format
+// /// ```text
+// /// lines text editor: Type 'q' to (q)uit
+// /// file path -> /path/to/file.txt
+// ///
+// /// [last ~10 lines of file content]
+// ///
+// /// >
+// /// ```
+// ///
+// /// # Memory Safety
+// /// - Uses pre-allocated 512-byte buffer
+// /// - Never loads entire file into memory
+// /// - Seeks to end of file and reads backwards
+// ///
+// /// # Algorithm
+// /// 1. Clear screen and display header (editor name, file path)
+// /// 2. Read last 512 bytes of file (or entire file if smaller)
+// /// 3. Scan forward through buffer to find newline positions
+// /// 4. If ≥10 lines: display from 10th-to-last line to end
+// /// 5. If <10 lines: display entire buffer content
+// /// 6. Display prompt `> `
+// ///
+// /// # Edge Cases
+// /// - Empty file: Shows only header and prompt
+// /// - File < 512 bytes: Shows entire file content
+// /// - Invalid UTF-8: Uses lossy conversion (shows � for invalid bytes)
+// /// - No newlines in buffer: Displays entire buffer as single "line"
+// ///
+// /// # Returns
+// /// * `Ok(())` on successful display
+// /// * `Err(io::Error)` if file cannot be opened or read
+// ///
+// /// # Example
+// /// ```no_run
+// /// # use std::path::Path;
+// /// # fn build_memo_mode_tui(p: &Path) -> std::io::Result<()> { Ok(()) }
+// /// let path = Path::new("notes.txt");
+// /// build_memo_mode_tui(&path)?;
+// /// ```
+// fn build_memo_mode_tui(file_path: &Path) -> io::Result<()> {
+//     // Pre-allocated buffer for reading file tail
+//     const TAIL_BUFFER_SIZE: usize = 512;
+//     let mut tail_buffer = [0u8; TAIL_BUFFER_SIZE];
+
+//     // Clear screen
+//     print!("\x1B[2J\x1B[1;1H");
+
+//     // Display header
+//     println!("lines text editor: Type 'q' to (q)uit");
+//     println!("file path -> {}", file_path.display());
+//     println!(); // Blank line after header
+
+//     // Open file (read-only)
+//     let mut file = File::open(file_path)?;
+
+//     // Get file size
+//     let file_size = file.metadata()?.len();
+
+//     // Handle empty file
+//     if file_size == 0 {
+//         println!("> ");
+//         io::stdout().flush()?;
+//         return Ok(());
+//     }
+
+//     // Calculate how many bytes to read (512 or less if file is smaller)
+//     let bytes_to_read = if file_size < TAIL_BUFFER_SIZE as u64 {
+//         file_size as usize
+//     } else {
+//         TAIL_BUFFER_SIZE
+//     };
+
+//     // Seek to position: file_size - bytes_to_read
+//     let seek_position = file_size - bytes_to_read as u64;
+//     file.seek(SeekFrom::Start(seek_position))?;
+
+//     // Clear buffer (defensive)
+//     for i in 0..TAIL_BUFFER_SIZE {
+//         tail_buffer[i] = 0;
+//     }
+
+//     // Read the tail portion
+//     let bytes_read = file.read(&mut tail_buffer[..bytes_to_read])?;
+
+//     // Defensive assertion
+//     assert_eq!(
+//         bytes_read, bytes_to_read,
+//         "File read incomplete: expected {}, got {}",
+//         bytes_to_read, bytes_read
+//     );
+
+//     // Scan forward and record newline positions
+//     const MAX_NEWLINES: usize = 100; // Upper bound for line counting
+//     let mut newline_positions = [0usize; MAX_NEWLINES];
+//     let mut newline_count = 0;
+
+//     for i in 0..bytes_read {
+//         if tail_buffer[i] == b'\n' {
+//             if newline_count < MAX_NEWLINES {
+//                 newline_positions[newline_count] = i;
+//                 newline_count += 1;
+//             }
+//         }
+//     }
+
+//     // Determine display start position
+//     let display_start = if newline_count >= 10 {
+//         // Find the position after the (newline_count - 10)th newline
+//         // This gives us the last 10 lines
+//         let target_newline_index = newline_count - 10;
+//         newline_positions[target_newline_index] + 1 // Start after that newline
+//     } else {
+//         // Less than 10 lines, show entire buffer
+//         0
+//     };
+
+//     // Convert buffer slice to string (lossy conversion for invalid UTF-8)
+//     let display_text = String::from_utf8_lossy(&tail_buffer[display_start..bytes_read]);
+
+//     // Display the content
+//     print!("{}", display_text);
+
+//     // Ensure there's a newline before prompt if content doesn't end with one
+//     if !tail_buffer[..bytes_read].ends_with(&[b'\n']) {
+//         println!();
+//     }
+
+//     // Display prompt
+//     print!("> ");
+//     io::stdout().flush()?;
+
+//     Ok(())
+// }
+
+// /// Gets or creates the default file path for the line editor.
+// /// If a custom filename is provided, appends the date to it.
+// ///
+// /// # Arguments
+// /// * `custom_name` - Optional custom filename to use as prefix
+// ///
+// /// # Returns
+// /// - For default: `{home}/Documents/lines_editor/yyyy_mm_dd.txt`
+// /// - For custom: `{home}/Documents/lines_editor/custom_name_yyyy_mm_dd.txt`
+// pub fn get_default_filepath(custom_name: Option<&str>) -> io::Result<PathBuf> {
+//     // Try to get home directory from environment variables
+//     let home = env::var("HOME")
+//         .or_else(|_| env::var("USERPROFILE"))
+//         .map_err(|e| {
+//             io::Error::new(
+//                 io::ErrorKind::NotFound,
+//                 // format!("get_default_filepath Could not find home directory: {}", e),
+//                 stack_format_it(
+//                     "get_default_filepath Could not find home directory: {}",
+//                     &[&e.to_string()],
+//                     "get_default_filepath Could not find home directory",
+//                 ),
+//             )
+//         })?;
+
+//     // Build the base directory path
+//     let mut base_path = PathBuf::from(home);
+//     base_path.push("Documents");
+//     base_path.push("lines_editor");
+
+//     // Create all directories in the path if they don't exist
+//     fs::create_dir_all(&base_path)?;
+
+//     // Get timestamp for filename
+//     let timestamp = get_short_underscore_timestamp()?;
+
+//     // Create filename based on whether custom_name is provided
+//     let filename = match custom_name {
+//         // Some(name) => format!("{}_{}.txt", name, timestamp),
+//         // None => format!("{}.txt", timestamp),
+//         Some(name) => stack_format_it("{}_{}.txt", &[&name, &timestamp.to_string()], "N_N.txt"),
+//         None => stack_format_it("{}.txt", &[&timestamp.to_string()], "N_N.txt"),
+//     };
+
+//     // Join the base path with the filename
+//     Ok(base_path.join(filename))
+// }
 
 /// Module for detecting double-width (full-width) UTF-8 characters in terminal display.
 ///
@@ -8244,53 +9677,461 @@ fn seek_to_line_number(file: &mut File, target_line: usize) -> io::Result<u64> {
     Ok(byte_position)
 }
 
-/// Builds the window-to-file mapping for NoWrap mode
-/// Note: this should be using a read-copy file at all times.
+// ════════════════════════════════════════════════════════════════════════════
+// CHUNKED LINE READING  (memory-thrifty line traversal for NoWrap rendering)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// PURPOSE (project context)
+// -------------------------
+// The editor must never hold a whole file — or even a whole line — in memory.
+// This section provides the one primitive used to walk a file line one UTF-8
+// character at a time, holding at most `limits::LINE_CHUNK_READ_BYTES` bytes in
+// flight. Two consumers use it:
+//
+//   1. `build_windowmap_nowrap` — fills the on-screen display buffers and the
+//      per-row file-byte ranges for one terminal window.
+//   2. `goto_line_end`          — measures a line's visual width (and computes a
+//      horizontal scroll offset) for the "End" key.
+//
+// This section REPLACES two earlier whole-line functions:
+//   - `read_single_line`         (read a whole line, one byte at a time, into a
+//                                 4096-byte buffer)            — DELETED
+//   - `process_line_with_offset` (operated on a full `&[u8]` line)  — DELETED;
+//      its skip / visible-write / window-map / `␤` / EOL logic now lives inline
+//      inside `build_windowmap_nowrap`.
+// `get_utf8_char_byte_length_from_buffer` is RETAINED and reused below.
+//
+// COMPONENTS
+// ----------
+//   - `enum LineCharStep { Char { bytes, len }, Newline, Eof }`
+//        One unit yielded per call: a character (returned BY VALUE), a consumed
+//        '\n' terminator, or end-of-file before any newline.
+//   - `struct ChunkReaderState { valid_len, cursor, reached_eof }`
+//        Borrow-free position state carried across calls (NO borrows held).
+//   - `fn next_line_char(file, scratch, rs) -> Result<LineCharStep>`
+//        The primitive: refills `scratch` in chunks, hands back one character.
+//   - `fn utf8_declared_len_from_first_byte(u8) -> usize`
+//        First-byte-only declared length (1..=4), used ONLY for straddle
+//        detection (see "UTF-8 straddling" below).
+//   - `fn visual_width_of_char(&[u8]) -> usize`
+//        Terminal-CELL width (1 or 2) of one character; shared by both consumers.
+//
+// KEY DESIGN DECISION #1 — Borrow-free reader state (no per-line seek)
+// -------------------------------------------------------------------
+// The scratch buffer lives on `EditorState::line_chunk_scratch` (req: shared,
+// no per-call stack allocation). A reader that *stored* `&mut scratch` could not
+// coexist with the `&mut self` methods `write_line_number` / `set_line_byte_range`.
+// So `ChunkReaderState` holds ONLY indices, and `scratch` is passed to
+// `next_line_char` per call. The borrow of `line_chunk_scratch` is therefore
+// released the instant each call returns, leaving the caller free to invoke
+// `&mut self` methods between characters.
+//
+// A consequence (and a feature): a SINGLE `ChunkReaderState` can span an entire
+// `build_windowmap_nowrap` run. `next_line_char` consumes a line's '\n' but the
+// `scratch`/`rs` pair retains bytes already read past it — those become the first
+// bytes of the next line. Reading is strictly SEQUENTIAL through the file with
+// NO per-line `seek`. (`goto_line_end` is the exception: it `seek`s to the line
+// start once per scan pass and uses a fresh `ChunkReaderState` each pass.)
+//
+// KEY DESIGN DECISION #2 — UTF-8 characters straddling a chunk boundary
+// --------------------------------------------------------------------
+// A multi-byte character can span two chunks. `get_utf8_char_byte_length_from_buffer`
+// returns `Ok(1)` for an incomplete sequence at a buffer END — correct for true
+// truncation, WRONG for a character merely split across a boundary. So before
+// validating, `next_line_char` reads the *declared* length from the first byte
+// (`utf8_declared_len_from_first_byte`). If the declared extent runs past
+// `valid_len` and we are not at EOF, the ≤3 leftover bytes are slid to the front
+// of `scratch`, a fresh chunk is read in behind them, and the character is
+// re-evaluated. The authoritative length (with continuation-byte validation)
+// always comes from `get_utf8_char_byte_length_from_buffer` once the bytes are
+// present.
+//
+// REQUIREMENT: `limits::LINE_CHUNK_READ_BYTES >= 4`, so a 4-byte character always
+// fits after one slide+refill. This is debug-asserted in `next_line_char`. The
+// configured sizes (e.g. 64 or 4096) satisfy it; do NOT set the chunk below 4.
+//
+// KEY DESIGN DECISION #3 — Coordinate spaces (do not conflate)
+// ------------------------------------------------------------
+//   - CHARACTER space: 1 per character (a kanji counts as 1). The horizontal
+//     scroll offset `tui_window_horizontal_utf8txt_line_char_offset` and the
+//     skip phase live here (whole characters are skipped, never bytes).
+//   - VISUAL space:    1 per ASCII / single-width, 2 per double-width (CJK,
+//     emoji). `cursor.tui_visual_col`, `effective_cols`, and the terminal live
+//     here. `visual_width_of_char` is the single source of truth for the 1-vs-2
+//     decision, used identically by both consumers so the cursor round-trip
+//     through `get_row_col_file_position` stays consistent.
+//   Preserved layout quirk: `build_windowmap_nowrap` advances `display_col` by 1
+//   per displayed character (one cursor stop each) while the right-edge checks
+//   gate on VISUAL width. This matches the prior behavior intentionally.
+//
+//
+// LINE-END SEMANTICS
+// ------------------
+//   - `Newline` step: the '\n' is consumed, not counted as content; the caller
+//     sets `found_newline = true`. `file_byte_position += content_bytes + 1`.
+//   - `Eof` step with zero content and no newline: end of file. In
+//     `build_windowmap_nowrap` this drives the EOF marker (`eof_fileline_tuirow_tuple`)
+//     and stops the row loop. A content line with NO trailing newline is a valid
+//     last line: it is rendered, then the NEXT row's first `next_line_char`
+//     returns `Eof` and triggers the marker.
+//   - Empty line (just '\n'): `content_bytes == 0`, recorded as
+//     `start_byte == end_byte` (the project's "empty line" signal).
+//
+// DEFENSIVE PROGRAMMING / POWER-OF-TEN
+// ------------------------------------
+//   - Every loop is bounded: `next_line_char` refill loop by `limits::MAX_CHUNKS`;
+//     `build_windowmap_nowrap` row loop by `limits::WINDOW_BUILD_LINES` and its
+//     per-line character loop by `limits::MAX_CHUNKS`; skip/write phases also by
+//     `limits::HORIZONTAL_SCROLL_CHARS`; `goto_line_end` scans by `limits::MAX_CHUNKS`.
+//   - Malformed / truncated UTF-8 degrades to single-byte / single-cell handling
+//     (matches the renderer's tolerance) — it never panics.
+//   - All display-buffer writes are bounds-checked against `MAX_DISPLAY_BUFFER_BYTES`.
+//   - No heap, no recursion, no unsafe. `goto_line_end` absorbs all I/O failures,
+//     reports a terse data-free info-bar message, logs detail only under
+//     `#[cfg(debug_assertions)]`, and returns `Ok(())` so the editor keeps running.
+//
+// MAINTENANCE NOTES
+// -----------------
+//   - If you ever store the scratch borrow in a struct again, Decision #1 breaks
+//     and you will be forced back to per-line `seek`s. Keep `ChunkReaderState`
+//     borrow-free.
+//   - `next_line_char` returns the character BY VALUE specifically so the scratch
+//     borrow does not escape; do not change it to return a slice into `scratch`.
+//   - `utf8_declared_len_from_first_byte` and `get_utf8_char_byte_length_from_buffer`
+//     duplicate the first-byte classification by design: the former exists ONLY
+//     to detect chunk-straddle before the latter validates. Keep them in sync.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// One step produced by the chunked, per-character line reader.
 ///
-/// # Purpose
-/// Reads file content and populates display buffers with proper line numbers
-/// and text, while maintaining a complete mapping of which file byte each
-/// terminal cell corresponds to.
+/// # Purpose (Project Context)
+/// The editor must never hold a whole line (or whole file) in memory. Display
+/// rebuilds and "End"-key handling both walk a line one UTF-8 character at a
+/// time, refilling a small fixed buffer (`limits::LINE_CHUNK_READ_BYTES`) as
+/// needed. `next_line_char` yields exactly one of these per call.
 ///
-/// # NoWrap Mode Behavior
-/// - Each file line maps to exactly one display row (no wrapping)
-/// - Lines longer than terminal width are truncated at display edge
-/// - Horizontal scrolling is controlled by state.tui_window_horizontal_utf8txt_line_char_offset
-/// - Empty file lines still consume a display row
+/// # Variants
+/// * `Char { bytes, len }` - One complete UTF-8 character. `bytes[..len]` holds
+///   its 1..=4 bytes (the trailing slots are zero padding, never read). The
+///   character is returned BY VALUE so the small scratch buffer borrow does not
+///   escape the call — that is what lets the caller freely call `&mut self`
+///   methods (`write_line_number`, `set_line_byte_range`) between characters.
+/// * `Newline` - The line was terminated by a `\n` (which is consumed but not
+///   reported as content). Caller stops the line here; `found_newline = true`.
+/// * `Eof` - The underlying file produced no more bytes before any newline. The
+///   line (or file) ends here with no trailing newline.
+#[derive(Debug)]
+enum LineCharStep {
+    Char { bytes: [u8; 4], len: usize },
+    Newline,
+    Eof,
+}
+
+/// Borrow-free position state for the chunked line reader.
+///
+/// # Purpose (Project Context)
+/// This struct deliberately holds NO borrows — only indices into the caller's
+/// scratch buffer and an EOF flag. The scratch buffer itself
+/// (`EditorState::line_chunk_scratch`) is passed to `next_line_char` per call,
+/// so the borrow of that field is released the moment `next_line_char` returns.
+///
+/// Because of that, a single `ChunkReaderState` can stay alive across an entire
+/// `build_windowmap_nowrap` run while the loop body still calls `&mut self`
+/// methods on `EditorState`. Reads stay strictly sequential through the file —
+/// there is NO per-line `seek`; the bytes already read past one line's newline
+/// (the leftover in `scratch[cursor..valid_len]`) become the first bytes of the
+/// next line.
+///
+/// # Fields
+/// * `valid_len` - Number of valid bytes currently buffered in `scratch[0..valid_len]`.
+/// * `cursor`    - Index of the next unconsumed byte within `scratch[0..valid_len]`.
+/// * `reached_eof` - Set once the underlying file returns a 0-byte read; no
+///   further reads are attempted after this.
+struct ChunkReaderState {
+    valid_len: usize,
+    cursor: usize,
+    reached_eof: bool,
+}
+
+impl ChunkReaderState {
+    /// Creates a fresh reader state positioned at the start of a fresh read run.
+    ///
+    /// Use one instance per *sequential* read pass:
+    /// - `build_windowmap_nowrap` creates ONE and reuses it for every line.
+    /// - `goto_line_end` creates one per scan pass (it `seek`s first, so a fresh
+    ///   state with empty buffers is required each pass).
+    fn new() -> Self {
+        ChunkReaderState {
+            valid_len: 0,
+            cursor: 0,
+            reached_eof: false,
+        }
+    }
+}
+
+/// Returns the *declared* byte length (1..=4) of a UTF-8 character from its
+/// first byte alone, used only to decide whether a character straddles the
+/// current chunk boundary.
+///
+/// # Purpose (Project Context)
+/// `get_utf8_char_byte_length_from_buffer` validates continuation bytes and, by
+/// design, returns `Ok(1)` for an *incomplete* multi-byte sequence at a buffer
+/// end. In the chunked reader an "incomplete sequence at buffer end" usually
+/// means the character is split across a 64-byte chunk boundary and we simply
+/// need to read more — NOT that the data is truncated. So before validating, we
+/// must know the *declared* length from the first byte to decide "do I have all
+/// the bytes, or must I refill first?". This tiny function answers exactly that
+/// and nothing else; the authoritative length (with continuation-byte checks)
+/// still comes from `get_utf8_char_byte_length_from_buffer` once the bytes are
+/// guaranteed present.
+///
+/// # First-byte patterns
+/// ```text
+/// 0x00..=0x7F  0xxxxxxx -> 1
+/// 0xC0..=0xDF  110xxxxx -> 2
+/// 0xE0..=0xEF  1110xxxx -> 3
+/// 0xF0..=0xF7  11110xxx -> 4
+/// else (continuation 0x80..=0xBF, or 0xF8..=0xFF) -> 1 (defensive)
+/// ```
+fn utf8_declared_len_from_first_byte(first_byte: u8) -> usize {
+    if first_byte <= 0x7F {
+        1
+    } else if (0xF0..=0xF7).contains(&first_byte) {
+        4
+    } else if (0xE0..=0xEF).contains(&first_byte) {
+        3
+    } else if (0xC0..=0xDF).contains(&first_byte) {
+        2
+    } else {
+        1
+    }
+}
+
+/// Reads the next UTF-8 character (or line terminator) from a file, refilling a
+/// small fixed scratch buffer in chunks as needed.
+///
+/// # Purpose (Project Context)
+/// This is THE memory-thrift primitive for line handling. It replaces the old
+/// `read_single_line`, which read one byte at a time into a whole-line 4096-byte
+/// buffer. Here a line of any length is walked character by character while only
+/// `limits::LINE_CHUNK_READ_BYTES` bytes are ever held at once.
+///
+/// # Sequential reading, no per-line seek
+/// The reader consumes the terminating `\n` of a line (reporting `Newline`) but
+/// the `scratch`/`rs` pair retains any bytes already read past it. The caller
+/// therefore continues the *next* line from those leftover bytes with no `seek`.
+/// `build_windowmap_nowrap` relies on this to read the whole window in one
+/// forward pass.
+///
+/// # Chunk-straddling UTF-8 characters
+/// A multi-byte character can span a chunk boundary. When the declared length
+/// (from the first byte) would run past `valid_len`, the ≤3 leftover bytes are
+/// slid to the front of `scratch` and a fresh chunk is read in behind them, then
+/// the character is re-evaluated. This requires `scratch.len() >= 4` so a
+/// 4-byte character always fits after one refill (debug-asserted; the configured
+/// chunk size of 64/4096 satisfies this).
 ///
 /// # Arguments
-/// * `state` - Editor state containing buffers and window position info
-/// * `original_file_path` - Absolute path to the file being displayed
+/// * `file`    - Open file, positioned where reading should continue.
+/// * `scratch` - The shared `EditorState::line_chunk_scratch` buffer.
+/// * `rs`      - Borrow-free reader position state (carried across calls).
 ///
 /// # Returns
-/// * `Ok(lines_processed)` - Number of file lines successfully processed
-/// * `Err(io::Error)` - If file operations fail or invalid UTF-8 encountered
-///
-/// # State Modified
-/// - `state.utf8_txt_display_buffers` - Filled with line numbers and visible text
-/// - `state.display_utf8txt_buffer_lengths` - Set to bytes used per row
-/// - `state.window_map` - Updated with file position for each display cell
+/// * `Ok(LineCharStep::Char { .. })` - One complete (or EOF-truncated) character.
+/// * `Ok(LineCharStep::Newline)`     - Line terminated by `\n` (consumed).
+/// * `Ok(LineCharStep::Eof)`         - No more bytes before any newline.
+/// * `Err(LinesError)`               - Underlying read error (handled by callers).
 ///
 /// # Defensive Programming
-/// - Validates file exists before reading
-/// - Bounds checks all buffer accesses
-/// - Handles invalid UTF-8 gracefully
-/// - Limits iteration counts to prevent infinite loops
+/// - Inner refill loop bounded by `limits::MAX_CHUNKS` (Power-of-Ten rule 2).
+/// - Invalid / truncated UTF-8 falls back to single-byte consumption (matches
+///   the rest of the renderer's tolerance of malformed bytes).
+/// - No heap, no recursion, no unsafe.
+fn next_line_char(
+    file: &mut File,
+    scratch: &mut [u8; limits::LINE_CHUNK_READ_BYTES],
+    rs: &mut ChunkReaderState,
+) -> Result<LineCharStep> {
+    // The straddle handling slides ≤3 leftover bytes and refills behind them,
+    // so a 4-byte character can only be guaranteed to fit if the chunk is >= 4.
+    #[cfg(all(debug_assertions, not(test)))]
+    debug_assert!(
+        scratch.len() >= 4,
+        "LINE_CHUNK_READ_BYTES must be >= 4 to hold a 4-byte UTF-8 char across a refill"
+    );
+
+    let mut refill_iterations: usize = 0;
+
+    while refill_iterations < limits::MAX_CHUNKS {
+        refill_iterations += 1;
+
+        // ─── Ensure at least one buffered byte, else determine EOF ──────────
+        if rs.cursor >= rs.valid_len {
+            rs.cursor = 0;
+            rs.valid_len = 0;
+
+            if rs.reached_eof {
+                return Ok(LineCharStep::Eof);
+            }
+
+            let n = file.read(&mut scratch[..]).map_err(LinesError::Io)?;
+            if n == 0 {
+                rs.reached_eof = true;
+                return Ok(LineCharStep::Eof);
+            }
+            rs.valid_len = n;
+        }
+
+        let first_byte = scratch[rs.cursor];
+
+        // ─── Line terminator: consume the '\n', report Newline ──────────────
+        if first_byte == b'\n' {
+            rs.cursor += 1;
+            return Ok(LineCharStep::Newline);
+        }
+
+        // ─── Decide whether the full character is present in the buffer ─────
+        let declared_len = utf8_declared_len_from_first_byte(first_byte);
+
+        if rs.cursor + declared_len > rs.valid_len {
+            // Character's declared extent runs past what we have buffered.
+            if !rs.reached_eof {
+                // Slide leftover bytes to the front and read a fresh chunk in
+                // behind them, then re-evaluate this character.
+                let leftover = rs.valid_len - rs.cursor;
+                scratch.copy_within(rs.cursor..rs.valid_len, 0);
+                rs.cursor = 0;
+                rs.valid_len = leftover;
+
+                let n = file
+                    .read(&mut scratch[leftover..])
+                    .map_err(LinesError::Io)?;
+                if n == 0 {
+                    rs.reached_eof = true;
+                } else {
+                    rs.valid_len += n;
+                }
+                continue; // retry with more bytes available
+            }
+            // EOF with a partial multi-byte sequence: fall through and let the
+            // centralized helper return its defensive length (1) for the
+            // truncated bytes that remain.
+        }
+
+        // ─── Validate and copy the character (authoritative length) ─────────
+        // `get_utf8_char_byte_length_from_buffer` checks continuation bytes and
+        // returns 1 for malformed/truncated input — matching the renderer's
+        // tolerance. We always advance by the length it reports.
+        let char_len =
+            match get_utf8_char_byte_length_from_buffer(&scratch[..rs.valid_len], rs.cursor) {
+                Ok(len) => len,
+                Err(_) => 1,
+            };
+
+        let mut bytes = [0u8; 4];
+        let mut i = 0;
+        while i < char_len && rs.cursor + i < rs.valid_len {
+            bytes[i] = scratch[rs.cursor + i];
+            i += 1;
+        }
+        rs.cursor += char_len;
+
+        return Ok(LineCharStep::Char {
+            bytes,
+            len: char_len,
+        });
+    }
+
+    // Refill ceiling hit (should be unreachable in practice).
+    Err(LinesError::Io(io::Error::new(
+        io::ErrorKind::Other,
+        "Maximum chunk refills exceeded in next_line_char",
+    )))
+}
+
+/// Returns the VISUAL terminal-cell width (1 or 2) of one UTF-8 character.
 ///
-/// # Example
-/// For a file starting "Hello\nWorld\n" with window at line 1:
-/// - Row 0: "1 Hello"
-/// - Row 1: "2 World"
-/// WindowMapStruct will map each character to its file byte position.
+/// # Purpose (Project Context)
+/// Under the project's "Option A" coordinate model, `cursor.tui_visual_col` and
+/// `effective_cols` are in terminal CELLS. CJK / emoji characters are one
+/// character but two cells. Both the window builder and `goto_line_end` need
+/// this width; centralizing it keeps the two paths consistent.
+///
+/// # Defensive
+/// Malformed bytes fall back to width 1 (matches renderer tolerance).
+fn visual_width_of_char(char_bytes: &[u8]) -> usize {
+    if char_bytes.len() == 1 {
+        return 1; // ASCII is always single-width
+    }
+    match std::str::from_utf8(char_bytes) {
+        Ok(s) => match s.chars().next() {
+            Some(ch) => {
+                if double_width::is_double_width(ch) {
+                    2
+                } else {
+                    1
+                }
+            }
+            None => 1,
+        },
+        Err(_) => 1,
+    }
+}
+
+/// Builds the window-to-file mapping for NoWrap mode (chunked, memory-thrifty).
+///
+/// # Purpose
+/// Reads file content and populates display buffers with line numbers and the
+/// visible portion of each file line, while recording each display row's
+/// file-byte range for cursor math.
+///
+/// # Memory model (why this version exists)
+/// The previous version read each whole line into a 4096-byte buffer (one byte
+/// at a time) via `read_single_line`, then handed the full line to
+/// `process_line_with_offset`. This version holds at most
+/// `limits::LINE_CHUNK_READ_BYTES` bytes at any time: it walks each line one
+/// UTF-8 character at a time via `next_line_char`, doing horizontal-offset skip,
+/// visible write, and window-map update in a single forward pass. The old
+/// `process_line_with_offset` and `read_single_line` are removed; their logic
+/// lives inline here.
+///
+/// # Sequential reading
+/// A single `ChunkReaderState` is reused for the whole window. `next_line_char`
+/// consumes each line's `\n` but retains bytes already read past it, so the next
+/// line continues from there — there is NO per-line `seek`. `file_byte_position`
+/// is still tracked explicitly (line content length + 1 for the newline) and is
+/// what `set_line_byte_range` records.
+///
+/// # Long-line scalability (behavior improvement)
+/// The old code silently split any line longer than 4096 bytes (the read buffer
+/// filled and `read_single_line` returned `found_newline = false`). This version
+/// drains the remainder of a too-wide line in chunks to find the real newline,
+/// so arbitrarily long lines map to exactly one display row, as intended.
+///
+/// # NoWrap behavior (unchanged)
+/// - One file line per display row; over-wide lines truncate at the display edge.
+/// - Horizontal scroll via `tui_window_horizontal_utf8txt_line_char_offset`
+///   (skips whole CHARACTERS).
+/// - `display_col += 1` per displayed character (visual width still gates the
+///   right edge) — preserved exactly from the prior implementation.
+/// - Newline shown as `␤` when the full line fits and a cell remains.
+///
+/// # Arguments / Returns / Coordinate Spaces
+/// Unchanged from the prior version (signature identical).
+///
+/// # Defensive Programming
+/// - Outer row loop bounded by `limits::WINDOW_BUILD_LINES`.
+/// - Per-line character loop bounded by `limits::MAX_CHUNKS`.
+/// - Skip/write phases additionally bounded by `limits::HORIZONTAL_SCROLL_CHARS`.
+/// - All buffer writes bounds-checked against `MAX_DISPLAY_BUFFER_BYTES`.
 pub fn build_windowmap_nowrap(state: &mut EditorState, readcopy_file_path: &Path) -> Result<usize> {
-    // Defensive: Validate inputs
+    // ─── Validate inputs ────────────────────────────────────────────────────
     if !readcopy_file_path.is_absolute() {
         return Err(LinesError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "File path must be absolute",
         )));
     }
-
     if !readcopy_file_path.exists() {
         return Err(LinesError::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -8302,178 +10143,261 @@ pub fn build_windowmap_nowrap(state: &mut EditorState, readcopy_file_path: &Path
         )));
     }
 
-    // Assertion: State should have valid dimensions
     #[cfg(debug_assertions)]
     {
         debug_assert!(state.effective_rows > 0, "Effective rows must be positive");
         debug_assert!(state.effective_cols > 0, "Effective cols must be positive");
     }
 
-    // Clear existing buffers and map before building
+    // ─── Reset display + mapping state ──────────────────────────────────────
     state.clear_utf8_displaybuffers();
-    state.clear_windowmap_positions();
-    state.clear_line_byte_ranges(); // line start stop data
-
-    // Clear EOF tracking - will be rediscovered if EOF appears in this window
-    // Note: file state changes with every edit, must refresh
+    state.clear_line_byte_ranges();
     state.eof_fileline_tuirow_tuple = None;
 
-    // Open file for reading
+    // ─── Open and seek to the top line of the window ────────────────────────
     let mut file = File::open(readcopy_file_path)?;
-
-    // Calculate byte position for the target line
     let byte_position = seek_to_line_number(&mut file, state.line_count_at_top_of_window)?;
-
-    // Update state with the correct byte position
     state.file_position_of_topline_start = byte_position;
 
-    // Pre-allocate read buffer for one line at a time
-    // Max line we'll try to read (defensive limit)
-    let mut line_buffer = [0u8; limits::LINE_READ_BYTES];
+    // ─── Sequential chunk reader: ONE state for the whole window ────────────
+    let mut rs = ChunkReaderState::new();
 
     let mut current_display_row = 0usize;
-    let mut current_file_line_number = state.line_count_at_top_of_window; // STARTS here, NOT always here
+    let mut current_file_line_number = state.line_count_at_top_of_window;
     let mut lines_processed = 0usize;
     let mut file_byte_position = state.file_position_of_topline_start;
 
-    // Defensive: Limit iterations to prevent infinite loops
-    let mut iteration_count = 0;
+    let mut row_iteration_count = 0usize;
 
-    // Clear EOF tracking at start of rebuild
-    state.eof_fileline_tuirow_tuple = None;
-
-    // Process lines until display is full or file ends
-    while current_display_row < state.effective_rows && iteration_count < limits::WINDOW_BUILD_LINES
+    // ─── Row loop ───────────────────────────────────────────────────────────
+    while current_display_row < state.effective_rows
+        && row_iteration_count < limits::WINDOW_BUILD_LINES
     {
-        // Assertion: We should not exceed our display buffer count
-        // assert if has been, not if might become, larger than max
         #[cfg(debug_assertions)]
         debug_assert!(
             current_display_row <= MAX_TUI_ROWS,
             "Display row exceeds maximum"
         );
 
-        iteration_count += 1;
+        row_iteration_count += 1;
 
-        // line start stop data
         let line_start_byte = file_byte_position;
 
-        // Read one line from file (up to newline or MAX_LINE_BYTES)
-        let (line_bytes, line_length, found_newline) =
-            read_single_line(&mut file, &mut line_buffer)?;
+        // ── Per-line layout state (was the body of process_line_with_offset) ─
+        let horizontal_offset = state.tui_window_horizontal_utf8txt_line_char_offset;
 
-        // // Check for end of file
-        // if line_length == 0 && !found_newline {
-        //     break; // End of file reached
-        // }
+        // Write the line number first (no reader borrow is held here).
+        let fileline_number_for_display = current_file_line_number + 1; // 0-idx -> 1-idx
+        let line_num_bytes_written = state.write_line_number(
+            current_display_row,
+            fileline_number_for_display,
+            state.line_count_at_top_of_window,
+        )?;
 
-        // Check for end of file
-        if line_length == 0 && !found_newline {
-            // EOL detected - record position for cursor movement boundaries
-            // eo'f' is a typo here?
+        let col_start = line_num_bytes_written;
+        let remaining_cols = state.effective_cols.saturating_sub(line_num_bytes_written);
+        let visual_col_limit = col_start + remaining_cols;
+        let display_col_limit = col_start + remaining_cols;
 
-            if lines_processed > 0 {
-                // We processed at least one line before hitting EOF
-                // The last valid line is one before current position
-                let last_valid_file_line = current_file_line_number.saturating_sub(1);
-                let last_valid_display_row = current_display_row.saturating_sub(1);
+        // Running per-line counters.
+        let mut line_content_bytes: u64 = 0; // total content bytes (excludes '\n')
+        let mut found_newline = false;
 
-                state.eof_fileline_tuirow_tuple = Some((
-                    last_valid_file_line,   // File line number (0-indexed)
-                    last_valid_display_row, // TUI display row (0-indexed)
-                ));
-            } else {
-                // No lines processed - positioned at or past EOF from start
-                // This happens with empty files or seeking past end
-                state.eof_fileline_tuirow_tuple = Some((
-                    current_file_line_number, // Current file line position (0-indexed)
-                    current_display_row,      // Current display row (0-indexed)
-                ));
+        let mut chars_skipped = 0usize;
+        let mut skip_iterations = 0usize;
+
+        let mut bytes_written = 0usize;
+        let mut display_col = col_start;
+        let mut visual_col = col_start;
+        let mut display_truncated = false; // visible region ran out before line end
+        let mut write_iterations = 0usize;
+
+        let mut char_loop_count = 0usize;
+
+        // ── Character loop: skip + write + drain to newline/EOF, one pass ────
+        loop {
+            if char_loop_count >= limits::MAX_CHUNKS {
+                return Err(LinesError::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Maximum characters exceeded in build_windowmap_nowrap line",
+                )));
+            }
+            char_loop_count += 1;
+
+            let step = next_line_char(&mut file, &mut state.line_chunk_scratch, &mut rs)?;
+
+            let (char_bytes, char_len) = match step {
+                LineCharStep::Newline => {
+                    found_newline = true;
+                    break;
+                }
+                LineCharStep::Eof => {
+                    break; // found_newline stays false
+                }
+                LineCharStep::Char { bytes, len } => (bytes, len),
+            };
+
+            // This character is part of the line content regardless of whether
+            // it is skipped, displayed, or beyond the display edge.
+            line_content_bytes += char_len as u64;
+
+            // ── Phase 1: horizontal-offset skip (whole characters) ───────────
+            if chars_skipped < horizontal_offset {
+                if skip_iterations >= limits::HORIZONTAL_SCROLL_CHARS {
+                    return Err(LinesError::Io(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Maximum iterations exceeded in horizontal skip",
+                    )));
+                }
+                skip_iterations += 1;
+                chars_skipped += 1;
+                continue; // skipped: not written, but already counted as content
             }
 
-            break; // End of file reached
+            // ── Phase 2: write visible characters (until the edge is reached) ─
+            if display_truncated {
+                // Display edge already reached; keep draining to find newline,
+                // but do not write or map further characters.
+                continue;
+            }
+
+            if write_iterations >= limits::HORIZONTAL_SCROLL_CHARS {
+                return Err(LinesError::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Maximum iterations exceeded in line write",
+                )));
+            }
+            write_iterations += 1;
+
+            let display_width = visual_width_of_char(&char_bytes[..char_len]);
+
+            // Would this character overflow the visible region (visually or by
+            // display column)? If so, stop writing (mark truncated).
+            if visual_col + display_width > visual_col_limit
+                || display_col + display_width > display_col_limit
+            {
+                display_truncated = true;
+                continue;
+            }
+
+            // Copy the character bytes into the display buffer (bounds-checked).
+            let write_start = col_start + bytes_written;
+            let write_end = write_start + char_len;
+            if write_end > MAX_DISPLAY_BUFFER_BYTES {
+                display_truncated = true; // buffer full
+                continue;
+            }
+
+            let mut i = 0;
+            while i < char_len {
+                state.utf8_txt_display_buffers[current_display_row][write_start + i] =
+                    char_bytes[i];
+                i += 1;
+            }
+
+            bytes_written += char_len;
+            // Preserved behavior: one cursor stop per displayed character.
+            // (Visual width still gates the right-edge checks above.)
+            display_col += 1;
+            visual_col += display_width;
         }
 
-        // Write line number to display buffer
-        let fileline_number_for_display = current_file_line_number + 1; // Convert 0-indexed to 1-indexed
+        // ── EOF with nothing read: record EOF marker and stop (unchanged) ────
+        if line_content_bytes == 0 && !found_newline {
+            if lines_processed > 0 {
+                let last_valid_file_line = current_file_line_number.saturating_sub(1);
+                let last_valid_display_row = current_display_row.saturating_sub(1);
+                state.eof_fileline_tuirow_tuple =
+                    Some((last_valid_file_line, last_valid_display_row));
+            } else {
+                state.eof_fileline_tuirow_tuple =
+                    Some((current_file_line_number, current_display_row));
+            }
+            break;
+        }
 
-        let line_num_bytes_written = state.write_line_number(
-            current_display_row,               // row_idx: usize,
-            fileline_number_for_display,       // line_num: usize,
-            state.line_count_at_top_of_window, // starting_row: usize,
-        )?;
+        // ── Newline glyph: only when the full line fit with room to spare ────
+        // (Old guard `byte_index >= line_bytes.len()` is equivalent to
+        // "not truncated": if the line was clipped we never show the glyph.)
+        //
+        // Note: `display_col` is intentionally NOT advanced after writing the
+        // glyph. In the old `process_line_with_offset` the post-glyph increment
+        // fed a later EOL-mapping read; that block produced only a debug log and
+        // changed no state, so it was dropped here. `display_col` is dead after
+        // this point (re-initialized to `col_start` next row), and the row's
+        // recorded length uses `bytes_written`, not `display_col`.
+        if found_newline && !display_truncated && display_col < display_col_limit {
+            let newline_char = '␤';
+            let newline_str = newline_char.to_string();
+            let newline_bytes = newline_str.as_bytes();
+            let newline_byte_len = newline_bytes.len();
 
-        // Calculate how many columns remain after line number
-        let remaining_cols = state.effective_cols.saturating_sub(line_num_bytes_written);
+            let write_start = col_start + bytes_written;
+            let write_end = write_start + newline_byte_len;
+            if write_end <= MAX_DISPLAY_BUFFER_BYTES {
+                let mut i = 0;
+                while i < newline_byte_len {
+                    state.utf8_txt_display_buffers[current_display_row][write_start + i] =
+                        newline_bytes[i];
+                    i += 1;
+                }
+                bytes_written += newline_byte_len;
+            }
+        }
 
-        // Process the line text with horizontal offset
-        let text_bytes_written = process_line_with_offset(
-            state,
-            current_display_row,
-            line_num_bytes_written, // Column position after line number
-            &line_bytes[..line_length],
-            state.tui_window_horizontal_utf8txt_line_char_offset,
-            remaining_cols,
-            file_byte_position,
-            found_newline,
-        )?;
-
-        // Update total buffer length for this row
+        // ── Record total bytes used in this display row ──────────────────────
         state.display_utf8txt_buffer_lengths[current_display_row] =
-            line_num_bytes_written + text_bytes_written;
+            line_num_bytes_written + bytes_written;
 
-        // ════════════════════════
-        // line start stop tracking
-        // ════════════════════════
-        // Calculate line end byte position
-        // For "hello\n" at bytes [10..15]: start=10, end=14 (last content byte)
-        // For empty line "\n" at byte 20: start=20, end=20 (signals empty)
-        // For last line "world" with no newline: start=X, end=X+4
-        let line_end_byte = if line_length > 0 {
-            // Line has content - end is last content byte
-            // line_length = bytes read (NOT including newline)
-            line_start_byte + (line_length as u64) - 1
+        // ── Line byte-range tracking (start == end signals an empty line) ────
+        let line_end_byte = if line_content_bytes > 0 {
+            line_start_byte + line_content_bytes - 1
         } else {
-            // Empty line (just newline) - start == end signals empty
             line_start_byte
         };
-        // Store the byte range for this display row
         state.set_line_byte_range(current_display_row, line_start_byte, line_end_byte)?;
-        // ════════════════════════
-        // line start stop tracking
-        // ════════════════════════
 
-        // Advance to next line
+        // ── Advance to next line ─────────────────────────────────────────────
         current_display_row += 1;
         current_file_line_number += 1;
         lines_processed += 1;
 
-        // Update file position for next line
-        file_byte_position += line_length as u64;
+        file_byte_position += line_content_bytes;
         if found_newline {
-            file_byte_position += 1; // Account for newline character
+            file_byte_position += 1; // account for the consumed '\n'
         }
     }
 
-    // Defensive: Check we didn't hit iteration limit
-    if iteration_count >= limits::WINDOW_BUILD_LINES {
+    if row_iteration_count >= limits::WINDOW_BUILD_LINES {
         return Err(LinesError::Io(io::Error::new(
             io::ErrorKind::Other,
             "Maximum iterations exceeded in build_windowmap_nowrap",
         )));
     }
 
-    // Assertion: Verify our line count makes sense
     #[cfg(debug_assertions)]
     debug_assert!(
         lines_processed <= state.effective_rows,
         "Processed more lines than display rows available"
     );
 
-    // Validates that the processed line count does not exceed available display rows.
-    // This catch ensures the windowmap construction stayed within bounds.
-    // Returns error if an impossible state is detected (e.g., state corruption,
-    // off-by-one errors in line processing, or file format unexpected behavior).
+    if row_iteration_count >= limits::WINDOW_BUILD_LINES {
+        return Err(LinesError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "Maximum iterations exceeded in build_windowmap_nowrap",
+        )));
+    }
+
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        lines_processed <= state.effective_rows,
+        "Processed more lines than display rows available"
+    );
+
+    // Validates that the processed line count does not exceed available display
+    // rows. This catch ensures the windowmap construction stayed within bounds
+    // and surfaces an impossible state (corruption, off-by-one, etc.) without
+    // panicking in production.
     if lines_processed > state.effective_rows {
         return Err(LinesError::LineCountExceeded {
             lines_processed,
@@ -8828,9 +10752,9 @@ pub fn save_file_as_newfile_with_newname(
     // Validate paths before any I/O operations to fail fast on invalid input.
     // This prevents wasted work and provides clear error messages early.
 
-    //    =================================================
-    // // Debug-Assert, Test-Asset, Production-Catch-Handle
-    //    =================================================
+    // =================================================
+    // Debug-Assert, Test-Asset, Production-Catch-Handle
+    // =================================================
     // Check: original path must be absolute
     debug_assert!(
         original_file_path.is_absolute(),
@@ -9084,11 +11008,11 @@ pub fn save_file_as_newfile_with_newname(
     // Copy loop: bounded by MAX_CHUNKS safety limit
     loop {
         // Safety check: prevent infinite loop from filesystem corruption
-        if chunk_count >= SAVE_AS_COPY_MAX_CHUNKS {
+        if chunk_count >= limits::MAX_CHUNKS {
             #[cfg(debug_assertions)]
             eprintln!(
                 "DEBUG: Maximum chunk limit reached ({})",
-                SAVE_AS_COPY_MAX_CHUNKS
+                limits::MAX_CHUNKS
             );
 
             #[cfg(not(debug_assertions))]
@@ -9275,80 +11199,6 @@ fn save_file(state: &mut EditorState) -> io::Result<()> {
     Ok(())
 }
 
-/// Reads a single line from file into buffer
-///
-/// # Purpose
-/// Reads bytes from current file position until newline or buffer limit.
-/// Does NOT include the newline character in the returned bytes.
-///
-/// # Arguments
-/// * `file` - Open file handle positioned at start of line
-/// * `buffer` - Pre-allocated buffer to read into
-///
-/// # Returns
-/// * `Ok((buffer, bytes_read, found_newline))` - The buffer, bytes read, and whether newline was found
-/// * `Err(io::Error)` - If read operation fails
-///
-/// # Defensive Notes
-/// - Stops at newline character (0x0A)
-/// - Stops if buffer is full
-/// - Returns found_newline flag to distinguish EOF from empty line
-fn read_single_line<'a>(
-    file: &'a mut File,
-    buffer: &'a mut [u8; 4096],
-) -> io::Result<(&'a [u8; 4096], usize, bool)> {
-    let mut bytes_read = 0usize;
-    let mut found_newline = false;
-    let mut single_byte = [0u8; 1];
-
-    // Defensive: Limit iterations
-    let mut iterations = 0;
-
-    while bytes_read < buffer.len() && iterations < limits::LINE_READ_BYTES {
-        iterations += 1;
-
-        // // Diagnostics: print bytes read so far
-        // if iterations % 10 == 0 {
-        //     println!("Iterations: {}, Bytes read: {}", iterations, bytes_read);
-        // }
-
-        // Read one byte at a time (inefficient but simple for MVP)
-        match file.read(&mut single_byte)? {
-            0 => break, // EOF reached
-            1 => {
-                if single_byte[0] == b'\n' {
-                    found_newline = true;
-                    break; // Don't include newline in buffer
-                }
-
-                buffer[bytes_read] = single_byte[0];
-                bytes_read += 1;
-            }
-            _ => {
-                // Should not happen with single byte read
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Unexpected read result",
-                ));
-            }
-        }
-    }
-    // // Diagnostics: print
-    // println!(
-    //     "Final bytes read: {}, Found newline: {}",
-    //     bytes_read, found_newline
-    // );
-
-    // Assertion: We should have stayed within bounds
-    debug_assert!(bytes_read <= buffer.len(), "Read exceeded buffer size");
-    debug_assert!(
-        iterations <= limits::LINE_READ_BYTES,
-        "Too many iterations in line read"
-    );
-
-    Ok((buffer, bytes_read, found_newline))
-}
-
 // ============================================================================
 // UTF-8 CHARACTER ANALYSIS (Buffer-based variant for line processing)
 // ============================================================================
@@ -9358,7 +11208,7 @@ fn read_single_line<'a>(
 /// # Purpose (Project Context)
 /// When building the window-to-file mapping, we process lines that have been
 /// read into memory buffers. This function analyzes UTF-8 characters from
-/// those buffers to correctly calculate byte positions and display widths.
+/// those buffers to calculate byte positions and display widths.
 ///
 /// This is a buffer-based variant of `get_utf8_char_byte_length_at_position`.
 /// While that function reads from files, this one reads from memory buffers
@@ -9525,525 +11375,98 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
     Ok(char_length)
 }
 
-/// Processes a line with horizontal offset and writes visible portion to display
-///
-/// # Purpose (Project Context)
-/// Takes a line's bytes, skips horizontal_offset characters, then writes
-/// the visible portion to the display buffer while updating WindowMapStruct.
-///
-/// This function is critical for correct cursor positioning: it creates the
-/// mapping between display columns (what the user sees) and file byte positions
-/// (where edits actually happen). Any error here causes insertion/deletion to
-/// occur at the wrong file location.
-///
-/// # Multi-byte UTF-8 Support
-/// The function must correctly handle 1-4 byte UTF-8 characters:
-/// - Skip complete characters when applying horizontal offset (not bytes)
-/// - Map display columns to correct file byte positions
-/// - Handle double-width characters (CJK, emoji) that occupy 2 display columns
-/// - Ensure each display column maps to the START byte of its character
-///
-/// # Arguments
-/// * `state` - Editor state for buffers and map
-/// * `row` - Display row index (0-indexed within window)
-/// * `col_start` - Starting column (after line number prefix)
-/// * `line_bytes` - The complete line text as bytes (entire line, not truncated)
-/// * `horizontal_offset` - Number of CHARACTERS to skip from line start (not bytes)
-/// * `max_cols` - Maximum display columns available for text
-/// * `file_line_start` - Absolute byte position where this line starts in file
-/// * `current_line_number` - Absolute file line number (0-indexed)
-///
-/// # Returns
-/// * `Ok(bytes_written)` - Number of bytes written to display buffer
-/// * `Err(LinesError)` - If buffer overflow, invalid UTF-8, or bounds violation
-///
-/// # Window Mapping Semantics
-/// Each display column maps to the file byte position of the character's FIRST byte:
-/// ```ignore
-/// File bytes:   [10='a', 11='b', 12-14='世', 15=' ']
-/// Display cols: [0='a',  1='b',  2-3='世',    4=' ']
-///                                 ^^^
-/// Column 2 maps to byte 12 (start of '世')
-/// Column 3 maps to byte 12 (still part of '世', same start byte)
-/// Column 4 maps to byte 15 (start of space after '世')
-/// ```
-///
-/// # Defensive Programming
-/// - Validates all array indices before access
-/// - Checks UTF-8 character completeness
-/// - Bounds-checks display buffer writes
-/// - Limits iterations to prevent infinite loops
-/// - Validates continuation bytes for multi-byte sequences
-///
-/// # Example
-/// ```ignore
-/// // File line: "hello世界" (hello + two 3-byte Chinese characters)
-/// // File bytes: [h e l l o 世(E4B896) 界(E7958C)]
-/// // Positions:  0 1 2 3 4 5  6  7    8  9  10
-/// //
-/// // With horizontal_offset=0, col_start=2 (after "1 "):
-/// // Display: "1 hello世界"
-/// // Columns:  0 1 2 3 4 5 6 7 8 9 10 11
-/// //              ^ h e l l o 世世界界
-/// //
-/// // Window map:
-/// // Col 2 → file byte 0 ('h')
-/// // Col 3 → file byte 1 ('e')
-/// // ...
-/// // Col 7 → file byte 5 ('世' start)
-/// // Col 8 → file byte 5 ('世' second column, same byte)
-/// // Col 9 → file byte 8 ('界' start)
-/// // Col 10 → file byte 8 ('界' second column, same byte)
-/// ```
-fn process_line_with_offset(
-    state: &mut EditorState,
-    row: usize,
-    col_start: usize,
-    line_bytes: &[u8],
-    horizontal_offset: usize,
-    max_cols: usize,
-    file_line_start: u64,
-    found_newline: bool,
-) -> Result<usize> {
-    /*
-    Note: The right scrolling and cursor display
-    must allow for one ~empty cursor location after the last character (on/before the newline)
-    so that the user can enter characters at the end of the line or add a newline.
-    One pathway may be to show newline as a UTF-8 character such as ▚ or ␊
-     */
-    let current_line_number = state.cursor.tui_row;
+// /// Determines if the current working directory is the user's home directory
+// ///
+// /// # Purpose
+// /// Used to decide whether to enter memo mode (when in home) or require
+// /// a file path (when elsewhere).
+// ///
+// /// # Returns
+// /// * `Ok(true)` - Currently in home directory
+// /// * `Ok(false)` - Not in home directory
+// /// * `Err(io::Error)` - Cannot determine home or current directory
+// ///
+// /// # Platform Support
+// /// - Linux/macOS: Uses $HOME environment variable
+// /// - Windows: Uses %USERPROFILE% environment variable
+// ///
+// /// # Errors
+// /// - Missing HOME/USERPROFILE environment variable
+// /// - Cannot determine current working directory
+// pub fn is_in_home_directory() -> io::Result<bool> {
+//     // Get current working directory
+//     let cwd = env::current_dir()
+//         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cannot determine current directory"))?;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // DEFENSIVE CHECK 1: Validate row index
-    // ═══════════════════════════════════════════════════════════════════════
-    if row >= MAX_TUI_ROWS {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "process_line_with_offset: row {} exceeds MAX_TUI_ROWS {}",
-            row, MAX_TUI_ROWS
-        );
+//     // Get home directory
+//     let home = get_home_directory()?;
 
-        return Err(LinesError::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Row exceeds maximum display rows",
-        )));
-    }
+//     // Compare canonical paths to handle symlinks
+//     let canonical_cwd = fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+//     let canonical_home = fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
 
-    // Assertion: col_start should be reasonable (after line number, typically 1-5)
-    debug_assert!(
-        col_start < 20,
-        "col_start {} seems unreasonably large",
-        col_start
-    );
+//     Ok(canonical_cwd == canonical_home)
+// }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PHASE 1: Skip horizontal_offset CHARACTERS (not bytes!)
-    // ═══════════════════════════════════════════════════════════════════════
-    // When horizontally scrolling, we skip complete characters from the line start.
-    // Must use UTF-8 character boundaries, not byte boundaries.
+// /// Gets the user's home directory path
+// ///
+// /// # Purpose
+// /// Cross-platform function to reliably find user's home directory.
+// /// Used for memo mode detection and default file location.
+// ///
+// /// # Returns
+// /// * `Ok(PathBuf)` - Absolute path to user's home directory
+// /// * `Err(io::Error)` - Cannot determine home directory
+// ///
+// /// # Platform Behavior
+// /// - Linux/macOS: Reads $HOME environment variable
+// /// - Windows: Reads %USERPROFILE% environment variable
+// ///
+// /// # Fallback Strategy
+// /// If primary variable missing, tries alternative methods before failing.
+// fn get_home_directory() -> io::Result<PathBuf> {
+//     // Try primary home variable for platform
+//     let home_result = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
 
-    let mut byte_index = 0usize;
-    let mut chars_skipped = 0usize;
-    let mut skip_iterations = 0;
+//     match home_result {
+//         Ok(home_str) => {
+//             let home_path = PathBuf::from(home_str);
 
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "process_line_with_offset: row={}, horizontal_offset={}, line_length={} bytes",
-        row,
-        horizontal_offset,
-        line_bytes.len()
-    );
+//             // Defensive: Verify the directory exists
+//             if !home_path.exists() {
+//                 return Err(io::Error::new(
+//                     io::ErrorKind::NotFound,
+//                     "Home directory does not exist",
+//                 ));
+//             }
 
-    while byte_index < line_bytes.len()
-        && chars_skipped < horizontal_offset
-        && skip_iterations < limits::HORIZONTAL_SCROLL_CHARS
-    {
-        skip_iterations += 1;
+//             // Defensive: Verify it's a directory
+//             if !home_path.is_dir() {
+//                 return Err(io::Error::new(
+//                     io::ErrorKind::InvalidInput,
+//                     "Home path is not a directory",
+//                 ));
+//             }
 
-        // Get character byte length using centralized helper
-        let char_len = match get_utf8_char_byte_length_from_buffer(line_bytes, byte_index) {
-            Ok(len) => len,
-            Err(_) => {
-                // Buffer access error - should not happen as we checked byte_index < len
-                // Defensive: treat as 1 byte and continue
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "process_line_with_offset: buffer access error at byte_index {} (treating as 1 byte)",
-                    byte_index
-                );
-                1
-            }
-        };
+//             Ok(home_path)
+//         }
+//         Err(_) => {
+//             // Fallback: try USER environment variable with common paths
+//             if let Ok(user) = env::var("USER") {
+//                 let mut possible_home = PathBuf::from("/home");
+//                 possible_home.push(&user);
+//                 if possible_home.exists() && possible_home.is_dir() {
+//                     return Ok(possible_home);
+//                 }
+//             }
 
-        #[cfg(debug_assertions)]
-        {
-            if char_len > 1 {
-                eprintln!(
-                    "  Skip phase: byte_index={}, char_len={}, first_byte=0x{:02X}",
-                    byte_index, char_len, line_bytes[byte_index]
-                );
-            }
-        }
-
-        // Skip this complete character
-        byte_index = (byte_index + char_len).min(line_bytes.len());
-        chars_skipped += 1;
-    }
-
-    // Defensive: Check we didn't hit iteration limit
-    if skip_iterations >= limits::HORIZONTAL_SCROLL_CHARS {
-        #[cfg(debug_assertions)]
-        eprintln!("process_line_with_offset: hit iteration limit during horizontal skip phase");
-
-        return Err(LinesError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "Maximum iterations exceeded in horizontal skip",
-        )));
-    }
-
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "  After skip: byte_index={}, chars_skipped={}",
-        byte_index, chars_skipped
-    );
-
-    // Assertion: We should have skipped at most the requested amount
-    debug_assert!(
-        chars_skipped <= horizontal_offset,
-        "Skipped {} characters but only {} requested",
-        chars_skipped,
-        horizontal_offset
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // PHASE 2: Write visible characters to display buffer and build window map
-    // ═══════════════════════════════════════════════════════════════════════
-
-    let mut display_col = col_start;
-    let mut bytes_written = 0usize;
-    let mut write_iterations = 0;
-
-    // Visual size of TUI width -pixel level-
-    let mut visual_col = col_start; // Visual TUI column consumed
-    let visual_col_limit = col_start + max_cols; // Visual limit
-
-    // Reserve space to prevent double-width characters from overflowing
-    // A double-width char starting at max_cols-1 would extend to max_cols+1
-    let display_col_limit = col_start + max_cols;
-
-    while byte_index < line_bytes.len()
-
-        // can add EOL but last char clipped off: "INSERT 4:2 long_lines.txt @345"
-        // && display_col < display_col_limit - 1 // Reserve 1-2 cols for double-width
-
-        /*
-        Can see last character...but EOL cursor is now not a position in file @n/a
-        3 7890123456789012345678901234567890123456789012345678901234567890123456789B█
-        NORMAL 3:130 long_lines.txt @n/a
-        */
-        && display_col < display_col_limit // TEST
-
-        && write_iterations < limits::HORIZONTAL_SCROLL_CHARS
-    {
-        write_iterations += 1;
-
-        // Get character byte length using centralized helper
-        let char_len = match get_utf8_char_byte_length_from_buffer(line_bytes, byte_index) {
-            Ok(len) => len,
-            Err(_) => {
-                // Buffer access error - skip this position
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "process_line_with_offset: buffer access error at byte_index {} in write phase",
-                    byte_index
-                );
-                byte_index += 1;
-                continue;
-            }
-        };
-
-        // Check if complete character is available
-        if byte_index + char_len > line_bytes.len() {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "process_line_with_offset: incomplete character at byte_index {} (need {} bytes, only {} remaining)",
-                byte_index,
-                char_len,
-                line_bytes.len() - byte_index
-            );
-            break; // Incomplete character at end of line
-        }
-
-        // Get the character bytes
-        let char_bytes = &line_bytes[byte_index..byte_index + char_len];
-
-        // Assertion: Character bytes should be exactly char_len
-        debug_assert_eq!(
-            char_bytes.len(),
-            char_len,
-            "Character byte slice length mismatch: expected {}, got {}",
-            char_len,
-            char_bytes.len()
-        );
-
-        #[cfg(debug_assertions)]
-        {
-            if char_len > 1 {
-                eprintln!(
-                    "  Write phase: byte_index={}, char_len={}, bytes={:02X?}",
-                    byte_index, char_len, char_bytes
-                );
-            }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════
-        // DISPLAY WIDTH: Determine how many columns this character occupies
-        // ═══════════════════════════════════════════════════════════════════
-        let display_width = if char_len == 1 {
-            1 // ASCII is always single-width
-        } else {
-            // Parse multi-byte character to check if double-width (CJK, emoji, etc.)
-            match std::str::from_utf8(char_bytes) {
-                Ok(s) => {
-                    if let Some(ch) = s.chars().next() {
-                        if double_width::is_double_width(ch) {
-                            2
-                        } else {
-                            1
-                        }
-                    } else {
-                        1 // Default to single-width
-                    }
-                }
-                Err(_) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "  Invalid UTF-8 sequence at byte_index {}: {:02X?}",
-                        byte_index, char_bytes
-                    );
-                    1 // Invalid UTF-8, treat as single-width
-                }
-            }
-        };
-
-        // Check if character fits VISUALLY
-        if visual_col + display_width > visual_col_limit {
-            break; // Would overflow visually
-        }
-
-        // Check if character fits in remaining display space
-        if display_col + display_width > display_col_limit {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "  Character would exceed display limit: display_col={}, display_width={}, limit={}",
-                display_col, display_width, display_col_limit
-            );
-            break; // Character would exceed display width
-        }
-
-        // ═══════════════════════════════════════════════════════════════════
-        // WRITE: Copy character bytes to display buffer
-        // ═══════════════════════════════════════════════════════════════════
-        let write_start = col_start + bytes_written;
-        let write_end = write_start + char_len;
-
-        if write_end <= MAX_DISPLAY_BUFFER_BYTES {
-            // Copy bytes to display buffer
-            for i in 0..char_len {
-                state.utf8_txt_display_buffers[row][write_start + i] = char_bytes[i];
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // WINDOW MAP: Create file position mapping for this character
-            // ═══════════════════════════════════════════════════════════════
-            //
-            // bytes, pixels, characters, are not the same.
-            //
-            // Each character maps to ONE cursor position, regardless of display width.
-            //
-            // Single-width 'a': 1 display column → 1 cursor position
-            // Double-width '花': 1 display columns → 1 cursor position (not 2!)
-            //
-            let file_pos = FilePosition {
-                byte_offset_linear_file_absolute_position: file_line_start + byte_index as u64,
-                line_number: current_line_number, // ← FIXED: use actual line number
-                byte_in_line: byte_index,
-            };
-            #[cfg(debug_assertions)]
-            {
-                if display_width == 2 {
-                    eprintln!(
-                        "  Double-width char at display_col={} → byte={} (width={}, ONE cursor position)",
-                        display_col,
-                        file_line_start + byte_index as u64,
-                        display_width
-                    );
-                }
-            }
-
-            // Map this one cursor position to be kanji start byte
-            state.set_file_position(row, display_col, Some(file_pos))?;
-
-            bytes_written += char_len;
-
-            // TODO, which is correct? kanji long line testing?
-            display_col += 1 // display_width; // Visual advance 1 TUI char column
-        // display_col += display_width; // Advance display_col by VISUAL WIDTH, not by '1'
-        } else {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "  Buffer full: write_end={} exceeds MAX_DISPLAY_BUFFER_BYTES={}",
-                write_end, MAX_DISPLAY_BUFFER_BYTES
-            );
-            break; // Buffer full
-        }
-
-        byte_index += char_len;
-        visual_col += display_width; // Advance visual position by 1 or 2
-    }
-
-    // Defensive: Check we didn't hit iteration limit
-    if write_iterations >= limits::HORIZONTAL_SCROLL_CHARS {
-        #[cfg(debug_assertions)]
-        eprintln!("process_line_with_offset: hit iteration limit during write phase");
-
-        return Err(LinesError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "Maximum iterations exceeded in line write",
-        )));
-    }
-
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "  After write: byte_index={}, bytes_written={}, display_col={}",
-        byte_index, bytes_written, display_col
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // ASSERTION CHECKS: Verify buffer bounds were respected
-    // ═══════════════════════════════════════════════════════════════════════
-
-    // Debug-Assert: Development/testing panic
-    debug_assert!(
-        bytes_written <= MAX_DISPLAY_BUFFER_BYTES,
-        "Wrote {} bytes but buffer is only {} bytes",
-        bytes_written,
-        MAX_DISPLAY_BUFFER_BYTES
-    );
-
-    // Test-Assert: Cargo test panic
-    #[cfg(test)]
-    assert!(
-        bytes_written <= MAX_DISPLAY_BUFFER_BYTES,
-        "Wrote {} bytes but buffer is only {} bytes",
-        bytes_written,
-        MAX_DISPLAY_BUFFER_BYTES
-    );
-
-    // Production: Catch and handle without panic
-    if bytes_written > MAX_DISPLAY_BUFFER_BYTES {
-        return Err(LinesError::GeneralAssertionCatchViolation(
-            "bytes_written > MAX_DISPLAY_BUFFER_BYTES".into(),
-        ));
-    }
-
-    // Debug-Assert: Display column check
-    debug_assert!(
-        display_col <= display_col_limit,
-        "Display column {} exceeds limit {}",
-        display_col,
-        display_col_limit
-    );
-
-    // Test-Assert: Display column check
-    #[cfg(test)]
-    assert!(
-        display_col <= display_col_limit,
-        "Display column {} exceeds limit {}",
-        display_col,
-        display_col_limit
-    );
-
-    // Production: Catch and handle
-    if display_col > display_col_limit {
-        return Err(LinesError::GeneralAssertionCatchViolation(
-            "display_col > display_col_limit".into(),
-        ));
-    }
-
-    // TEST
-    // ═══════════════════════════════════════════════════════════════════════
-    // NEWLINE DISPLAY: Show newline as visible character
-    // ═══════════════════════════════════════════════════════════════════════
-    // Add this NEW section here, after the write loop ends
-
-    // Check if this line had a newline (from build_windowmap_nowrap's found_newline)
-    // You'll need to pass this as a parameter to process_line_with_offset
-    // if found_newline && display_col < display_col_limit {
-    if found_newline && byte_index >= line_bytes.len() && display_col < display_col_limit {
-        // Choose your newline display character
-        let newline_char = '␤'; // '¶'; // or '↵' or '␤' or whatever you prefer
-        let newline_bytes = newline_char.to_string();
-        let newline_byte_len = newline_bytes.len();
-
-        let write_start = col_start + bytes_written;
-        let write_end = write_start + newline_byte_len;
-
-        if write_end <= MAX_DISPLAY_BUFFER_BYTES {
-            // Write the newline character to display
-            for (i, byte) in newline_bytes.as_bytes().iter().enumerate() {
-                state.utf8_txt_display_buffers[row][write_start + i] = *byte;
-            }
-
-            // Map this display position to the NEWLINE byte in file
-            let newline_file_pos = FilePosition {
-                byte_offset_linear_file_absolute_position: file_line_start + byte_index as u64,
-                line_number: current_line_number,
-                byte_in_line: byte_index,
-            };
-
-            state.set_file_position(row, display_col, Some(newline_file_pos))?;
-
-            bytes_written += newline_byte_len;
-            display_col += 1; // Newline character occupies 1 column
-            byte_index += 1; // The actual newline byte in file
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // END-OF-LINE MAPPING: Map position after last visible character
-    // ═══════════════════════════════════════════════════════════════════════
-    // This allows cursor to be positioned at "end of visible text" (not EOL).
-    // The byte_index now points to the next byte after the last displayed character.
-
-    let eol_display_col = display_col; // Column right after last char
-
-    // TODO showing newline?
-    // // Write visible newline character (e.g., ␊ or ▚)
-    // let newline_char = "␊".as_bytes(); // or whatever your chosen glyph is
-    // state.utf8_txt_display_buffers[row][eol_display_col] = b'·'.as_bytes();
-    // state.utf8_txt_display_buffers[row][eol_display_col] = b'`'; // or b'$' or b'|'
-    // // note: this displays not at the newline but before it
-
-    if eol_display_col < display_col_limit {
-        let eol_file_pos = FilePosition {
-            byte_offset_linear_file_absolute_position: file_line_start + byte_index as u64,
-            line_number: current_line_number,
-            byte_in_line: byte_index,
-        };
-
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "  EOL mapping: display_col={} → file_byte={} (end of visible text)",
-            eol_display_col,
-            file_line_start + byte_index as u64
-        );
-
-        state.set_file_position(row, eol_display_col, Some(eol_file_pos))?;
-    }
-
-    Ok(bytes_written)
-}
+//             Err(io::Error::new(
+//                 io::ErrorKind::NotFound,
+//                 "Cannot determine home directory: neither HOME nor USERPROFILE set",
+//             ))
+//         }
+//     }
+// }
 
 // Stretech goal TODO: try to make non-heap stdin read...
 /// Prompts user for a filename when a directory path is provided
@@ -10182,7 +11605,20 @@ pub enum Command {
 
     EnterPastyClipboardMode, // pasty: clipboard et al
     EnterHexEditMode,        // Hex Edith
-    EnterRawMode,
+
+    /// Enter keystroke-input mode (the `ki` command).
+    ///
+    /// # Project Context
+    /// Switches the editor into `EditorMode::KeystrokeInputMode`, where input is
+    /// read byte-by-byte from a Linux termios raw terminal. This is the only
+    /// command that leads to raw-terminal input in the editor.
+    ///
+    /// # Why a Separate Command from `EnterInsertMode`
+    /// Insert mode uses cooked/canonical StdinLock (Enter-terminated lines).
+    /// Keystroke-input mode uses a transient `RawTerminal`. They are different
+    /// input pipelines, so they get different mode variants and different
+    /// commands. The `ki` command is distinct from the `i` command on purpose.
+    EnterKeystrokeInputMode,
 
     // Text editing
     InsertNewline(char), // Insert single \n at cursor's file-position
@@ -10231,6 +11667,7 @@ pub enum Command {
     // No operation
     None,
 }
+
 /// Cleans up the specific draft copy file used in this editing session
 ///
 /// # Purpose
@@ -10411,135 +11848,152 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         // Move Left
         // =========
         Command::MoveLeft(count) => {
-            // Vim-like behavior: move cursor left, scroll window if at edge
+            // Vim-like behavior: move the cursor left one character at a time;
+            // scroll the window or wrap to the previous line at the edges.
+            //
+            // # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+            // Edge math is in #5 VISUAL cells: `cursor.tui_visual_col` retreats by
+            // the crossed character's #5 visual width (1 or 2 cells). The line's
+            // first content cell is at `line_num_width`; cells
+            // [0, line_num_width) are the line-number prefix. Horizontal scroll
+            // adjusts `tui_window_horizontal_utf8txt_line_char_offset` (#4, in-line
+            // characters). The resolved file byte (#1) is always derived via
+            // get_row_col_file_position; this command stores no parallel counter.
+
             let mut remaining_moves = count;
-            let mut needs_rebuild = false;
 
             // Defensive: Limit iterations to prevent infinite loops
             let mut iterations = 0;
 
-            // iterate through # of steps user requested
+            // iterate through the number of steps the user requested
             while remaining_moves > 0 && iterations < limits::CURSOR_MOVEMENT_STEPS {
-                /*
-                I discovered this somewhat by accident:
-                This subtraction 'overflow' catch seems to work
-                as the zero-index finder and safety mechanism all in one.
-                I am not a fan of having a failure be a trigger...
-                but for MVP it looks to work.
-                */
-                // safe subtraction with error handling
-                if let Some(new_position) = lines_editor_state
-                    .in_row_abs_horizontal_0_index_cursor_position
-                    .checked_sub(1)
-                // increment, not full 'count'
-                {
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = new_position;
-                } else {
-                    // maybe edge case / glitch
-                    // cursor out of frame?
-                    execute_command(lines_editor_state, Command::GotoLineStart)?;
+                iterations += 1;
 
-                    // Note: this is rarely if ever entered.
-                    // Reset.
-                    // Don't try to go left again-again!
-                    return Ok(true);
-                }
-
+                // Line-number prefix width in #5 VISUAL cells for THIS row.
+                // (ASCII prefix, so cells == characters.) Used by both the
+                // defensive recovery guard and the movement cases below. Computed
+                // once per iteration because a wrap (Case 3) can change the row.
                 let line_num_width = calculate_line_number_width(
                     lines_editor_state.line_count_at_top_of_window,
-                    lines_editor_state.line_count_at_top_of_window,
+                    lines_editor_state.cursor.tui_row,
                     lines_editor_state.effective_rows,
                 );
 
-                // =============================
-                // Move Left to Above End of Row
-                // =============================
-                // If at top of TUI but NOT top of doc
-                // move up to end of line
-                if let Some(_) = lines_editor_state // guard against overflow substraction
-                    .cursor
-                    .tui_col
-                    .checked_sub(line_num_width)
-                {
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "lines_editor_state.cursor.tui_col - line_num_width -> {}",
-                        lines_editor_state.cursor.tui_col - line_num_width
-                    );
-
-                    if (lines_editor_state.cursor.tui_row == 0)
-                        && ((lines_editor_state.cursor.tui_col - line_num_width) == 0)
-                        && !(lines_editor_state.line_count_at_top_of_window == 0)
-                        && (lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset == 0)
-                    {
-                        // move up, move to end of line.
-                        _ = execute_command(lines_editor_state, Command::MoveUp(1))?;
-                        _ = execute_command(lines_editor_state, Command::GotoLineEnd)?;
-                    }
-                    build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
+                // ─────────────────────────────────────────────────────────────
+                // DEFENSIVE RECOVERY — cursor drifted INTO the line-number prefix
+                //
+                // COORDINATE SPACES IN PLAY (see the module "Coordinate Spaces"
+                // reference; confusing these is the bug class this guard belongs
+                // to):
+                //   • cursor.tui_visual_col — #5 VISUAL cell column of the cursor.
+                //       Counts terminal CELLS from the row's left edge, INCLUDING
+                //       the line-number prefix; double-width chars (CJK, emoji)
+                //       are 2 cells. SOURCE OF TRUTH for horizontal position.
+                //   • line_num_width — width, in #5 CELLS, of the line-number
+                //       prefix (e.g. "166 " = 4 cells; ASCII, so cells == chars).
+                //       The prefix occupies visual columns [0, line_num_width);
+                //       the first CONTENT cell is at column line_num_width.
+                //   • horizontal scroll (#4) — deliberately NOT consulted here:
+                //       the prefix boundary is independent of horizontal scroll.
+                //
+                // WHAT THIS DOES AND WHY:
+                //   The text cursor must never sit INSIDE the prefix (visual
+                //   columns [0, line_num_width)). The movement cases below never
+                //   produce such a position, so this guard only catches an
+                //   out-of-frame glitch present on ENTRY. If tui_visual_col is
+                //   STRICTLY LESS than the prefix width, abandon the leftward step
+                //   and jump to a known-good position (line start) via
+                //   GotoLineStart, then return.
+                //
+                //   THE STRICT "<" IS INTENTIONAL: at exactly the content-left
+                //   edge (tui_visual_col == line_num_width) the cursor is on the
+                //   first content cell — a LEGAL position — so this guard must NOT
+                //   fire there; Case 2 / Case 3 below own that edge.
+                // ─────────────────────────────────────────────────────────────
+                if lines_editor_state.cursor.tui_visual_col < line_num_width {
+                    execute_command(lines_editor_state, Command::GotoLineStart)?;
+                    return Ok(true);
                 }
 
-                // =========================
-                // position state inspection
-                // =========================
+                // position state inspection (debug builds only): prints the four
+                // sources of truth + derived values, each tagged by coordinate
+                // space (see debug_inspect_position).
                 #[cfg(debug_assertions)]
-                let this_row = lines_editor_state.cursor.tui_row;
-                #[cfg(debug_assertions)]
-                let this_col = lines_editor_state.cursor.tui_col;
+                lines_editor_state.debug_inspect_position("execute_command() Command::MoveLeft");
 
-                #[cfg(debug_assertions)]
-                {
-                    println!(
-                        "MoveLeft lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                        this_row, this_col,
-                    );
-                    println!(
-                        "\nMoveLeft lines_editor_state.get_row_col_file_position -> {:?}",
-                        lines_editor_state.get_row_col_file_position(this_row, this_col)
-                    );
-                    println!(
-                        "\nMoveLeft lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                        lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                    );
-                    println!(
-                        "\nMoveLeft lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                        lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                    );
-                    println!(
-                        "\nMoveLeft lines_editor_state.cursor.tui_row -> {:?}",
-                        lines_editor_state.cursor.tui_row
-                    );
-                    println!(
-                        "\nMoveLeft windowmap_line_byte_start_end_position_pairs -> {:?}",
-                        lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                    );
+                // ─────────────────────────────────────────────────────────────
+                // MOVE LEFT — cross ONE character (Option A: by #5 VISUAL width)
+                //
+                // COORDINATE SPACES IN PLAY (see the module "Coordinate Spaces"
+                // reference):
+                //   • cursor.tui_visual_col (#5 VISUAL cell column) — source of
+                //       truth for horizontal position. First content cell is at
+                //       `line_num_width`.
+                //   • left_width (#5 VISUAL cells) — width (1 or 2) of the
+                //       character immediately to the LEFT of the cursor, derived
+                //       from the file by char_to_left_visual_width().
+                //   • tui_window_horizontal_utf8txt_line_char_offset (#4 in-line
+                //       CHARACTER index) — the horizontal scroll; decreasing it by
+                //       one reveals one more character on the left.
+                //
+                // Three cases, evaluated in order:
+                //   Case 1 — the character to the left is fully within the visible
+                //     content (its start cell >= line_num_width, i.e.
+                //     tui_visual_col >= line_num_width + left_width): cross it by
+                //     retreating tui_visual_col by its VISUAL width. ONE character
+                //     per step (a kanji retreats by 2 cells, not 1). No rebuild:
+                //     no scroll and no content change.
+                //   Case 2 — the cursor is at the content-left edge but the line
+                //     is horizontally scrolled (offset > 0): scroll left by ONE
+                //     character. The cursor stays pinned at the content edge
+                //     (column line_num_width), which ALWAYS maps to the new
+                //     leftmost character — so left scrolling has NO frameshift
+                //     problem (unlike right). Rebuild IMMEDIATELY so the next
+                //     iteration's lookups read a fresh windowmap cache.
+                //   Case 3 — the cursor is at the absolute line start (content
+                //     edge AND offset == 0): wrap to the END of the previous line
+                //     if one exists (MoveUp + GotoLineEnd, which rebuilds itself);
+                //     otherwise stop (start of file).
+                // ─────────────────────────────────────────────────────────────
+                let left_width = lines_editor_state.char_to_left_visual_width()?;
+
+                if lines_editor_state.cursor.tui_visual_col >= line_num_width + left_width {
+                    // Case 1: cross the in-view character to the left.
+                    lines_editor_state.cursor.tui_visual_col -= left_width;
+                    remaining_moves -= 1;
+
+                    // // extra inspection
+                    // #[cfg(debug_assertions)]
                     // println!(
-                    //     "\nMoveRight lines_editor_state.is_next_byte_newline() -> {:?}",
-                    //     lines_editor_state.is_next_byte_newline()
+                    //     "MoveLeft cross: left_width={}, new tui_visual_col={}",
+                    //     left_width, lines_editor_state.cursor.tui_visual_col
                     // );
-                }
-
-                iterations += 1;
-
-                // =============
-                // Window Scroll
-                // =============
-                if lines_editor_state.cursor.tui_col > 0 {
-                    // Cursor can move left within visible window
-                    let cursor_moves = remaining_moves.min(lines_editor_state.cursor.tui_col);
-                    lines_editor_state.cursor.tui_col -= cursor_moves;
-                    remaining_moves -= cursor_moves;
                 } else if lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset > 0 {
-                    // Cursor at left edge, scroll window left
-                    let scroll_amount = remaining_moves
-                        .min(lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset);
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -=
-                        scroll_amount;
-                    remaining_moves -= scroll_amount;
-                    needs_rebuild = true;
+                    // Case 2: at content-left edge, scroll left by one character.
+                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -= 1;
+                    // Pin the cursor at the content edge (normally already there);
+                    // the newly revealed leftmost character snaps to this cell.
+                    lines_editor_state.cursor.tui_visual_col = line_num_width;
+                    remaining_moves -= 1;
+
+                    // Rebuild NOW so char_to_left_visual_width / the guard read a
+                    // windowmap cache that reflects the new horizontal offset.
+                    build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
                 } else {
-                    // At absolute left edge - cannot move further
-                    break;
+                    // Case 3: absolute line start (content edge, no scroll).
+                    // Wrap to the end of the previous line, if any.
+                    let current_file_line = lines_editor_state.line_count_at_top_of_window
+                        + lines_editor_state.cursor.tui_row;
+                    if current_file_line > 0 {
+                        // MoveUp scrolls/rebuilds as needed; GotoLineEnd positions
+                        // at the previous line's end and rebuilds the window.
+                        execute_command(lines_editor_state, Command::MoveUp(1))?;
+                        execute_command(lines_editor_state, Command::GotoLineEnd)?;
+                        remaining_moves -= 1;
+                    } else {
+                        // At the very start of the file: cannot move further left.
+                        break;
+                    }
                 }
             }
 
@@ -10551,29 +12005,41 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 )));
             }
 
-            // Only rebuild if we scrolled the window
-            if needs_rebuild {
-                // Rebuild window to show the change from read-copy file
-                build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
-            }
-
             Ok(true)
         }
 
-        // ==========
-        // Move Right v7
-        // ==========
-        /*
-        We should be able to track where the end of the line is
-        if only by a next-newline look-ahead.
-        and include an end-of-line space before going to the next line.
-        one option might be, showing newlines as a space or other characer
-        on the TUI.
-
-
-        */
+        // =============
+        // Move Right v8
+        // =============
         Command::MoveRight(count) => {
-            // Vim-like behavior: move cursor right, scroll window if at edge
+            // Move the cursor right one character at a time (Vim-like), scrolling
+            // the line or jumping to the next line at the edges.
+            //
+            // # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+            // Horizontal position is `cursor.tui_visual_col` (#5 VISUAL cell
+            // column). Each step crosses ONE character, advancing tui_visual_col
+            // by that character's #5 visual width (1 cell normal, 2 for
+            // double-width). The right limit is `effective_cols` (#5). Horizontal
+            // scroll adjusts `tui_window_horizontal_utf8txt_line_char_offset`
+            // (#4, in-line characters). The cursor's file byte (#1) is always
+            // derived via get_row_col_file_position — no stored counter.
+            //
+            // # Three cases per step
+            //   1. NEWLINE GLYPH: if the cursor is on the line's newline cell, the
+            //      next right jumps to the START of the following line
+            //      (GotoLineStart + MoveDown).
+            //   2. IN-VIEW ADVANCE: if the crossed character fits before the right
+            //      edge (tui_visual_col + width <= right_edge), advance
+            //      tui_visual_col by its #5 visual width. No scroll, no rebuild.
+            //   3. EDGE SCROLL: otherwise the cursor is riding the right edge.
+            //      Scroll the line left by one character (offset += 1) and KEEP
+            //      tui_visual_col pinned at the edge. This is free of
+            //      "frame-shift" — because both the lookup (#1 derivation) and the
+            //      renderer treat tui_visual_col as a VISUAL column, so the pinned
+            //      edge cell snaps to whichever character now occupies it. A
+            //      double-width character therefore takes TWO edge steps to appear:
+            //      one to reach the edge, one to make room — by design, so the
+            //      glyph visibly slides into view.
 
             let mut remaining_moves = count;
             let mut needs_rebuild = false;
@@ -10581,63 +12047,18 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Defensive: Limit iterations
             let mut iterations = 0;
 
-            // update for each MoveRight
-            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position += count;
-
-            // =========================
-            // position state inspection
-            // =========================
+            // position state inspection (debug builds only): prints the four
+            // sources of truth + derived values, each tagged by coordinate space.
             #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
-            #[cfg(debug_assertions)]
-            {
-                println!(
-                    "MoveRight lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nMoveRight lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nMoveRight lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nMoveRight lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nMoveRight lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nMoveRight windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-                // println!(
-                //     "\nMoveRight lines_editor_state.is_next_byte_newline() -> {:?}",
-                //     lines_editor_state.is_next_byte_newline()
-                // );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::MoveRight");
 
             while remaining_moves > 0 && iterations < limits::CURSOR_MOVEMENT_STEPS {
                 iterations += 1;
 
-                // ===============================================
-                // First Check if Next Move Right should Jump Down
-                // ===============================================
-
+                // Case 1 — on the newline glyph: jump to the next line's start.
                 let cursor_is_on_newline = lines_editor_state.is_current_cursor_on_newline()?;
-
-                // check if you are currently on a newline
                 if cursor_is_on_newline {
-                    // === Jump Down ===
-                    // Move to start of current line
                     execute_command(lines_editor_state, Command::GotoLineStart)?;
-                    // Move down one line
                     execute_command(lines_editor_state, Command::MoveDown(1))?;
 
                     remaining_moves -= 1;
@@ -10645,33 +12066,43 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     continue;
                 }
 
-                // At edge of TUI?
-                // Calculate space available before right TUI edge
-                // Reserve 1 column to prevent display overflow
+                // #5 visual width (1 or 2 cells) of the character being crossed.
+                let char_width = lines_editor_state.cursor_char_visual_width()?;
+
+                // Reserve one cell at the right so a double-width character cannot
+                // overflow the edge. (right_edge is in #5 VISUAL cells.)
                 let right_edge = lines_editor_state.effective_cols.saturating_sub(1);
 
-                if lines_editor_state.cursor.tui_col < (right_edge) {
-                    // Cursor can move right within visible window
-                    let space_available = right_edge - lines_editor_state.cursor.tui_col;
-                    let cursor_moves = remaining_moves.min(space_available);
+                if lines_editor_state.cursor.tui_visual_col + char_width <= right_edge {
+                    // Case 2 — in-view advance by the crossed char's visual width.
+                    lines_editor_state.cursor.tui_visual_col += char_width;
+                    remaining_moves -= 1;
 
-                    lines_editor_state.cursor.tui_col += cursor_moves;
-
-                    // Inspection in debug build only
                     #[cfg(debug_assertions)]
                     println!(
-                        "Inspection cursor_moves-> {:?}, col:{:?}",
-                        &cursor_moves, lines_editor_state.cursor.tui_col
+                        "MoveRight advance: char_width={}, new tui_visual_col={}",
+                        char_width, lines_editor_state.cursor.tui_visual_col
                     );
-
-                    remaining_moves -= cursor_moves;
                 } else {
-                    // Edge Scroll Right
+                    // Case 3 — edge scroll. Scroll the line left one character and
+                    // leave tui_visual_col pinned at the edge; the visual lookup /
+                    // renderer keep the cursor on the correct character (see the
+                    // doc-block above). This is the proven, simple model — NOT a
+                    // placeholder.
+                    //
+                    // NOTE (polish item, not a bug): the horizontal-scroll cap
+                    // below reuses limits::CURSOR_MOVEMENT_STEPS, which is a
+                    // per-command iteration bound. It happens to bound how far a
+                    // line can scroll right; a dedicated limit (or a line-length
+                    // bound) would be clearer. Left as-is for now.
                     if lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
                         < limits::CURSOR_MOVEMENT_STEPS
                     {
                         let max_scroll = limits::CURSOR_MOVEMENT_STEPS
                             - lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset;
+                        // For a single right press scroll_amount == 1. For a count
+                        // move it scrolls up to that many characters at once; the
+                        // edge cell then resolves to the resulting character.
                         let scroll_amount = remaining_moves.min(max_scroll);
 
                         lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset +=
@@ -10680,7 +12111,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                         remaining_moves -= scroll_amount;
                         needs_rebuild = true;
                     } else {
-                        // Hit maximum horizontal scroll
+                        // Hit the horizontal-scroll cap — cannot scroll further.
                         break;
                     }
                 }
@@ -10694,9 +12125,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 )));
             }
 
-            // Only rebuild if we scrolled the window
+            // Rebuild only if we scrolled (Case 3) or jumped lines (Case 1).
             if needs_rebuild {
-                // Rebuild window to show the change from read-copy file
                 build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             }
 
@@ -10739,38 +12169,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =========================
             // position state inspection
             // =========================
-            #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
 
             #[cfg(debug_assertions)]
-            {
-                println!(
-                    "MoveDown lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nMoveDown lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nMoveDown lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nMoveDown lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nMoveDown lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nMoveDown windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::MoveDown");
+
             let mut remaining_moves = count;
             let mut needs_rebuild = false;
 
@@ -10817,10 +12219,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
                     // if col is in the number-zone to the left of the text
                     // bump it over
-                    if lines_editor_state.cursor.tui_col < line_num_width {
-                        lines_editor_state.cursor.tui_col = line_num_width; // Skip over line number displayfull_lines_editor
-                        lines_editor_state.in_row_abs_horizontal_0_index_cursor_position =
-                            line_num_width;
+                    if lines_editor_state.cursor.tui_visual_col < line_num_width {
+                        lines_editor_state.cursor.tui_visual_col = line_num_width; // Skip over line number displayfull_lines_editor
                         lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
                         build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
                     }
@@ -10899,73 +12299,19 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             3. Horizontal offset.
             4. Number of TUI horizontal character-spaces (window size)
             5. Number of TUI vertical character-spaces (window size)
-            6. width of line-number display, or how many character-spaces plus padding the line number takes up in the TUI, e.g. ' 99 ' takes up four single-width characters (not needed for simple functionality)
-
+            6. width of line-number display, or how many character-spaces
+            plus padding the line number takes up in the TUI,
+            e.g. ' 99 ' takes up four single-width characters
+            (not needed for simple functionality)
             */
-
-            /*
-            note for backup: position available...
-            but abs state field seems to be working (mostly)
-             */
-            // // ========================================================================
-            // // STEP 1: Get file position from cursor (defensive)
-            // // ========================================================================
-
-            // let current_file_pos = match lines_editor_state
-            //     .get_row_col_file_position(lines_editor_state.cursor.tui_row, lines_editor_state.cursor.tui_col)
-            // {
-            //     Ok(Some(pos)) => pos,
-            //     Ok(None) => {
-            //         // handling None case
-            //         let _ = lines_editor_state.set_info_bar_message("gh cursor position unavailable");
-            //         return Ok(());
-            //     }
-            //     Err(e) => {
-            //         let _ = lines_editor_state.set_info_bar_message("cannot get cursor position");
-            //         log_error(
-            //             &format!("goto_line_start window_map error: {}", e),
-            //             Some("goto_line_start"),
-            //         );
-            //         return Ok(());
-            //     }
-            // };
-            // let line_number_for_display = current_file_pos.line_number + 1; // Convert to 1-indexed
 
             // =========================
             // position state inspection
             // =========================
-            #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
 
             #[cfg(debug_assertions)]
-            {
-                println!(
-                    "MoveUp lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nMoveUp lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nMoveUp lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nMoveUp lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nMoveUp lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nMoveUp windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::MoveUp");
+
             let mut remaining_moves = count;
             let mut needs_rebuild = false;
 
@@ -11014,9 +12360,39 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             );
 
             // if position.. is <
-            if lines_editor_state.in_row_abs_horizontal_0_index_cursor_position <= line_num_width {
-                lines_editor_state.cursor.tui_col = line_num_width;
-                lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
+            // ─────────────────────────────────────────────────────────────────
+            // POST-MOVE COLUMN SNAP — keep the cursor on text after moving up
+            //
+            // COORDINATE SPACES IN PLAY (see the project "Coordinate Spaces"
+            // reference; this editor juggles several distinct location types and
+            // they are NOT interchangeable):
+            //   • cursor.tui_visual_col — VISUAL cell column of the cursor within
+            //       the display row. It counts terminal CELLS from the row's left
+            //       edge and INCLUDES the line-number prefix. ASCII/normal chars
+            //       occupy 1 cell; double-width characters (CJK, emoji) occupy 2
+            //       cells. Under the project's "Option A" decision this is the
+            //       SOURCE OF TRUTH for horizontal cursor position — not a derived
+            //       or parallel counter.
+            //   • line_num_width — the width, in CELLS, of the line-number prefix
+            //       (e.g. "166 " = 4 cells). The prefix is ASCII digits + a space,
+            //       so its cell width equals its character width. Consequently the
+            //       prefix occupies visual columns [0, line_num_width), and the
+            //       line's FIRST CONTENT cell is at visual column line_num_width.
+            //   • tui_window_horizontal_utf8txt_line_char_offset — the horizontal
+            //       scroll, measured in in-line CHARACTERS (a character index),
+            //       NOT in cells. It is reset to 0 here so the snapped line-start
+            //       is shown unscrolled.
+            //
+            // WHAT THIS DOES AND WHY:
+            //   MoveUp changes cursor.tui_row but leaves tui_visual_col unchanged.
+            //   If, just before moving up, the cursor was at or to the LEFT of the
+            //   first content cell (tui_visual_col <= line_num_width — i.e. inside
+            //   the line-number prefix, or exactly at line start), re-pin it to the
+            //   first content cell so the text cursor never lands "inside the line
+            //   number". The condition reads the visual column directly.
+            // ─────────────────────────────────────────────────────────────────
+            if lines_editor_state.cursor.tui_visual_col <= line_num_width {
+                lines_editor_state.cursor.tui_visual_col = line_num_width;
                 lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
             }
 
@@ -11096,7 +12472,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Get byte at current cursor position
                     let current_byte = match lines_editor_state.get_row_col_file_position(
                         lines_editor_state.cursor.tui_row,
-                        lines_editor_state.cursor.tui_col,
+                        lines_editor_state.cursor.tui_visual_col,
                     ) {
                         Ok(Some(pos)) => {
                             let mut byte_buf = [0u8; 1];
@@ -11157,7 +12533,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Get current cursor position in file
                     let current_pos = match lines_editor_state.get_row_col_file_position(
                         lines_editor_state.cursor.tui_row,
-                        lines_editor_state.cursor.tui_col,
+                        lines_editor_state.cursor.tui_visual_col,
                     ) {
                         Ok(Some(pos)) => pos.byte_offset_linear_file_absolute_position,
                         Ok(None) => break, // Invalid position, stop here
@@ -11242,7 +12618,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // Get current cursor position in file
                     let current_pos = match lines_editor_state.get_row_col_file_position(
                         lines_editor_state.cursor.tui_row,
-                        lines_editor_state.cursor.tui_col,
+                        lines_editor_state.cursor.tui_visual_col,
                     ) {
                         Ok(Some(pos)) => pos.byte_offset_linear_file_absolute_position,
                         Ok(None) => break, // Invalid position, stop here
@@ -11314,45 +12690,9 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =========================
             // position state inspection
             // =========================
-            // reset to first real position each new go-to-linw
-            let line_num_width = calculate_line_number_width(
-                lines_editor_state.line_count_at_top_of_window,
-                lines_editor_state.cursor.tui_row,
-                lines_editor_state.effective_rows,
-            );
-            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
-            #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
 
             #[cfg(debug_assertions)]
-            {
-                println!(
-                    "GotoLine lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nGotoLine lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nGotoLine lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nGotoLine lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nGotoLine lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nGotoLine windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::GotoLine");
 
             // Seek to target line and update window position
             match seek_to_line_number(&mut File::open(&base_edit_filepath)?, target_line) {
@@ -11360,7 +12700,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     lines_editor_state.line_count_at_top_of_window = target_line;
                     lines_editor_state.file_position_of_topline_start = byte_pos;
                     lines_editor_state.cursor.tui_row = 0;
-                    lines_editor_state.cursor.tui_col = 0;
+                    lines_editor_state.cursor.tui_visual_col = 0;
 
                     // Position cursor AFTER line number (same as bootstrap)
                     // number of digits in line number + 1 is first character
@@ -11369,9 +12709,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                         line_number,
                         lines_editor_state.effective_rows,
                     );
-                    lines_editor_state.cursor.tui_col = line_num_width; // Skip over line number displayfull_lines_editor
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position =
-                        line_num_width;
+                    lines_editor_state.cursor.tui_visual_col = line_num_width; // Skip over line number displayfull_lines_editor
                     lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
                     // Rebuild window to show the new position
                     build_windowmap_nowrap(lines_editor_state, &base_edit_filepath)?;
@@ -11399,45 +12737,9 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =========================
             // position state inspection
             // =========================
-            // reset to first real position each new GotoFileStart
-            let line_num_width = calculate_line_number_width(
-                lines_editor_state.line_count_at_top_of_window,
-                lines_editor_state.cursor.tui_row,
-                lines_editor_state.effective_rows,
-            );
-            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
-            #[cfg(debug_assertions)]
-            let this_row = lines_editor_state.cursor.tui_row;
-            #[cfg(debug_assertions)]
-            let this_col = lines_editor_state.cursor.tui_col;
 
             #[cfg(debug_assertions)]
-            {
-                println!(
-                    "GotoFileStart lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nGotoFileStart lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nGotoFileStart lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nGotoFileStart lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nGotoFileStart lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nGotoFileStart windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::GotoFileStart");
 
             // Seek to target line and update window position
             match seek_to_line_number(&mut File::open(&base_edit_filepath)?, target_line) {
@@ -11445,7 +12747,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     lines_editor_state.line_count_at_top_of_window = target_line;
                     lines_editor_state.file_position_of_topline_start = byte_pos;
                     lines_editor_state.cursor.tui_row = 0;
-                    lines_editor_state.cursor.tui_col = 3; // Skip over line number displayfull_lines_editor + padding
+                    lines_editor_state.cursor.tui_visual_col = 3; // Skip over line number displayfull_lines_editor + padding
 
                     // Rebuild window to show the new position
                     build_windowmap_nowrap(lines_editor_state, &base_edit_filepath)?;
@@ -11486,8 +12788,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 lines_editor_state.cursor.tui_row,
                 lines_editor_state.effective_rows,
             );
-            lines_editor_state.cursor.tui_col = line_num_width;
-            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
+            lines_editor_state.cursor.tui_visual_col = line_num_width;
             lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
 
             // rebuild
@@ -11498,39 +12799,11 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =========================
             // position state inspection
             // =========================
-            // reset to first real position each new GotoLineStart
+            // reset to first position each new GotoLineStart
             // let line_num_width = calculate_line_number_width(lines_editor_state.cursor.tui_row);
 
             #[cfg(debug_assertions)]
-            {
-                let this_row = lines_editor_state.cursor.tui_row;
-                let this_col = lines_editor_state.cursor.tui_col;
-
-                println!(
-                    "GotoLineStart lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-                    this_row, this_col,
-                );
-                println!(
-                    "\nGotoLineStart lines_editor_state.get_row_col_file_position -> {:?}",
-                    lines_editor_state.get_row_col_file_position(this_row, this_col)
-                );
-                println!(
-                    "\nGotoLineStart lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-                );
-                println!(
-                    "\nGotoLineStart lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-                    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-                );
-                println!(
-                    "\nGotoLineStart lines_editor_state.cursor.tui_row -> {:?}",
-                    lines_editor_state.cursor.tui_row
-                );
-                println!(
-                    "\nGotoLineStart windowmap_line_byte_start_end_position_pairs -> {:?}",
-                    lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-                );
-            }
+            lines_editor_state.debug_inspect_position("execute_command() Command::GotoLineStart");
 
             Ok(true)
         }
@@ -11592,23 +12865,6 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 }
             };
 
-            // v1
-            // /*   If no block of text is selected,
-            //  *   i.e. if start and end are the same point
-            //  *   then use backspace mode,
-            //  *   otherwise, if there is a block selected
-            //  *   inclusively delete that block
-            //  */
-            // if lines_editor_state.file_position_of_vis_select_start
-            //     == lines_editor_state.file_position_of_vis_select_end
-            // {
-            //     // if only one character is selected, use backspace delete
-            //     backspace_style_delete_noload(lines_editor_state, &edit_file_path)?;
-            // } else {
-            //     // if a more than one character is selected, inclusively delete
-            //     delete_position_range_noload(lines_editor_state, &edit_file_path)?;
-            // }
-
             // v2: delete selection and reset selection-range to current location
             delete_position_range_noload(lines_editor_state, &edit_file_path)?;
 
@@ -11616,7 +12872,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Get current cursor position in FILE
             if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
                 lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
+                lines_editor_state.cursor.tui_visual_col,
             ) {
                 // Set/Reset BOTH start and end to same position initially
                 lines_editor_state.file_position_of_vis_select_start =
@@ -11641,8 +12897,22 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
                     // Log error and continue (non-fatal)
                     log_error("Cannot clear redo logs", Some("Command DeleteBackspace"));
-                    let _ = lines_editor_state.set_info_bar_message("Redo clear failed");
-
+                    // Best-effort user notice. The info-bar message is itself
+                    // non-critical: if it fails we do NOT abort the insert (the edit
+                    // still proceeds). We observe the failure in debug builds rather
+                    // than discarding it via `let _ = ...`.
+                    match lines_editor_state.set_info_bar_message("redo clear failed") {
+                        Ok(_) => {}
+                        Err(_e) => {
+                            #[cfg(debug_assertions)]
+                            eprintln!(
+                                "hskim: set_info_bar_message(redo clear failed) failed: {:?}",
+                                _e
+                            );
+                            // No production log here: this is a notice-about-a-notice;
+                            // the redo-clear failure itself was already logged above.
+                        }
+                    }
                     false // Treat error as failure
                 }
             };
@@ -11706,7 +12976,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Rebuild window to show the change from read-copy file
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             lines_editor_state.mode = EditorMode::Insert;
-            let _ = lines_editor_state.set_info_bar_message("Esc > exit, delete > backspace");
+            let _ = lines_editor_state.set_info_bar_message("ESC>exit DEL>bckspc ki>key-ins");
             Ok(true)
         }
 
@@ -11733,7 +13003,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
         Command::WidePlus => {
             // Check for handle here: must not be > MAX
-            if (lines_editor_state.effective_cols + 1) <= MAX_TUI_COLS {
+            if (lines_editor_state.effective_cols + 1) <= MAX_TUI_VIZ_COLS {
                 lines_editor_state.effective_cols += 1;
                 build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             }
@@ -11742,7 +13012,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
         Command::WideMinus => {
             // Check for handle here: must not be < MIN
-            if (lines_editor_state.effective_cols - 1) >= MIN_TUI_COLS {
+            if (lines_editor_state.effective_cols - 1) >= MIN_TUI_VIZ_COLS {
                 lines_editor_state.effective_cols -= 1;
                 build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             }
@@ -11767,7 +13037,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Get current cursor position in FILE
             if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
                 lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
+                lines_editor_state.cursor.tui_visual_col,
             ) {
                 // Set/Reset BOTH start and end to same position initially
                 lines_editor_state.file_position_of_vis_select_start =
@@ -11784,13 +13054,31 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Set selection start at current cursor position
             if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
                 lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
+                lines_editor_state.cursor.tui_visual_col,
             ) {
                 lines_editor_state.selection_start = Some(file_pos);
             }
 
             // set row of cursor start
             lines_editor_state.selection_rowline_start = lines_editor_state.cursor.tui_row;
+            Ok(true)
+        }
+
+        Command::EnterKeystrokeInputMode => {
+            // Rebuild the windowmap before switching modes, for the same reason
+            // EnterInsertMode/EnterHexEditMode do: any pending edits (e.g. from a
+            // prior hex edit) must be reflected on screen before we hand control
+            // to the keystroke-input session. Without this, stale display could
+            // persist until the next edit.
+            build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
+
+            lines_editor_state.mode = EditorMode::KeystrokeInputMode;
+
+            // Terse hint, in the same style as EnterInsertMode's hint.
+            // Non-critical: if setting the message fails, mode switch still
+            // succeeded, so we discard the result.
+            let _ = lines_editor_state.set_info_bar_message("ki: Esc>normal  type ascii");
+
             Ok(true)
         }
 
@@ -11811,33 +13099,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // Convert current window position to file byte offset
             if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
                 lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
-            ) {
-                // Start hex cursor at same file position
-                lines_editor_state
-                    .hex_cursor
-                    .byte_offset_linear_file_absolute_position =
-                    file_pos.byte_offset_linear_file_absolute_position as usize;
-            } else {
-                // Fallback to file start if cursor position invalid
-                lines_editor_state
-                    .hex_cursor
-                    .byte_offset_linear_file_absolute_position = 0;
-            }
-
-            Ok(true)
-        }
-
-        Command::EnterRawMode => {
-            // rebuild may not be needed here, but just in case
-            // Rebuild window to show the change from read-copy file
-            build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
-            lines_editor_state.mode = EditorMode::RawMode;
-
-            // Convert current window position to file byte offset
-            if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
-                lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
+                lines_editor_state.cursor.tui_visual_col,
             ) {
                 // Start hex cursor at same file position
                 lines_editor_state
@@ -12275,37 +13537,51 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
     }
 }
 
-/// Moves cursor to end of current displayed line
+/// Moves the cursor to the end of the current displayed line ("End" key),
+/// landing ON the last character, scrolling horizontally if needed.
 ///
-/// # Purpose
-/// Positions cursor at last character of line displayed at cursor.row.
-/// If line longer than terminal width, scrolls horizontally to show end.
+/// # Memory model (why this version exists)
+/// The previous version read the whole line into a 4096-byte buffer via
+/// `read_single_line`, built a `&str` of the entire line, and iterated its
+/// `chars()` three times. This version walks the line one UTF-8 character at a
+/// time via `next_line_char`, holding at most `limits::LINE_CHUNK_READ_BYTES`
+/// bytes and never materializing the whole line.
 ///
-/// # Memory Safety
-/// - Pre-allocated 4096-byte buffer (stack-only)
-/// - Reads ONE line at a time
-/// - No file loading
-/// - No dynamic allocation
+/// # Two scan passes (instead of one whole-line walk)
+/// Pass 1 (`seek` to line start, scan to newline/EOF): sum the line's total
+/// VISUAL width and remember the LAST character's visual width.
+/// Pass 2 (only when the line is wider than the visible area; re-`seek`, scan):
+/// drop leading CHARACTERS from the front until the remaining VISUAL width fits,
+/// counting the dropped characters (`skip_chars`, the character-space scroll
+/// offset). Two short forward scans replace the old three `chars()` iterations;
+/// "End" is a single keypress, so the extra scan is inexpensive.
 ///
-/// # Defensive Programming
-/// - All errors logged and handled gracefully
-/// - Returns with info bar message on any issue
-/// - Never crashes, never panics in production
+/// Both passes reuse `EditorState::line_chunk_scratch` sequentially (each
+/// `next_line_char` call releases the borrow), so there is no aliasing concern
+/// with the later `build_windowmap_nowrap` rebuild.
 ///
-/// # Arguments
-/// * `state` - Editor state with cursor position
-/// * `file_path` - Path to read-copy file
+/// # Coordinate model (unchanged)
+/// CHARACTER space holds the scroll offset (`skip_chars`); VISUAL space holds
+/// `cursor.tui_visual_col` and `effective_cols`. The line-number prefix width is
+/// computed with `cursor.tui_row` so the round-trip through
+/// `get_row_col_file_position` resolves to the intended byte. See the original
+/// doc for the full rationale (preserved below in intent).
 ///
 /// # Returns
-/// * `Ok(())` - Always succeeds or logs error and continues
+/// * `Ok(())` - Always. Every fallible step (lookup, open, seek, read, rebuild)
+///   is handled: a terse, data-free info-bar message is set, detail is logged
+///   only under `#[cfg(debug_assertions)]`, and the function returns `Ok(())` so
+///   the editor keeps running. The cursor is never left undefined.
+///
+/// # Defensive Programming
+/// - Each scan loop bounded by `limits::MAX_CHUNKS`.
+/// - Malformed UTF-8 tolerated (single-cell width via `visual_width_of_char`).
+/// - No heap, no recursion, no unsafe.
 fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Result<()> {
-    // ========================================================================
-    // STEP 1: Get file position from cursor (defensive)
-    // ========================================================================
-
+    // ── STEP 1: resolve current file position to find the line's start byte ──
     let current_file_pos = match lines_editor_state.get_row_col_file_position(
         lines_editor_state.cursor.tui_row,
-        lines_editor_state.cursor.tui_col,
+        lines_editor_state.cursor.tui_visual_col,
     ) {
         Ok(Some(pos)) => pos,
         Ok(None) => {
@@ -12321,16 +13597,10 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
         }
     };
 
-    let line_number_for_display = current_file_pos.line_number + 1; // Convert to 1-indexed
     let line_start_byte = current_file_pos.byte_offset_linear_file_absolute_position
         - (current_file_pos.byte_in_line as u64);
 
-    // ========================================================================
-    // STEP 2: Read the line from file
-    // ========================================================================
-
-    let mut line_buffer = [0u8; 4096];
-
+    // ── STEP 2: open the file ────────────────────────────────────────────────
     let mut file = match File::open(file_path) {
         Ok(f) => f,
         Err(_e) => {
@@ -12342,6 +13612,18 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
         }
     };
 
+    // Prefix width: uses cursor.tui_row to match get_row_col_file_position so the
+    // VISUAL column we set below resolves to the intended byte on round-trip.
+    let line_num_width = calculate_line_number_width(
+        lines_editor_state.line_count_at_top_of_window,
+        lines_editor_state.cursor.tui_row,
+        lines_editor_state.effective_rows,
+    );
+
+    #[cfg(debug_assertions)]
+    lines_editor_state.debug_inspect_position("go_to_line()");
+
+    // ── STEP 3 (pass 1): sum total visual width + last char's visual width ───
     if let Err(_e) = file.seek(SeekFrom::Start(line_start_byte)) {
         let _ = lines_editor_state.set_info_bar_message("cannot seek to line");
         #[cfg(debug_assertions)]
@@ -12350,122 +13632,546 @@ fn goto_line_end(lines_editor_state: &mut EditorState, file_path: &Path) -> Resu
         return Ok(());
     }
 
-    let (_, line_length, _) = match read_single_line(&mut file, &mut line_buffer) {
-        Ok(result) => result,
-        Err(_e) => {
-            let _ = lines_editor_state.set_info_bar_message("cannot read line");
+    let mut total_visual_width: usize = 0;
+    let mut last_char_visual_width: usize = 1; // empty line default (saturates below)
+    {
+        let mut rs = ChunkReaderState::new();
+        let mut scan_count: usize = 0;
+        loop {
+            if scan_count >= limits::MAX_CHUNKS {
+                let _ = lines_editor_state.set_info_bar_message("line scan too long");
+                #[cfg(debug_assertions)]
+                log_error("goto_line_end pass1 ceiling", Some("goto_line_end"));
+                return Ok(());
+            }
+            scan_count += 1;
+
+            match next_line_char(
+                &mut file,
+                &mut lines_editor_state.line_chunk_scratch,
+                &mut rs,
+            ) {
+                Ok(LineCharStep::Newline) | Ok(LineCharStep::Eof) => break,
+                Ok(LineCharStep::Char { bytes, len }) => {
+                    let w = visual_width_of_char(&bytes[..len]);
+                    total_visual_width += w;
+                    last_char_visual_width = w;
+                }
+                Err(_e) => {
+                    let _ = lines_editor_state.set_info_bar_message("cannot read line");
+                    #[cfg(debug_assertions)]
+                    eprintln!("e: {}", _e);
+                    #[cfg(debug_assertions)]
+                    log_error("goto_line_end read error", Some("goto_line_end"));
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "GOTO_END widths: total_visual_width={} last_char_visual_width={}",
+        total_visual_width, last_char_visual_width
+    );
+
+    // ── STEP 4: visible content width in cells (one cell reserved for edge) ──
+    let visible_content_cells = lines_editor_state
+        .effective_cols
+        .saturating_sub(line_num_width)
+        .saturating_sub(1);
+
+    // ── STEP 5: set VISUAL cursor column, scrolling if the line is too wide ──
+    if total_visual_width > visible_content_cells {
+        // Pass 2: re-seek and drop leading characters until the remaining
+        // visual width fits. The offset stays in CHARACTER units.
+        if let Err(_e) = file.seek(SeekFrom::Start(line_start_byte)) {
+            let _ = lines_editor_state.set_info_bar_message("cannot seek to line");
             #[cfg(debug_assertions)]
             eprintln!("e: {}", _e);
-            #[cfg(debug_assertions)]
-            log_error("goto_line_end read error", Some("goto_line_end"));
+            log_error("goto_line_end seek error (pass2)", Some("goto_line_end"));
             return Ok(());
         }
-    };
 
-    // =========================
-    // position state inspection
-    // =========================
-    let line_num_width = calculate_line_number_width(
-        lines_editor_state.line_count_at_top_of_window,
-        lines_editor_state.cursor.tui_row,
-        lines_editor_state.effective_rows,
-    );
-    // reset for each new fn goto_line_end
-    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_length + line_num_width;
-    #[cfg(debug_assertions)]
-    {
-        let this_row = lines_editor_state.cursor.tui_row;
-        let this_col = lines_editor_state.cursor.tui_col;
-        println!(
-            "fn goto_line_end lines_editor_state.cursor.tui_row, .col-> {:?},{:?}",
-            this_row, this_col,
-        );
-        println!(
-            "\nfn goto_line_end lines_editor_state.get_row_col_file_position -> {:?}",
-            lines_editor_state.get_row_col_file_position(this_row, this_col)
-        );
-        println!(
-            "\nfn goto_line_end lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset -> {:?}",
-            lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset
-        );
-        println!(
-            "\nfn goto_line_end lines_editor_state.in_row_abs_horizontal_0_index_cursor_position -> {:?}",
-            lines_editor_state.in_row_abs_horizontal_0_index_cursor_position
-        );
-        println!(
-            "\nfn goto_line_end lines_editor_state.cursor.tui_row -> {:?}",
-            lines_editor_state.cursor.tui_row
-        );
-        println!(
-            "\nfn goto_line_end windowmap_line_byte_start_end_position_pairs -> {:?}",
-            lines_editor_state.windowmap_line_byte_start_end_position_pairs,
-        );
-    }
-    // ========================================================================
-    // STEP 3: Convert bytes to characters
-    // ========================================================================
+        let mut skip_chars: usize = 0;
+        let mut remaining_visual_width = total_visual_width;
+        {
+            let mut rs = ChunkReaderState::new();
+            let mut scan_count: usize = 0;
+            loop {
+                if remaining_visual_width <= visible_content_cells {
+                    break;
+                }
+                if scan_count >= limits::MAX_CHUNKS {
+                    let _ = lines_editor_state.set_info_bar_message("line scan too long");
+                    #[cfg(debug_assertions)]
+                    log_error("goto_line_end pass2 ceiling", Some("goto_line_end"));
+                    return Ok(());
+                }
+                scan_count += 1;
 
-    let line_bytes = &line_buffer[..line_length];
-    let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
-
-    let char_count = line_str.chars().count();
-    let char_position_in_line = if char_count > 0 { char_count - 1 } else { 0 };
-
-    // ========================================================================
-    // STEP 4: Calculate display column
-    // ========================================================================
-
-    let line_num_width = calculate_line_number_width(
-        lines_editor_state.line_count_at_top_of_window,
-        line_number_for_display,
-        lines_editor_state.effective_rows,
-    );
-    let display_col_for_line_end = line_num_width + char_position_in_line;
-
-    let right_edge = lines_editor_state.effective_cols.saturating_sub(1);
-    let mut needs_rebuild = false;
-
-    // ========================================================================
-    // STEP 5: Handle horizontal scrolling
-    // ========================================================================
-
-    if display_col_for_line_end > right_edge {
-        // Line is longer than terminal width
-        let overflow = display_col_for_line_end - right_edge;
-
-        lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = lines_editor_state
-            .tui_window_horizontal_utf8txt_line_char_offset
-            .saturating_add(overflow);
-
-        lines_editor_state.cursor.tui_col = right_edge;
-        // println!("right_edge {right_edge}, display_col_for_line_end {display_col_for_line_end}");
-        needs_rebuild = true;
-    } else {
-        // Line fits within terminal
-        // TODO: why is this odd?
-        lines_editor_state.cursor.tui_col = display_col_for_line_end;
-    }
-
-    // ========================================================================
-    // STEP 6: Rebuild if needed
-    // ========================================================================
-
-    if needs_rebuild {
-        if let Err(_e) = build_windowmap_nowrap(lines_editor_state, file_path) {
-            let _ = lines_editor_state.set_info_bar_message("display update failed");
-            #[cfg(debug_assertions)]
-            eprintln!("e: {}", _e);
-            #[cfg(debug_assertions)]
-            log_error("goto_line_end rebuild error", Some("goto_line_end"));
-            // Continue anyway - cursor was updated
+                match next_line_char(
+                    &mut file,
+                    &mut lines_editor_state.line_chunk_scratch,
+                    &mut rs,
+                ) {
+                    Ok(LineCharStep::Newline) | Ok(LineCharStep::Eof) => break,
+                    Ok(LineCharStep::Char { bytes, len }) => {
+                        remaining_visual_width = remaining_visual_width
+                            .saturating_sub(visual_width_of_char(&bytes[..len]));
+                        skip_chars += 1;
+                    }
+                    Err(_e) => {
+                        let _ = lines_editor_state.set_info_bar_message("cannot read line");
+                        #[cfg(debug_assertions)]
+                        eprintln!("e: {}", _e);
+                        #[cfg(debug_assertions)]
+                        log_error("goto_line_end read error (pass2)", Some("goto_line_end"));
+                        return Ok(());
+                    }
+                }
+            }
         }
+
+        let last_char_visual_start = remaining_visual_width.saturating_sub(last_char_visual_width);
+
+        lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = skip_chars;
+        lines_editor_state.cursor.tui_visual_col = line_num_width + last_char_visual_start;
+    } else {
+        // Fit branch: no scroll. Cursor at the last char's visual start column.
+        let last_char_visual_start = total_visual_width.saturating_sub(last_char_visual_width);
+
+        lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
+        lines_editor_state.cursor.tui_visual_col = line_num_width + last_char_visual_start;
     }
 
-    // message? 'end of line'? TODO: How detailed or terse should this be?
-    // let _ = lines_editor_state.set_info_bar_message(&format!("end of line ({} chars)", char_count));
-    // let _ = lines_editor_state.set_info_bar_message(&char_count.to_string());
+    // ── STEP 6: rebuild the window so the new offset/column are reflected ────
+    // A rebuild failure is logged and handled, never panicked: the cursor state
+    // is already updated, so we continue.
+    if let Err(_e) = build_windowmap_nowrap(lines_editor_state, file_path) {
+        let _ = lines_editor_state.set_info_bar_message("display update failed");
+        #[cfg(debug_assertions)]
+        eprintln!("e: {}", _e);
+        #[cfg(debug_assertions)]
+        log_error("goto_line_end rebuild error", Some("goto_line_end"));
+        // Continue anyway - cursor was already updated.
+    }
+
     let _ = lines_editor_state.set_info_bar_message("end of line");
     Ok(())
+}
+
+/// Identifies which arrow key was pressed, after the raw 3-byte escape
+/// sequence has been classified by the session loop.
+///
+/// # Project Context
+///
+/// In `EditorMode::KeystrokeInputMode`, arrow keys arrive from a raw terminal
+/// as a 3-byte escape sequence (`0x1B 0x5B 0x41..=0x44`), NOT as a single byte
+/// like printable ASCII. The session loop (`handle_keystroke_input_session`)
+/// reads up to 3 bytes per `read()`, classifies an exact arrow match into one
+/// of these variants via `classify_arrow_bytes`, and hands the variant to
+/// `handle_arrow_key_input_mode`.
+///
+/// This enum exists so that the byte-pattern match happens exactly ONCE (in the
+/// session loop), and the arrow handler receives an already-classified,
+/// type-safe direction rather than re-matching raw bytes. This keeps each
+/// function's scope narrow: the session loop classifies; the arrow handler maps
+/// direction to a cursor-move `Command`.
+///
+/// # Byte Sequences (raw terminal, decimal / hex)
+///
+/// | Variant     | Bytes (hex)         | Bytes (decimal) |
+/// |-------------|---------------------|-----------------|
+/// | `UpArrow`    | `0x1B 0x5B 0x41`    | `27 91 65`      |
+/// | `DownArrow`  | `0x1B 0x5B 0x42`    | `27 91 66`      |
+/// | `RightArrow` | `0x1B 0x5B 0x43`    | `27 91 67`      |
+/// | `LeftArrow`  | `0x1B 0x5B 0x44`    | `27 91 68`      |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrowKeyDirection {
+    UpArrow,
+    DownArrow,
+    LeftArrow,
+    RightArrow,
+}
+
+/// Classifies a freshly-read raw-terminal byte buffer as an arrow key, if and
+/// only if it is an EXACT 3-byte arrow escape sequence.
+///
+/// # Project Context
+///
+/// Called by `handle_keystroke_input_session` immediately after each `read()`
+/// into the 3-byte buffer. This function is the single point where the arrow
+/// byte-pattern is matched. It returns:
+///   - `Some(direction)` ONLY when the buffer is exactly the 3 bytes of a known
+///     arrow sequence.
+///   - `None` for everything else, in which case the session loop must dispatch
+///     the bytes individually through the single-byte path (so that no byte is
+///     dropped — see the session loop's per-byte dispatch).
+///
+/// # Why `n` (the byte count) Matters
+///
+/// `read()` returns how many bytes it placed in the buffer. We are
+/// passed exactly that filled slice (`&buf[0..n]`). An arrow is recognized ONLY
+/// when:
+///   - the slice length is exactly 3, AND
+///   - the slice equals `[0x1B, 0x5B, 0x41..=0x44]`.
+///
+/// A length of 3 by itself does NOT mean "arrow": three printable bytes (e.g. a
+/// fast-typed or pasted "abc") also produce a length-3 slice. Those do not match
+/// the pattern (printable bytes are never `0x1B`), so this returns `None` and
+/// they go down the per-byte path. There is therefore no collision between
+/// "three printable bytes" and "one arrow key."
+///
+/// # Fragmentation Limitation (documented, accepted for now)
+///
+/// On a fast local terminal a single arrow keypress arrives as all 3 bytes in
+/// one `read()`. Over slow or remote links the kernel MAY split the sequence
+/// across multiple reads (e.g. `0x1B` alone, then `0x5B 0x41`). In that case the
+/// first read is a length-1 `0x1B`, which the single-byte path treats as ESC
+/// (enter Normal mode), and the trailing bytes are then dispatched individually.
+/// Handling fragmented sequences robustly requires an ESC-pending state machine
+/// with a read timeout; that is a deliberate future step, not implemented here.
+///
+/// # Arguments
+///
+/// * `filled_buffer` - the slice of bytes read this iteration
+///   (`&byte_buffer[0..bytes_read]`).
+///
+/// # Returns
+///
+/// * `Some(ArrowKeyDirection)` if the slice is an exact arrow sequence.
+/// * `None` otherwise.
+fn classify_arrow_bytes(filled_buffer: &[u8]) -> Option<ArrowKeyDirection> {
+    // An arrow sequence is exactly 3 bytes. Anything else cannot be an arrow.
+    if filled_buffer.len() != 3 {
+        return None;
+    }
+
+    // First two bytes of every arrow sequence are ESC ('0x1B') then '[' (0x5B).
+    if filled_buffer[0] != 0x1B || filled_buffer[1] != 0x5B {
+        return None;
+    }
+
+    // The third byte selects the direction.
+    match filled_buffer[2] {
+        0x41 => Some(ArrowKeyDirection::UpArrow),
+        0x42 => Some(ArrowKeyDirection::DownArrow),
+        0x43 => Some(ArrowKeyDirection::RightArrow),
+        0x44 => Some(ArrowKeyDirection::LeftArrow),
+        // 0x1B 0x5B followed by anything else is some other escape sequence
+        // (Home/End/Page/F-keys/etc.) — not an arrow. Caller will dispatch the
+        // bytes individually (and the single-byte path ignores the unknowns).
+        _ => None,
+    }
+}
+
+/// Maps a classified arrow-key direction to the corresponding cursor-move
+/// command, in `EditorMode::KeystrokeInputMode`.
+///
+/// # Project Context
+///
+/// This is the arrow-key counterpart to the single-byte dispatcher. The session
+/// loop (`handle_keystroke_input_session`) classifies the raw 3-byte arrow
+/// escape sequence into an `ArrowKeyDirection` (via `classify_arrow_bytes`) and
+/// calls this function. This function does NOT read input, does NOT own the
+/// terminal, and does NOT render — it only maps one direction to one cursor-move
+/// `Command`.
+///
+/// Separation of concerns:
+/// - `handle_keystroke_input_session` : owns RawTerminal, reads bytes, renders,
+///   classifies arrows vs. single bytes, handles EOF / read-error / mode exit.
+/// - `classify_arrow_bytes`           : recognizes the exact 3-byte arrow pattern.
+/// - `handle_arrow_key_input_mode`    : maps an `ArrowKeyDirection` to a
+///   `Command::Move*` (this function).
+/// - the single-byte dispatcher        : maps one non-arrow byte to one action.
+///
+/// # Direction → Command Mapping
+///
+/// | Direction    | Command            |
+/// |--------------|--------------------|
+/// | `UpArrow`    | `Command::MoveUp`   |
+/// | `DownArrow`  | `Command::MoveDown` |
+/// | `LeftArrow`  | `Command::MoveLeft` |
+/// | `RightArrow` | `Command::MoveRight`|
+///
+/// # Rebuild / Render Policy
+///
+/// Cursor moves route through `execute_command`, exactly like backspace and
+/// newline do. The session loop renders unconditionally at the top of its next
+/// iteration, so any cursor/window change made by the move command is painted
+/// then. This function therefore does NOT call `build_windowmap_nowrap` itself
+/// (matching the backspace/newline policy, NOT the printable-byte exception
+/// which bypasses `execute_command`). If testing later shows a cursor move needs
+/// an explicit rebuild here, it can be added at that point.
+///
+/// # Arguments
+///
+/// * `lines_editor_state` - mutable editor state (cursor, window, buffers, etc.).
+/// * `arrow_direction`    - the already-classified arrow direction.
+///
+/// # Returns
+///
+/// * `Ok(true)` - editor loop should keep running. Cursor moves never request
+///   loop termination, so the propagated `bool` from `execute_command` is the
+///   running flag (currently always `true` for `Move*` commands; we forward
+///   whatever `execute_command` returns rather than hard-coding `true`, so this
+///   stays honest if a move command's contract ever changes).
+/// * `Err(LinesError)` - propagated from `execute_command` on an
+///   unrecoverable failure; the session restores the terminal on the way out
+///   (RawTerminal Drop).
+///
+/// # Defensive Notes
+///
+/// - No `unwrap` / no panic.
+/// - The direction is type-checked (`ArrowKeyDirection`), so there is no
+///   "unknown direction" case to handle here; classification already rejected
+///   non-arrow sequences upstream.
+fn handle_arrow_key_input_mode(
+    lines_editor_state: &mut EditorState,
+    arrow_direction: ArrowKeyDirection,
+) -> Result<bool> {
+    match arrow_direction {
+        ArrowKeyDirection::UpArrow => execute_command(lines_editor_state, Command::MoveUp(1)),
+        ArrowKeyDirection::DownArrow => execute_command(lines_editor_state, Command::MoveDown(1)),
+        ArrowKeyDirection::LeftArrow => execute_command(lines_editor_state, Command::MoveLeft(1)),
+        ArrowKeyDirection::RightArrow => execute_command(lines_editor_state, Command::MoveRight(1)),
+    }
+}
+
+/// Dispatches a single keystroke byte to the editor action.
+///
+/// # Project Context
+///
+/// This is the per-byte dispatcher for `EditorMode::KeystrokeInputMode`. It is
+/// called once per byte by `handle_keystroke_input_session`, which owns the
+/// `RawTerminal` and the read loop. This function does NOT read input, does NOT
+/// own the terminal, and does NOT render — it only maps one byte to one action.
+///
+/// Separation of concerns:
+/// - `handle_keystroke_input_session` : owns RawTerminal, reads bytes, renders,
+///   handles EOF / read-error / mode-flag termination.
+/// - `handle_single_byte_keystroke_input_mode`    : maps a single byte to a single action
+///   (this function).
+///
+/// # Byte Dispatch Table
+///
+/// | Byte (hex)     | Meaning           | Action                                      |
+/// |----------------|-------------------|---------------------------------------------|
+/// | `0x1B`         | ESC               | `execute_command(.., EnterNormalMode)` — flips mode to Normal; this is the signal the session loop watches to exit |
+/// | `0x08`, `0x7F` | Backspace, DEL    | `execute_command(.., DeleteBackspace)` (DEL treated as backspace) |
+/// | `0x0A`, `0x0D` | LF, CR            | `execute_command(.., InsertNewline('\n'))` (CR treated as newline) |
+/// | `0x20..=0x7E`  | printable ASCII   | clear redo logs, then `insert_text_chunk_at_cursor_position(.., &[byte])` |
+/// | everything else| arrows, Tab(0x09), Ctrl/Alt/Fn, multibyte fragments | silently ignored: no edit, no redo-clear, no rebuild |
+///
+/// # Why the Printable Path Differs from Backspace/Newline (redo-clear)
+///
+/// In the editor, `button_safe_clear_all_redo_logs` is called by the CALLER of
+/// the edit, not by the edit function itself:
+///
+/// - `Command::DeleteBackspace` and `Command::InsertNewline` arms inside
+///   `execute_command` ALREADY call `button_safe_clear_all_redo_logs`
+///   internally. So routing backspace and newline through `execute_command`
+///   gives redo-clear automatically. We must NOT clear again here, or
+///   we would double-clear (harmless but wasteful and misleading).
+///
+/// - `insert_text_chunk_at_cursor_position` does NOT clear redo logs itself.
+///   Insert mode (`handle_utf8txt_insert_mode_input`) wraps it with
+///   `button_safe_clear_all_redo_logs` before calling it. We replicate that
+///   wrapping here for the printable-byte path. (Deliberate duplication of the
+///   3-attempt retry pattern from insert mode — duplication is preferred over
+///   abstraction-for-its-own-sake in this codebase.)
+///
+/// There is intentionally no `Command` variant that inserts a single arbitrary
+/// printable byte via the chunk path; arbitrary-text insertion is done by
+/// calling `insert_text_chunk_at_cursor_position` directly (as insert mode
+/// does). That is why the printable path here does not go through
+/// `execute_command`.
+///
+/// # One ASCII Byte == One Chunk Insert
+///
+/// A printable-ASCII byte (0x20..=0x7E) is, by definition, a complete and valid
+/// single-byte UTF-8 character. Passing `&[byte]` (a one-byte slice) to
+/// `insert_text_chunk_at_cursor_position` therefore:
+///   - produces exactly ONE `AddCharacter` undo entry,
+///   - advances the cursor by exactly one column,
+///   - handles right-edge horizontal scroll,
+/// matching insert mode precisely. This satisfies both the "make an undo-redo
+/// log for that one byte" requirement and the "clear redo logs before each
+/// edit" requirement.
+///
+/// # Rebuild / Render Policy
+///
+/// This function does NOT call `build_windowmap_nowrap` in the common path.
+/// The edit functions own their own rebuilds:
+///   - `insert_text_chunk_at_cursor_position` rebuilds on right-edge scroll.
+///   - the `execute_command` arms for DeleteBackspace / InsertNewline rebuild
+///     after the edit.
+/// The session loop renders unconditionally at the top of its next iteration,
+/// so whatever the model now holds gets painted. Ignored keys cause no edit and
+/// no rebuild: nothing changed.
+///
+/// # Arguments
+///
+/// * `lines_editor_state` - mutable editor state (mode, cursor, buffers, etc.)
+/// * `keystroke`          - the single raw byte read from the terminal
+/// * `read_copy_path`     - borrow of the read-copy file path. The session owns
+///                          the clone of `read_copy_path` and passes a borrow
+///                          here, so this function never re-clones per keystroke.
+///
+/// # Returns
+///
+/// * `Ok(true)`  - editor loop should keep running. In the current command set
+///   every handled byte yields `Ok(true)`: ESC routes through
+///   `EnterNormalMode` (which returns the keep-running flag and flips the mode),
+///   edits return the keep-running flag, and ignored bytes return `Ok(true)`
+///   directly. The session loop CHECKS this value rather than assuming it: an
+///   `Ok(false)` (no quit command exists in this mode today) is treated by the
+///   caller as an unexpected contract violation and triggers a safe recovery to
+///   Normal mode — it is not silently ignored.
+/// * `Ok(false)` - reserved/unexpected in this mode; see above. This function
+///   does not currently produce it, but the type permits it and the caller
+///   handles it defensively.
+/// * `Err(LinesError)` - a propagated error from an edit or command. Edit
+///   functions handle their own non-critical failures internally (logging,
+///   info-bar) and return Ok; a returned Err here is an unrecoverable
+///   I/O failure and is propagated to the session, which restores the terminal
+///   (RawTerminal Drop) on the way out.
+///
+/// # Defensive Notes
+///
+/// - No `unwrap` / no panic.
+/// - Unknown bytes are silently ignored (handle-and-move-on): no edit, no log,
+///   no state change. Goal: for arrow keys, Tab, and
+///   stray escape-sequence fragments delivered one byte at a time in raw mode.
+fn handle_single_byte_keystroke_input_mode(
+    lines_editor_state: &mut EditorState,
+    keystroke: u8,
+    read_copy_path: &Path,
+) -> Result<bool> {
+    match keystroke {
+        // ---------------------------------------------------------------------
+        // ESC (0x1B): exit to Normal mode.
+        // ---------------------------------------------------------------------
+        // EnterNormalMode sets lines_editor_state.mode = Normal and rebuilds the
+        // windowmap. The session loop's `while self.mode == KeystrokeInputMode`
+        // condition then fails, so the loop exits cleanly and RawTerminal drops.
+        0x1B => {
+            // EnterNormalMode returns Ok(true) (keep running). We forward that.
+            execute_command(lines_editor_state, Command::EnterNormalMode)
+        }
+
+        // ---------------------------------------------------------------------
+        // Backspace (0x08) or DEL (0x7F): backspace-style delete.
+        // ---------------------------------------------------------------------
+        // DEL is treated as backspace per spec. DeleteBackspace's execute_command
+        // arm clears redo logs internally and rebuilds the windowmap, so we do
+        // NOT clear redo logs here (no double-clear).
+        0x08 | 0x7F => execute_command(lines_editor_state, Command::DeleteBackspace),
+
+        // ---------------------------------------------------------------------
+        // LF (0x0A) or CR (0x0D): insert a single newline.
+        // ---------------------------------------------------------------------
+        // CR is treated as newline per spec. InsertNewline's execute_command arm
+        // clears redo logs internally and rebuilds the windowmap, so we do NOT
+        // clear redo logs here (no double-clear).
+        0x0A | 0x0D => execute_command(lines_editor_state, Command::InsertNewline('\n')),
+
+        // ---------------------------------------------------------------------
+        // Printable ASCII (0x20 space .. 0x7E tilde): insert one byte.
+        // ---------------------------------------------------------------------
+        // This path does its OWN redo-clear (matching insert mode), because
+        // insert_text_chunk_at_cursor_position does not clear redo logs itself.
+        0x20..=0x7E => {
+            // =================================================
+            // Clear Redo Stack Before Editing (printable path)
+            // =================================================
+            // Same 3-attempt retry pattern insert mode uses. Redo-clear failure
+            // is non-critical: the insert still proceeds, undo/redo may be in a
+            // degraded state, and we surface a terse info-bar note. We never
+            // abort the keystroke because of a redo-clear failure.
+            let mut redo_clear_success = false;
+            for attempt in 0..3 {
+                match button_safe_clear_all_redo_logs(read_copy_path) {
+                    Ok(_) => {
+                        redo_clear_success = true;
+                        break;
+                    }
+                    Err(_e) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("hkim: redo clear attempt {} failed: {:?}", attempt, _e);
+
+                        if attempt < 2 {
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                }
+            }
+
+            if !redo_clear_success {
+                // Terse, no-PII log + info-bar note. Non-fatal.
+                log_error(
+                    "Cannot clear redo logs",
+                    Some("handle_single_byte_keystroke_input_mode:printable"),
+                );
+                let _ = lines_editor_state.set_info_bar_message("redo clear failed");
+            }
+
+            // Insert the single byte as a one-character chunk.
+            // One printable-ASCII byte is one valid UTF-8 character, so this
+            // produces exactly one AddCharacter undo entry, advances the cursor,
+            // and handles right-edge scroll (with its own rebuild) — matching
+            // insert mode.
+            // Insert the single byte as a one-character chunk.
+            // One printable-ASCII byte is one valid UTF-8 character, so this
+            // produces exactly one AddCharacter undo entry, advances the cursor,
+            // and handles right-edge scroll — matching insert mode.
+            let byte_slice = [keystroke];
+            insert_text_chunk_at_cursor_position(lines_editor_state, read_copy_path, &byte_slice)?;
+
+            // -----------------------------------------------------------------
+            // Rebuild the windowmap after the insert (REQUIRED).
+            // -----------------------------------------------------------------
+            // insert_text_chunk_at_cursor_position only rebuilds the windowmap
+            // CONDITIONALLY — solely when the cursor crosses the right edge and
+            // the window must scroll horizontally. In the common case (typing
+            // within the visible width), it updates cursor.tui_visual_col and writes the
+            // byte to the file, but does NOT rebuild the display model. Without a
+            // rebuild here, the display buffers still hold the pre-insert text:
+            // the cursor would move but the typed character would be invisible
+            // until some OTHER action (newline, backspace) triggered a rebuild.
+            //
+            // This mirrors EXACTLY what cooked insert mode does: its caller
+            // (handle_utf8txt_insert_mode_input) calls build_windowmap_nowrap
+            // immediately after each insert_text_chunk_at_cursor_position. We are
+            // the caller in ki-mode, so we carry the same responsibility.
+            //
+            // Backspace (0x08/0x7F) and newline (0x0A/0x0D) do NOT need a rebuild
+            // here because they route through execute_command, whose
+            // DeleteBackspace / InsertNewline arms already rebuild internally.
+            // Adding a rebuild there would double-rebuild. Only this printable
+            // path, which calls the chunk function directly, needs this rebuild.
+            //
+            // If the insert failed gracefully (invalid cursor at end-of-line —
+            // a PRE-EXISTING shared bug also present in insert mode), the file
+            // is unchanged and this rebuild simply repaints the current model.
+            // That is harmless: rebuild is idempotent with respect to an
+            // unchanged file.
+            build_windowmap_nowrap(lines_editor_state, read_copy_path)?;
+
+            Ok(true)
+        }
+
+        // ---------------------------------------------------------------------
+        // Everything else: silently ignore.
+        // ---------------------------------------------------------------------
+        // This includes Tab (0x09), all C0 control codes not handled above,
+        // and the individual bytes of multibyte escape sequences (arrow keys,
+        // Home/End, Page Up/Down, function keys) which arrive one byte at a time
+        // in raw mode. No edit, no redo-clear, no rebuild, no state change.
+        // Handle-and-move-on: keep the editor running.
+        _ => Ok(true),
+    }
 }
 
 /// Deletes the character before cursor WITHOUT loading whole file
@@ -12488,7 +14194,7 @@ fn backspace_style_delete_noload(
     let file_pos = lines_editor_state
         .get_row_col_file_position(
             lines_editor_state.cursor.tui_row,
-            lines_editor_state.cursor.tui_col,
+            lines_editor_state.cursor.tui_visual_col,
         )?
         .ok_or_else(|| {
             io::Error::new(
@@ -12686,12 +14392,12 @@ fn backspace_style_delete_noload(
     lines_editor_state.is_modified = true;
 
     // Step 7: Move cursor back one position
-    if lines_editor_state.cursor.tui_col > 0 {
-        lines_editor_state.cursor.tui_col -= 1;
+    if lines_editor_state.cursor.tui_visual_col > 0 {
+        lines_editor_state.cursor.tui_visual_col -= 1;
     } else if lines_editor_state.cursor.tui_row > 0 {
         // Deleted at line start - move to end of previous line
         lines_editor_state.cursor.tui_row -= 1;
-        // Will be repositioned correctly after window rebuild
+        // Will be repositioned after window rebuild
     }
 
     Ok(())
@@ -12902,7 +14608,7 @@ fn line_end_has_newline(file_path: &Path, byte_pos: u64) -> io::Result<bool> {
 ///
 /// **The Problem We Solve:**
 /// When deleting a line like "pine\nuts nheggs\n" at position 25, we need to create
-/// undo logs that will reconstruct it correctly. Naive approach would be:
+/// undo logs that will reconstruct it. Naive approach would be:
 /// ```text
 /// Log: ADD 'p' at 25
 /// Log: ADD 'i' at 26  ← WRONG! Position changes as we add
@@ -12948,7 +14654,7 @@ fn line_end_has_newline(file_path: &Path, byte_pos: u64) -> io::Result<bool> {
 /// - ...
 /// - Highest letter (e.g., "1.o"): First character in line, executed LAST by undo
 ///
-/// This naming ensures correct LIFO execution order through filesystem sorting.
+/// This naming ensures LIFO execution order through filesystem sorting.
 ///
 /// # Algorithm
 ///
@@ -13109,29 +14815,29 @@ fn line_end_has_newline(file_path: &Path, byte_pos: u64) -> io::Result<bool> {
 /// # Examples
 ///
 /// ```ignore
-/// // Delete line 3: "pine\nuts nheggs\n" at position 25
+///  // Delete line 3: "pine\nuts nheggs\n" at position 25
 /// delete_current_line_noload(&mut state, &file_path)?;
 ///
-/// // Undo logs created (button stack, all at position 25):
-/// // changelog_file/1.o: ADD 'p' at 25
-/// // changelog_file/1.n: ADD 'i' at 25
-/// // ... 14 more logs ...
-/// // changelog_file/1.a: ADD 's' at 25
-/// // changelog_file/1:   ADD '\n' at 25
+///  // Undo logs created (button stack, all at position 25):
+///  // changelog_file/1.o: ADD 'p' at 25
+///  // changelog_file/1.n: ADD 'i' at 25
+///  // ... 14 more logs ...
+///  // changelog_file/1.a: ADD 's' at 25
+///  // changelog_file/1:   ADD '\n' at 25
 ///
-/// // User presses undo:
-/// // 1. Reads "1" → ADD '\n' at 25 → "\n"
-/// // 2. Reads "1.a" → ADD 's' at 25 → "s\n"
-/// // 3. Reads "1.b" → ADD 'g' at 25 → "gs\n"
-/// // ... cascading insertions ...
-/// // 17. Reads "1.o" → ADD 'p' at 25 → "pine\nuts nheggs\n" ✓
+///  // User presses undo:
+///  // 1. Reads "1" → ADD '\n' at 25 → "\n"
+///  // 2. Reads "1.a" → ADD 's' at 25 → "s\n"
+///  // 3. Reads "1.b" → ADD 'g' at 25 → "gs\n"
+///  // ... cascading insertions ...
+///  // 17. Reads "1.o" → ADD 'p' at 25 → "pine\nuts nheggs\n" ✓
 /// ```
 ///
 /// # See Also
 ///
 /// * `button_make_changelog_from_user_character_action_level()` - Creates individual log entries
 /// * `button_add_multibyte_make_log_files()` - Handles multi-byte characters with letter suffixes
-/// * `delete_byte_range_chunked()` - Performs the actual deletion
+/// * `delete_byte_range_chunked()` - Performs the deletion
 /// * `find_line_start()` - Finds beginning of current line
 /// * `find_line_end()` - Finds end of current line
 ///
@@ -13152,7 +14858,7 @@ fn line_end_has_newline(file_path: &Path, byte_pos: u64) -> io::Result<bool> {
 fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Result<()> {
     // Step 1: Get current line's file position
     let row_col_file_pos = state
-        .get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_col)?
+        .get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_visual_col)?
         .ok_or_else(|| LinesError::InvalidInput("Cursor not on valid position".into()))?;
 
     // Step 2: Find line boundaries
@@ -13226,13 +14932,12 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
     source_file.seek(SeekFrom::Start(line_start))?;
 
     // Copy line bytes to temp file (chunked, no heap)
-    const CHUNK_SIZE: usize = 256;
+    const CHUNK_SIZE: usize = 32;
     let mut buffer = [0u8; CHUNK_SIZE];
     let mut bytes_to_copy = (delete_end - line_start) as usize;
     let mut copy_iterations = 0;
-    const MAX_COPY_ITERATIONS: usize = 1_000_000; // Safety limit
 
-    while bytes_to_copy > 0 && copy_iterations < MAX_COPY_ITERATIONS {
+    while bytes_to_copy > 0 && copy_iterations < limits::MAX_CHUNKS {
         copy_iterations += 1;
 
         let to_read = bytes_to_copy.min(CHUNK_SIZE);
@@ -13254,7 +14959,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
     // Debug-Assert, Test-Assert, Production-Catch-Handle
     // =================================================
 
-    if copy_iterations >= MAX_COPY_ITERATIONS {
+    if copy_iterations >= limits::MAX_CHUNKS {
         log_error(
             &stack_format_it(
                 "Copy iterations {} exceeded limit",
@@ -13313,7 +15018,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
             // Skip to Step 5
             state.is_modified = true;
 
-            state.cursor.tui_col = 0;
+            state.cursor.tui_visual_col = 0;
             let _ = state.set_info_bar_message("undo disabled");
             return Ok(());
         }
@@ -13344,7 +15049,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
                 // Skip to Step 5
                 state.is_modified = true;
 
-                state.cursor.tui_col = 0;
+                state.cursor.tui_visual_col = 0;
                 return Ok(());
             }
         };
@@ -13693,7 +15398,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 
     // Step 6: Cursor stays at current row
     // After rebuild, this row will show the next line
-    state.cursor.tui_col = 0; // Move to start of (new) line
+    state.cursor.tui_visual_col = 0; // Move to start of (new) line
 
     Ok(())
 }
@@ -13724,7 +15429,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 ///
 /// **The Problem We Solve:**
 /// When deleting a range like "pine\nuts" at position 25, we need to create
-/// undo logs that will reconstruct it correctly. Naive approach would be:
+/// undo logs that will reconstruct it. Naive approach would be:
 /// ```text
 /// Log: ADD 'p' at 25
 /// Log: ADD 'i' at 26  ← WRONG! Position changes as we add
@@ -13772,7 +15477,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 /// - ...
 /// - Highest letter (e.g., "1.h"): First character in range, executed LAST by undo
 ///
-/// This naming ensures correct LIFO execution order through filesystem sorting.
+/// This naming ensures LIFO execution order through filesystem sorting.
 ///
 /// # Algorithm
 ///
@@ -13834,7 +15539,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 ///
 /// **Bounded iterations:**
 /// - MAX_COPY_ITERATIONS: 1,000,000 (prevents infinite loops)
-/// - MAX_CHUNKS: 16,777,216 (during changelog creation)
+/// - MAX_CHUNKS: from standard constant (e.g. size max)
 /// - MAX_LOGGING_ERRORS: 100 (stops after too many failures)
 ///
 /// # Error Handling Philosophy
@@ -13974,49 +15679,49 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 /// # Examples
 ///
 /// ```ignore
-/// // User selects "world" in "Hello world!\n" (positions 6-11)
+///  // User selects "world" in "Hello world!\n" (positions 6-11)
 /// state.file_position_of_vis_select_start = 6;
 /// state.file_position_of_vis_select_end = 11;  // 'd' starts at position 10, ends at 11
 ///
 /// delete_position_range_noload(&mut state, &file_path)?;
 ///
-/// // Result: "Hello !\n" (6 bytes deleted: "world")
-/// // Logged as: "DELETE_RANGE bytes:6-11"
+///  // Result: "Hello !\n" (6 bytes deleted: "world")
+///  // Logged as: "DELETE_RANGE bytes:6-11"
 ///
-/// // Undo logs created (button stack, all at position 6):
-/// // changelog_file/1.e: ADD 'w' at 6
-/// // changelog_file/1.d: ADD 'o' at 6
-/// // changelog_file/1.c: ADD 'r' at 6
-/// // changelog_file/1.b: ADD 'l' at 6
-/// // changelog_file/1.a: ADD 'd' at 6
-/// // changelog_file/1:   ADD ' ' at 6  (space before 'world')
+///  // Undo logs created (button stack, all at position 6):
+///  // changelog_file/1.e: ADD 'w' at 6
+///  // changelog_file/1.d: ADD 'o' at 6
+///  // changelog_file/1.c: ADD 'r' at 6
+///  // changelog_file/1.b: ADD 'l' at 6
+///  // changelog_file/1.a: ADD 'd' at 6
+///  // changelog_file/1:   ADD ' ' at 6  (space before 'world')
 ///
-/// // User presses undo:
-/// // 1. Reads "1" → ADD ' ' at 6 → "Hello  !\n"
-/// // 2. Reads "1.a" → ADD 'd' at 6 → "Hello d !\n"
-/// // 3. Reads "1.b" → ADD 'l' at 6 → "Hello ld !\n"
-/// // ... cascading insertions ...
-/// // 6. Reads "1.e" → ADD 'w' at 6 → "Hello world!\n" ✓
+///  // User presses undo:
+///  // 1. Reads "1" → ADD ' ' at 6 → "Hello  !\n"
+///  // 2. Reads "1.a" → ADD 'd' at 6 → "Hello d !\n"
+///  // 3. Reads "1.b" → ADD 'l' at 6 → "Hello ld !\n"
+///  // ... cascading insertions ...
+///  // 6. Reads "1.e" → ADD 'w' at 6 → "Hello world!\n" ✓
 /// ```
 ///
 /// ```ignore
-/// // Multi-byte UTF-8 example: Delete "世界" (6 bytes: 3+3)
+///  // Multi-byte UTF-8 example: Delete "世界" (6 bytes: 3+3)
 /// state.file_position_of_vis_select_start = 10;
 /// state.file_position_of_vis_select_end = 16;  // '界' starts at 13, ends at 16
 ///
 /// delete_position_range_noload(&mut state, &file_path)?;
 ///
-/// // UTF-8 boundary detection ensures complete character deletion
-/// // Undo logs preserve multi-byte characters correctly
+///  // UTF-8 boundary detection ensures complete character deletion
+///  // Undo logs preserve multi-byte characters
 /// ```
 ///
 /// ```ignore
-/// // Backwards selection (normalized automatically)
+///  // Backwards selection (normalized automatically)
 /// state.file_position_of_vis_select_start = 20;  // End cursor
 /// state.file_position_of_vis_select_end = 10;    // Start cursor
 ///
 /// delete_position_range_noload(&mut state, &file_path)?;
-/// // Normalized to (10, 20), deletion proceeds normally
+///  // Normalized to (10, 20), deletion proceeds normally
 /// ```
 ///
 /// # See Also
@@ -14026,7 +15731,7 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
 /// * `detect_utf8_byte_count()` - UTF-8 character length detection
 /// * `button_make_changelog_from_user_character_action_level()` - Creates individual log entries
 /// * `button_add_multibyte_make_log_files()` - Handles multi-byte characters with letter suffixes
-/// * `delete_byte_range_chunked()` - Performs the actual deletion
+/// * `delete_byte_range_chunked()` - Performs the deletion
 ///
 /// # Testing Considerations
 ///
@@ -14255,7 +15960,7 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
             // Skip to Step 5
             state.is_modified = true;
 
-            state.cursor.tui_col = 0;
+            state.cursor.tui_visual_col = 0;
             let _ = state.set_info_bar_message("err:nO uNdo");
             return Ok(());
         }
@@ -14286,7 +15991,7 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
                 // Skip to Step 5
                 state.is_modified = true;
 
-                state.cursor.tui_col = 0;
+                state.cursor.tui_visual_col = 0;
                 return Ok(());
             }
         };
@@ -14298,11 +16003,10 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
         let mut carry_over_count: usize = 0;
         let mut logging_error_count: usize = 0;
         const MAX_LOGGING_ERRORS: usize = 100;
-        const MAX_CHUNKS: usize = 16_777_216;
 
         // Logging loop (same pattern as file insertion)
         loop {
-            if logging_chunk_counter >= MAX_CHUNKS {
+            if logging_chunk_counter >= limits::MAX_CHUNKS {
                 #[cfg(debug_assertions)]
                 log_error(
                     "Logging iteration exceeded MAX_CHUNKS",
@@ -14654,8 +16358,8 @@ fn delete_position_range_noload(state: &mut EditorState, file_path: &Path) -> Re
 /// - Never loads full file
 /// - Bounded iteration with MAX_FILE_SIZE check
 fn delete_byte_range_chunked(file_path: &Path, start_byte: u64, end_byte: u64) -> io::Result<()> {
-    // use normalize_sort_sanitize_selection_range() before this function
-    // // Defensive: Validate range
+    // Use normalize_sort_sanitize_selection_range() before this function
+    // Defensive: Validate range
     if start_byte >= end_byte {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -14666,9 +16370,9 @@ fn delete_byte_range_chunked(file_path: &Path, start_byte: u64, end_byte: u64) -
     // Create temp file in same directory
     let temp_path = file_path.with_extension("tmp_delete");
 
-    // Pre-allocated 8KB buffer
-    const CHUNK_SIZE: usize = 8192;
-    let mut buffer = [0u8; CHUNK_SIZE];
+    // Pre-allocated N-bytes buffer
+    const DBRC_CHUNK_SIZE: usize = 4;
+    let mut buffer = [0u8; DBRC_CHUNK_SIZE];
 
     let mut source = File::open(file_path)?;
     let mut dest = File::create(&temp_path)?;
@@ -14680,7 +16384,7 @@ fn delete_byte_range_chunked(file_path: &Path, start_byte: u64, end_byte: u64) -
     while bytes_copied < start_byte && iterations < limits::FILE_SEEK_BYTES {
         iterations += 1;
 
-        let to_read = ((start_byte - bytes_copied) as usize).min(CHUNK_SIZE);
+        let to_read = ((start_byte - bytes_copied) as usize).min(DBRC_CHUNK_SIZE);
         let n = source.read(&mut buffer[..to_read])?;
 
         if n == 0 {
@@ -14733,6 +16437,12 @@ fn delete_byte_range_chunked(file_path: &Path, start_byte: u64, end_byte: u64) -
 ///
 /// Returns total width including the mandatory trailing space.
 /// Uses wider width when we're within `effective_rows` of a digit rollover.
+///
+/// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+/// - In  `starting_row` : #3 top-of-window line number
+/// - In  `tui_row`      : #6 TUI display row (row + starting_row = this line's #3)
+/// - Out: line-number prefix width in #5 VISUAL cells (== chars; prefix is ASCII).
+///        The prefix occupies cells [0, return); content begins at cell `return`.
 ///
 /// # Examples
 /// - Line 5, 20 rows: returns 3 (might see line 24, use 2 digits + space)
@@ -15016,7 +16726,7 @@ fn insert_newline_at_cursor_chunked(
     // Step 1: Get file position at/of/where  cursor (with graceful error handling)
     let file_pos = match lines_editor_state.get_row_col_file_position(
         lines_editor_state.cursor.tui_row,
-        lines_editor_state.cursor.tui_col,
+        lines_editor_state.cursor.tui_visual_col,
     ) {
         Ok(Some(pos)) => pos,
         Ok(None) => {
@@ -15055,13 +16765,9 @@ fn insert_newline_at_cursor_chunked(
 
     // TODO this should not be be allocating MORE memory
     // this should use a standard modular buffer
-    // Pre-allocated 8KB buffer
-    const CHUNK_SIZE: usize = 8192;
-    let mut buffer = [0u8; CHUNK_SIZE];
-
-    // ...general_use_256_buffer
-    //
-    // state.clear_general_256_buffer;
+    // Pre-allocated N-bytes buffer
+    const INACC_CHUNK_SIZE: usize = 8;
+    let mut buffer = [0u8; INACC_CHUNK_SIZE];
 
     // Step 4: Copy bytes before insertion point
     let mut bytes_copied = 0u64;
@@ -15070,7 +16776,7 @@ fn insert_newline_at_cursor_chunked(
     while bytes_copied < insert_position && iterations < limits::FILE_SEEK_BYTES {
         iterations += 1;
 
-        let to_read = ((insert_position - bytes_copied) as usize).min(CHUNK_SIZE);
+        let to_read = ((insert_position - bytes_copied) as usize).min(INACC_CHUNK_SIZE);
 
         // TODO use state buffer
         // let n = source.read(state.general_use_256_buffer[..to_read])?;
@@ -15146,8 +16852,7 @@ fn insert_newline_at_cursor_chunked(
         lines_editor_state.effective_rows,
     ); // +1 for 1-indexed display
 
-    lines_editor_state.cursor.tui_col = line_num_width; // Position cursor after line number
-    lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
+    lines_editor_state.cursor.tui_visual_col = line_num_width; // Position cursor after line number
     lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
     // ============================================
     // Step 5.5: Create Inverse Changelog Entry
@@ -15302,7 +17007,8 @@ fn insert_newline_at_cursor_chunked(
 /// 4. Update total bytes written counter
 /// 5. Repeat until EOF (bytes_read == 0)
 ///
-/// **Iteration safety:** Limited to MAX_CHUNKS (16,777,216) to prevent infinite
+/// **Iteration safety:** Limited to MAX_CHUNKS
+/// (e.g. usize::MAX) to prevent infinite
 /// loops from filesystem corruption or cosmic ray bit flips.
 ///
 /// # File Operations
@@ -15427,7 +17133,7 @@ fn insert_newline_at_cursor_chunked(
 /// - No automatic rollback
 ///
 /// **Binary file:**
-/// - Works correctly - byte-level operations
+/// - byte-level operations
 /// - No UTF-8 assumptions
 /// - No text processing
 /// - Final byte still removed (might corrupt binary format)
@@ -15446,7 +17152,7 @@ fn insert_newline_at_cursor_chunked(
 ///
 /// **Cursor at EOF:**
 /// - Valid insertion point (appends to file)
-/// - Works correctly - start_byte_position points past last byte
+/// - start_byte_position points past last byte
 /// - Subsequent bytes shifted from that position (none exist)
 /// - Final byte deletion removes last byte of inserted content
 ///
@@ -15495,7 +17201,7 @@ fn insert_newline_at_cursor_chunked(
 /// # Example Usage
 ///
 /// ```ignore
-/// // Insert another file at current cursor position
+/// Insert another file at current cursor position
 /// let source = Path::new("/home/user/snippet.txt");
 /// match insert_file_at_cursor(&mut state, source) {
 ///     Ok(()) => {
@@ -15622,7 +17328,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
     // This is the insertion point for the first chunk
     // Subsequent chunks insert at: start_position + bytes_already_written
     let start_byte_position = match state
-        .get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_col)
+        .get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_visual_col)
     {
         Ok(Some(pos)) => pos.byte_offset_linear_file_absolute_position,
         Ok(None) => {
@@ -15645,7 +17351,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
             );
             // safe
             log_error(
-                "match state.get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_col) Error getting cursor position",
+                "match state.get_row_col_file_position(state.cursor.tui_row, state.cursor.tui_visual_col) Error getting cursor position",
                 Some("insert_file_at_cursor"),
             );
             return Err(LinesError::Io(e));
@@ -15678,8 +17384,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
     // ============================================
     // Counters and constants for the insertion loop
 
-    const CHUNK_SIZE: usize = 256;
-    const MAX_CHUNKS: usize = 16_777_216; // Allows ~4GB at 256-byte chunks
+    const IFAC_CHUNK_SIZE: usize = 8;
 
     let mut chunk_counter: usize = 0;
     let mut total_bytes_written: u64 = 0;
@@ -15693,7 +17398,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
     loop {
         // Defensive: Prevent infinite loop from filesystem corruption
         // Cosmic ray bit flips in file metadata could cause endless reads
-        if chunk_counter >= MAX_CHUNKS {
+        if chunk_counter >= limits::MAX_CHUNKS {
             let _ = state.set_info_bar_message("file too large");
             log_error(
                 "Maximum chunk limit reached MAX_CHUNKS",
@@ -15707,12 +17412,12 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
 
         // Pre-allocated buffer on stack (NASA Rule 3: no dynamic allocation)
         // This buffer is reused for each chunk - no per-iteration allocation
-        let mut buffer = [0u8; CHUNK_SIZE];
+        let mut buffer = [0u8; IFAC_CHUNK_SIZE];
 
         // Security mode: manually clear buffer before use
         // Prevents data leakage between chunks if read fails mid-buffer
         if state.security_mode {
-            for i in 0..CHUNK_SIZE {
+            for i in 0..IFAC_CHUNK_SIZE {
                 buffer[i] = 0;
             }
         }
@@ -15734,30 +17439,30 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
 
         // Defensive assertion: bytes_read should never exceed buffer size
         //
-        //    =================================================
-        // // Debug-Assert, Test-Asset, Production-Catch-Handle
-        //    =================================================
+        // =================================================
+        // Debug-Assert, Test-Asset, Production-Catch-Handle
+        // =================================================
         // This is not included in production builds
         // assert: only when running in a debug-build: will panic
         debug_assert!(
-            bytes_read <= CHUNK_SIZE,
+            bytes_read <= IFAC_CHUNK_SIZE,
             "bytes_read ({}) exceeded buffer size ({})",
             bytes_read,
-            CHUNK_SIZE
+            IFAC_CHUNK_SIZE
         );
         // Defensive assertion: bytes_read should never exceed buffer size
         // If it does, indicates memory corruption or cosmic ray bit flip
         // This is the only panic point - for catastrophic failure only
         #[cfg(test)]
         assert!(
-            bytes_read <= CHUNK_SIZE,
+            bytes_read <= IFAC_CHUNK_SIZE,
             "bytes_read ({}) exceeded buffer size ({})",
             bytes_read,
-            CHUNK_SIZE
+            IFAC_CHUNK_SIZE
         );
         // Catch & Handle without panic in production
         // This IS included in production to safe-catch
-        if !bytes_read <= CHUNK_SIZE {
+        if !bytes_read <= IFAC_CHUNK_SIZE {
             // state.set_info_bar_message("Config error");
             return Err(LinesError::GeneralAssertionCatchViolation(
                 "zero buffer size error".into(),
@@ -15895,7 +17600,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
 
     loop {
         // Safety limit: Same as insertion loop
-        if logging_chunk_counter >= MAX_CHUNKS {
+        if logging_chunk_counter >= limits::MAX_CHUNKS {
             #[cfg(debug_assertions)]
             log_error(
                 "Logging iteration exceeded MAX_CHUNKS",
@@ -15931,11 +17636,11 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
         }
 
         // Stack-allocated read buffer (NASA Rule 3: pre-allocated)
-        let mut buffer = [0u8; CHUNK_SIZE];
+        let mut buffer = [0u8; IFAC_CHUNK_SIZE];
 
         // Security mode: clear buffer before use
         if state.security_mode {
-            for i in 0..CHUNK_SIZE {
+            for i in 0..IFAC_CHUNK_SIZE {
                 buffer[i] = 0;
             }
         }
@@ -15968,18 +17673,24 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
         // Debug-Assert, Test-Assert, Production-Catch-Handle
         // =================================================
 
-        debug_assert!(bytes_read <= CHUNK_SIZE, "bytes_read exceeded CHUNK_SIZE");
+        debug_assert!(
+            bytes_read <= IFAC_CHUNK_SIZE,
+            "bytes_read exceeded IFAC_CHUNK_SIZE"
+        );
 
         #[cfg(test)]
-        assert!(bytes_read <= CHUNK_SIZE, "bytes_read exceeded CHUNK_SIZE");
+        assert!(
+            bytes_read <= IFAC_CHUNK_SIZE,
+            "bytes_read exceeded IFAC_CHUNK_SIZE"
+        );
 
         // Production catch-handle
-        if bytes_read > CHUNK_SIZE {
+        if bytes_read > IFAC_CHUNK_SIZE {
             #[cfg(debug_assertions)]
             log_error(
                 &format!(
-                    "bytes_read {} exceeded CHUNK_SIZE {}",
-                    bytes_read, CHUNK_SIZE
+                    "bytes_read {} exceeded IFAC_CHUNK_SIZE {}",
+                    bytes_read, IFAC_CHUNK_SIZE
                 ),
                 Some("insert_file_at_cursor:phase6"),
             );
@@ -16473,7 +18184,7 @@ fn replace_byte_in_place(file_path: &Path, position: usize, new_byte: u8) -> io:
 ///
 /// **8KB shift buffer limit:**
 /// If inserting N bytes at position P, and (file_size - P) > 8KB:
-/// - Only first 8KB shifted correctly
+/// - Only first 8KB shifted
 /// - Data beyond 8KB may be overwritten
 /// - Should loop to shift all remaining bytes
 ///
@@ -16491,8 +18202,8 @@ fn insert_bytes_at_position(file_path: &Path, position: u64, bytes: &[u8]) -> io
     let mut file = OpenOptions::new().read(true).write(true).open(file_path)?;
 
     // Pre-allocated buffer for bytes after insertion point
-    // 8KB chosen as balance between stack usage and shift efficiency
-    const BUFFER_SIZE: usize = 8192;
+    // N-bytes chosen as balance between stack usage and shift efficiency
+    const BUFFER_SIZE: usize = 8;
     let mut after_buffer = [0u8; BUFFER_SIZE];
 
     // Seek to insertion position and read bytes that will be shifted
@@ -16600,7 +18311,7 @@ pub fn insert_text_chunk_at_cursor_position(
 
     let file_pos = match lines_editor_state.get_row_col_file_position(
         lines_editor_state.cursor.tui_row,
-        lines_editor_state.cursor.tui_col,
+        lines_editor_state.cursor.tui_visual_col,
     ) {
         Ok(Some(pos)) => pos,
         Ok(None) => {
@@ -16658,8 +18369,8 @@ pub fn insert_text_chunk_at_cursor_position(
         .open(file_path)
         .map_err(|e| LinesError::Io(e))?;
 
-    // Read bytes after insertion point into 8K buffer (stack-allocated)
-    let mut after_buffer = [0u8; 8192];
+    // Read bytes after insertion point into N-bytes buffer (stack-allocated)
+    let mut after_buffer = [0u8; 32];
 
     file.seek(SeekFrom::Start(insert_position))
         .map_err(|e| LinesError::Io(e))?;
@@ -16747,13 +18458,13 @@ pub fn insert_text_chunk_at_cursor_position(
             // Skip to Phase 5 (cursor update) - insertion succeeded, logging is optional
             // Continue with cursor update and return
             let char_count = text_str.chars().count();
-            lines_editor_state.cursor.tui_col += char_count;
+            lines_editor_state.cursor.tui_visual_col += char_count;
 
             let right_edge = lines_editor_state.effective_cols.saturating_sub(1);
-            if lines_editor_state.cursor.tui_col > right_edge {
-                let overflow = lines_editor_state.cursor.tui_col - right_edge;
+            if lines_editor_state.cursor.tui_visual_col > right_edge {
+                let overflow = lines_editor_state.cursor.tui_visual_col - right_edge;
                 lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset += overflow;
-                lines_editor_state.cursor.tui_col = right_edge;
+                lines_editor_state.cursor.tui_visual_col = right_edge;
                 build_windowmap_nowrap(lines_editor_state, file_path)?;
             }
 
@@ -17015,22 +18726,22 @@ pub fn insert_text_chunk_at_cursor_position(
 
     // Update cursor position
     let char_count = text_str.chars().count();
-    lines_editor_state.cursor.tui_col += char_count;
+    lines_editor_state.cursor.tui_visual_col += char_count;
 
     // ==========================================
     // Check if cursor exceeded right edge
     // ==========================================
     let right_edge = lines_editor_state.effective_cols.saturating_sub(1);
 
-    if lines_editor_state.cursor.tui_col > right_edge {
+    if lines_editor_state.cursor.tui_visual_col > right_edge {
         // Calculate how far past edge we went
-        let overflow = lines_editor_state.cursor.tui_col - right_edge;
+        let overflow = lines_editor_state.cursor.tui_visual_col - right_edge;
 
         // Scroll window right to accommodate
         lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset += overflow;
 
         // Move cursor back to right edge
-        lines_editor_state.cursor.tui_col = right_edge;
+        lines_editor_state.cursor.tui_visual_col = right_edge;
 
         // Rebuild window to show new viewport
         build_windowmap_nowrap(lines_editor_state, file_path)?;
@@ -17048,7 +18759,7 @@ pub fn insert_text_chunk_at_cursor_position(
 ///
 /// # Purpose
 /// Extracts bytes from a visual selection in the source document and saves them
-/// as a new clipboard file. Handles multi-byte UTF-8 characters correctly by
+/// as a new clipboard file. Handles multi-byte UTF-8 characters by
 /// ensuring character boundaries are not split. Generates human-readable filenames
 /// from selection content (alphanumeric extraction).
 ///
@@ -17213,7 +18924,7 @@ pub fn insert_text_chunk_at_cursor_position(
 /// **Selection contains only non-alphanumeric:**
 /// - Example: "!@#$%^&*()"
 /// - Filename generation uses fallback: "item"
-/// - File content still copied correctly (raw bytes preserved)
+/// - File content still copied (raw bytes preserved)
 ///
 /// **Selection starts mid-character:**
 /// - Not adjusted - start position used as-is
@@ -17222,7 +18933,7 @@ pub fn insert_text_chunk_at_cursor_position(
 ///
 /// **Selection spans multi-byte characters:**
 /// - Example: "hello 花 world 🌟"
-/// - All bytes copied correctly (byte-by-byte copy)
+/// - All bytes copied (byte-by-byte copy)
 /// - End adjustment ensures last character complete
 /// - Filename: "helloworld" (alphanumeric only)
 ///
@@ -17271,7 +18982,7 @@ pub fn insert_text_chunk_at_cursor_position(
 ///
 /// **Time complexity:**
 /// - O(N) where N = selection size in bytes
-/// - One byte at a time (no buffering for correctness)
+/// - One byte at a time (no buffering)
 /// - Sequential I/O (no random seeks during copy)
 ///
 /// **Space complexity:**
@@ -17310,21 +19021,21 @@ pub fn insert_text_chunk_at_cursor_position(
 /// ```no_run
 /// # use std::path::Path;
 /// # fn example(state: &mut EditorState) -> Result<()> {
-/// // User selects "Hello, 世界!" in visual mode and presses 'y'
-/// // Selection: bytes 100-120 (includes multi-byte characters)
-/// // state.file_position_of_vis_select_start = 100
-/// // state.file_position_of_vis_select_end = 120
+///  // User selects "Hello, 世界!" in visual mode and presses 'y'
+///  // Selection: bytes 100-120 (includes multi-byte characters)
+///  // state.file_position_of_vis_select_start = 100
+///  // state.file_position_of_vis_select_end = 120
 ///
 /// let source = Path::new("/home/user/document.txt");
 ///
-/// // Copy selection to clipboard
+///  // Copy selection to clipboard
 /// copy_selection_to_clipboardfile(state, source)?;
 ///
-/// // Result:
-/// // - File created: <session_dir>/clipboard/Hello
-/// // - Contains UTF-8 bytes: "Hello, 世界!"
-/// // - Multi-byte characters complete and uncorrupted
-/// // - Can paste via Pasty mode
+///  // Result:
+///  // - File created: <session_dir>/clipboard/Hello
+///  // - Contains UTF-8 bytes: "Hello, 世界!"
+///  // - Multi-byte characters complete and uncorrupted
+///  // - Can paste via Pasty mode
 /// # Ok(())
 /// # }
 /// ```
@@ -17437,11 +19148,11 @@ pub fn copy_selection_to_clipboardfile(
 ///
 /// # Examples
 /// ```ignore
-/// // Forward selection: bytes 10-20
+///  // Forward selection: bytes 10-20
 /// is_in_selection(15, 10, 20) → true
 /// is_in_selection(5, 10, 20) → false
 ///
-/// // Backward selection: bytes 20-10
+///  // Backward selection: bytes 20-10
 /// is_in_selection(15, 20, 10) → true
 /// is_in_selection(5, 20, 10) → false
 /// ```
@@ -17489,10 +19200,10 @@ fn normalize_sort_sanitize_selection_range(start: u64, end: u64) -> Result<(u64,
 ///
 /// # Example
 /// ```ignore
-/// // 花 (U+82B1) = E8 8A B1 (3 bytes) at position 7
+///  // 花 (U+82B1) = E8 8A B1 (3 bytes) at position 7
 /// find_utf8_char_end(path, 7) → Ok(9)  // Last byte at position 9
 ///
-/// // ASCII 'a' = 0x61 (1 byte) at position 5
+///  // ASCII 'a' = 0x61 (1 byte) at position 5
 /// find_utf8_char_end(path, 5) → Ok(5)  // Last byte at position 5
 /// ```
 pub fn find_utf8_char_end(file_path: &Path, char_start_byte: u64) -> Result<u64> {
@@ -17629,9 +19340,9 @@ pub fn generate_clipboard_filename(
 
     // Debug-Assert: Validate byte range in debug builds
     //
-    //    =================================================
-    // // Debug-Assert, Test-Asset, Production-Catch-Handle
-    //    =================================================
+    // =================================================
+    // Debug-Assert, Test-Asset, Production-Catch-Handle
+    // =================================================
     // This is not included in production builds
     // assert: only when running in a debug-build: will panic
     debug_assert!(start_byte <= end_byte, "start_byte must be <= end_byte");
@@ -17922,8 +19633,8 @@ pub fn generate_clipboard_filename(
 /// ```no_run
 /// # use std::path::Path;
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Copy bytes 10 through 20 (inclusive) from source.txt
-/// // and append them to the end of target.txt
+///  Copy bytes 10 through 20 (inclusive) from source.txt
+///  and append them to the end of target.txt
 /// append_bytes_from_file_to_file(
 ///     Path::new("/absolute/path/to/source.txt"),
 ///     10,
@@ -17942,13 +19653,13 @@ pub fn generate_clipboard_filename(
 /// let source = Path::new("/data/large_file.dat");
 /// let output = Path::new("/data/output.dat");
 ///
-/// // Append header (first 512 bytes)
+///  Append header (first 512 bytes)
 /// append_bytes_from_file_to_file(source, 0, 511, output)?;
 ///
-/// // Append specific data section (bytes 1024-2047)
+///  Append specific data section (bytes 1024-2047)
 /// append_bytes_from_file_to_file(source, 1024, 2047, output)?;
 ///
-/// // Append footer (last 256 bytes, assuming we know the positions)
+///  Append footer (last 256 bytes, assuming we know the positions)
 /// append_bytes_from_file_to_file(source, 999744, 999999, output)?;
 /// # Ok(())
 /// # }
@@ -18296,7 +20007,6 @@ pub fn read_and_sort_pasty_clipboard(clipboard_dir: &PathBuf) -> io::Result<Vec<
 /// - ins: insert mode
 /// - vis: visual mode
 /// - hex: hex editor mode
-/// - raw: raw view
 /// - pasty: paste operation
 /// - cvy: copy operation
 /// - wrd,b,end: word navigation
@@ -18306,7 +20016,7 @@ pub fn read_and_sort_pasty_clipboard(clipboard_dir: &PathBuf) -> io::Result<Vec<
 ///
 /// ## Example
 /// ```rust
-/// // In main display loop:
+///  // In main display loop:
 /// write_formatted_navigation_legend_to_tui()?;
 /// ```
 fn format_pasty_tui_legend() -> Result<()> {
@@ -18328,26 +20038,6 @@ fn format_pasty_tui_legend() -> Result<()> {
     write_red_hotkey("Empty Enter", " Add Freshest Clipboard Item | ")?;
 
     write_red_hotkey("paste", " multi-line cut and paste")?;
-    // write_red_hotkey("hex", " ")?;
-
-    // // View operations group
-    // write_red_hotkey("r", "aw|")?;
-    // write_red_hotkey("p", "asty ")?;
-    // write_red_hotkey("cvy", "|")?;
-
-    // // Navigation group
-    // write_red_hotkey("w", "rd,")?;
-    // write_red_hotkey("b", ",")?;
-    // write_red_hotkey("e", "nd ")?;
-
-    // // Comment/indent group
-    // // Three Colour
-    // write_red_green_hotkey("/", "/", "/cmnt ")?;
-    // // Red only
-    // write_red_hotkey("[]", "idnt ")?;
-
-    // // Movement group
-    // write_red_hotkey("hjkl", "")?;
 
     // Clear formatting: ANSI color codes are stateful
     // Make sure NEXT prints
@@ -19052,7 +20742,8 @@ fn create_new_draft_copy(
 //     println!("                    Creates dated files in ~/Documents/lines_editor/");
 //     println!("    Full Editor:    Run from any other directory");
 //     println!("    n               Normal-Mode (navigation)");
-//     println!("    i               Insert-Mode (typing in text)");
+//     println!("    i               Insert-Mode (type in text, delete previous)");
+//     println!("    ki              Keystroke Insert-Mode (type in text, delete previous)");
 //     println!("    v               Visual/Select-Mode (select and act on selections");
 //     println!("    hex             Hex Editor Mode");
 //     println!("    p | pasty       Clipboard / Paste Mode");
@@ -19227,7 +20918,8 @@ MODES:
                     Creates dated files in ~/Documents/lines_editor/
     Full Editor:    Run from any other directory
     n               Normal-Mode (navigation)
-    i               Insert-Mode (typing in text)
+    i               Insert-Mode (type in text, delete previous)
+    ki              Keystroke Insert-Mode (type in text, del previous)
     v               Visual/Select-Mode (select and act on selections
     hex             Hex Editor Mode
     p | pasty       Clipboard / Paste Mode
@@ -19385,6 +21077,7 @@ does work while you are tying a command, before hitting Enter."#;
 //
 //  Press Enter to return to help menu... "#;
 
+// TODO: is this using heap? improved version probably needed
 /// Wait for user to press Enter key
 ///
 /// Simple utility function to pause execution until the user
@@ -19499,7 +21192,7 @@ pub fn display_help_menu_system(stdin_handle: &mut StdinLock) -> Result<()> {
         // Flush to ensure prompt appears
         io::stdout().flush().map_err(LinesError::Io)?;
 
-        // // Read user input
+        //  // Read user input
         // let mut input = String::new();
         // io::stdin().read_line(&mut input).map_err(LinesError::Io)?;
         // let input = input.trim().to_lowercase();
@@ -19622,68 +21315,51 @@ fn display_help_section_content(section: HelpSections, stdin_handle: &mut StdinL
     Ok(())
 }
 
-/// Formats the bottom info bar with current editor state
+/// Formats the bottom info bar with current editor state.
 ///
 /// # Purpose
-/// Shows critical state info: mode, cursor position, filename, and input buffer.
-/// All info on ONE line to minimize vertical space usage.
+/// Shows critical state on ONE line: mode, position, filename, file byte, and
+/// the pending info message.
+///
+/// # Position Reporting (file-grounded, not TUI/visual)
+/// Both numbers come from `get_row_col_file_position`, the single source of
+/// truth, NOT from `cursor.tui_visual_col` (which is a VISUAL TUI column under Option A
+/// and would mix units with the character-based scroll offset):
+///   - "line:N"  → N is the byte offset WITHIN the line (`byte_in_line`); for a
+///                 multibyte character this is that character's START byte.
+///   - "@M"      → M is the absolute file byte
+///                 (`byte_offset_linear_file_absolute_position`).
+/// If the cursor is not on a resolvable cell, both show "n/a".
+///
+/// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+/// Reports FILE-GROUNDED numbers only (never #4/#5 TUI abstractions):
+/// - "line N"  : #3 line number (shown +1 for humans)
+/// - ":B"      : #2 in-line byte (a multibyte char's START byte)
+/// - "@M"      : #1 file byte
+/// All three come from one `get_row_col_file_position(#6 tui_row, #5 tui_visual_col)`.
 ///
 /// # Arguments
-/// * `state` - Current editor state
-/// * `input_buffer` - Current command/insert input (if any)
+/// * `lines_editor_state` - Current editor state
 ///
 /// # Returns
 /// * `Ok(String)` - Formatted info bar string
 /// * `Err(LinesError)` - If formatting fails
-///
-/// # Format
-/// "NORMAL line 42, col 7 document.txt > command_here"
-/// "INSERT line 42, col 7 document.txt > text being typed"
-///
-/// # Design
-/// - Mode in caps for visibility
-/// - Line/col for cursor tracking
-/// - Filename for context
-/// - Input buffer shows what user is typing
 fn format_info_bar_cafe_normal_visualselect(lines_editor_state: &EditorState) -> Result<String> {
-    /*
-    Calculation note:
-    The column number should be - the number of digits +1
-
-    */
-    // Get mode string
+    // Mode string
     let mode_str = match lines_editor_state.mode {
         EditorMode::Normal => "NORMAL",
         EditorMode::Insert => "INSERT",
+        EditorMode::KeystrokeInputMode => "KEY-INSRT",
         EditorMode::VisualSelectMode => "VISUAL",
         EditorMode::PastyMode => "PASTY",
         EditorMode::HexMode => "HEX",
-        EditorMode::RawMode => "RAW",
     };
 
-    // Get current line and column
-    // Line is 1-indexed for display (humans count from 1)
+    // Line number (1-indexed for display).
     let line_display =
         lines_editor_state.line_count_at_top_of_window + lines_editor_state.cursor.tui_row + 1;
 
-    // Get line number to calculate line number display width
-    let line_num =
-        lines_editor_state.line_count_at_top_of_window + lines_editor_state.cursor.tui_row + 1;
-    let line_num_width = calculate_line_number_width(
-        lines_editor_state.line_count_at_top_of_window,
-        line_num,
-        lines_editor_state.effective_rows,
-    );
-
-    // Add horizontal offset to get character position in line
-    // Subtract line number width from displayed column
-    let true_char_position = lines_editor_state.cursor.tui_col
-        + lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset;
-
-    // zero-based vs. 1 based
-    let col_display = true_char_position.saturating_sub(line_num_width) + 1;
-
-    // Get filename (or "unnamed" if none)
+    // Filename (or a placeholder if none).
     let filename = lines_editor_state
         .original_file_path
         .as_ref()
@@ -19691,7 +21367,7 @@ fn format_info_bar_cafe_normal_visualselect(lines_editor_state: &EditorState) ->
         .and_then(|n| n.to_str())
         .unwrap_or("unmanned file");
 
-    // Extract message from buffer (find null terminator or use full buffer)
+    // Pending info message (up to the NUL terminator, or full buffer).
     let message_len = lines_editor_state
         .info_bar_message_buffer
         .iter()
@@ -19702,57 +21378,25 @@ fn format_info_bar_cafe_normal_visualselect(lines_editor_state: &EditorState) ->
         std::str::from_utf8(&lines_editor_state.info_bar_message_buffer[..message_len])
             .unwrap_or(""); // Empty string if invalid UTF-8
 
-    // Step 1: Get current line's file position
-    // In case of exception, say 'n/a'
-    let file_position_string = match lines_editor_state.get_row_col_file_position(
-        lines_editor_state.cursor.tui_row,
-        lines_editor_state.cursor.tui_col,
-    ) {
-        Ok(Some(row_col_file_pos)) => row_col_file_pos
-            .byte_offset_linear_file_absolute_position
-            .to_string(),
-        _ => "n/a".to_string(),
+    // Resolve the cursor's file position ONCE. Both reported numbers are
+    // file-grounded (see the Position Reporting note in this function's docs):
+    //   in_line_byte_string      → byte offset within the line (start byte)
+    //   file_position_string     → absolute file byte
+    let (in_line_byte_string, file_position_string) = match lines_editor_state
+        .get_row_col_file_position(
+            lines_editor_state.cursor.tui_row,
+            lines_editor_state.cursor.tui_visual_col,
+        ) {
+        Ok(Some(row_col_file_pos)) => (
+            row_col_file_pos.byte_in_line.to_string(),
+            row_col_file_pos
+                .byte_offset_linear_file_absolute_position
+                .to_string(),
+        ),
+        _ => ("n/a".to_string(), "n/a".to_string()),
     };
 
-    // let row_col_file_pos = lines_editor_state
-    //     .window_map
-    //     .get_row_col_file_position(lines_editor_state.cursor.tui_row, lines_editor_state.cursor.tui_col)?
-    //     .ok_or_else(|| {
-    //         io::Error::new(
-    //             io::ErrorKind::InvalidInput,
-    //             "fib: Cursor not on valid position",
-    //         )
-    //     })?;
-
-    // // Get file position at/of/where cursor
-    // let file_position_string = row_col_file_pos
-    //     .byte_offset_linear_file_absolute_position
-    //     .to_string();
-
-    // Build the info bar
-    // let info = format!(
-    //     // "{}{}{} line{}{} {}col{}{}{} {}{} >{}",
-    //     "{}{} {}{}{}:{}{}{} {}{} @{}{}{} {}{} > ",
-    //     YELLOW,
-    //     mode_str,
-    //     // YELLOW,
-    //     RED,
-    //     line_display,
-    //     YELLOW,
-    //     YELLOW,
-    //     RED,
-    //     col_display,
-    //     YELLOW,
-    //     filename,
-    //     // GREEN,
-    //     RED,
-    //     file_position_string,
-    //     YELLOW,
-    //     message_for_infobar,
-    //     RESET,
-    // );
-
-    // Build the info bar (no-heap)
+    // Build the info bar (no-heap formatter).
     let info_bar = stack_format_it(
         "{}{} {}{}{}:{}{}{} {}{} @{}{}{} {}{} > ",
         &[
@@ -19763,7 +21407,7 @@ fn format_info_bar_cafe_normal_visualselect(lines_editor_state: &EditorState) ->
             &YELLOW,
             &YELLOW,
             &RED,
-            &col_display.to_string(),
+            &in_line_byte_string,
             &YELLOW,
             &filename,
             &RED,
@@ -20070,251 +21714,10 @@ fn render_hex_row(state: &EditorState) -> Result<String> {
     Ok(result)
 }
 
-//  =====================
-//  Sashimi Raw TUI Ramen
-//  =====================
-//  =====================
-//  RAW String TUI
-//  =====================
-//  =====================
-//  Sashimi Raw TUI Ramen
-//  =====================
-
-//  =====================
-//  RAW STRING TUI
-//  =====================
-
-/// Renders the complete TUI in RAW STRING mode
-///
-/// # Purpose
-/// Displays raw string view with escape sequences visible:
-/// 1. Top: Command legend (1 line, same as hex mode)
-/// 2. Middle: Raw string with visible escapes + interpreted text (2 lines)
-/// 3. Bottom: Info bar (1 line, shows byte offset)
-///
-/// # Layout
-/// ```text
-/// quit ins vis save undo hjkl wb /search       <- Legend
-/// H  e  l  l  o  \n W  o  r  l  d  \t A  B    <- Raw (escapes visible)
-/// H  e  l  l  o  ␊  W  o  r  l  d  ␉  A  B    <- Interpreted
-/// RAW byte 156 of 1024 doc.txt > cmd_         <- Info bar
-/// ```
-pub fn render_tui_raw(state: &EditorState) -> Result<()> {
-    // Clear screen
-    print!("\x1B[2J\x1B[H");
-    io::stdout().flush().map_err(|e| {
-        LinesError::DisplayError(stack_format_it(
-            "Failed to flush stdout: {}",
-            &[&e.to_string()],
-            "Failed to flush stdout",
-        ))
-    })?;
-
-    // === TOP LINE: LEGEND (same as hex mode) ===
-    let _ = write_formatted_navigation_legend_to_tui()?;
-
-    // padding
-    for _ in 0..5 {
-        println!();
-    }
-
-    // === MIDDLE: RAW + INTERPRETED DISPLAY (2 lines) ===
-    let raw_display = render_raw_row(state)?;
-    print!("{}", raw_display);
-
-    // padding
-    for _ in 0..14 {
-        println!();
-    }
-
-    // === BOTTOM LINE: INFO BAR ===
-    let info_bar = format_raw_info_bar(state)?;
-    print!("{}", info_bar);
-
-    io::stdout().flush().map_err(|e| {
-        LinesError::DisplayError(stack_format_it(
-            "Failed to flush stdout: {}",
-            &[&e.to_string()],
-            "Failed to flush stdout",
-        ))
-    })?;
-
-    Ok(())
-}
-
 // ============================================================================
 // UTF-8 CHARACTER ANALYSIS (Helper for Multi-byte Character Handling)
 // ============================================================================
 
-/// Renders one row of raw string data with interpreted view
-///
-/// # Purpose
-/// Displays 26 bytes in two formats:
-/// 1. Raw representation with escape sequences (\n, \t, etc.)
-/// 2. Interpreted character representation (same as hex mode UTF-8 line)
-///
-/// # Format
-/// ```text
-/// H  e  l  l  o  \n W  o  r  l  d  \t
-/// H  e  l  l  o  ␊  W  o  r  l  d  ␉
-/// ```
-///
-/// # Escape Sequences
-/// - Newline (0x0A) → \n
-/// - Tab (0x09) → \t
-/// - Carriage return (0x0D) → \r
-/// - Backslash (0x5C) → \\
-/// - Quote (0x22) → \"
-/// - Other non-printable → \xHH (hex escape)
-/// - Regular printable → as-is
-fn render_raw_row(state: &EditorState) -> Result<String> {
-    const BYTES_TO_DISPLAY: usize = 26;
-    const BOLD: &str = "\x1b[1m";
-    const RED: &str = "\x1b[31m";
-    const BG_WHITE: &str = "\x1b[47m";
-    const RESET: &str = "\x1b[0m";
-
-    let mut raw_line = String::with_capacity(120); // Escapes can be 2-4 chars
-    let mut interpreted_line = String::with_capacity(DEFAULT_COLS);
-    let mut byte_buffer = [0u8; BYTES_TO_DISPLAY];
-
-    // Get file path from state
-    let file_path = state
-        .read_copy_path
-        .as_ref()
-        .ok_or_else(|| LinesError::StateError("No file path in raw mode".to_string()))?;
-
-    let mut file = File::open(file_path).map_err(|e| LinesError::Io(e))?;
-
-    // Calculate ROW START (same as hex)
-    let current_row = state.hex_cursor.current_row();
-    let row_start_offset = current_row * state.hex_cursor.bytes_per_row;
-
-    // Seek to START OF ROW
-    file.seek(io::SeekFrom::Start(row_start_offset as u64))
-        .map_err(|e| LinesError::Io(e))?;
-
-    let bytes_read = file.read(&mut byte_buffer).map_err(|e| LinesError::Io(e))?;
-    let cursor_col = state.hex_cursor.current_col();
-
-    // Build raw line and interpreted line simultaneously
-    for i in 0..BYTES_TO_DISPLAY {
-        if i < bytes_read {
-            let byte = byte_buffer[i];
-
-            let mut hex_buf = [0u8; 64];
-
-            // TODO: explore stack based formatting...
-            // === RAW LINE (with escape sequences) ===
-            // let raw_repr = byte_to_raw_escape(byte);
-            let raw_repr = stack_format_byte_escape(byte, &mut hex_buf).unwrap_or("?");
-
-            if i == cursor_col {
-                // raw_line.push_str(&format!(
-                //     "{}{}{}{:<3}{}", // Left-align in 3-char field
-                //     BOLD, RED, BG_WHITE, raw_repr, RESET
-                // ));
-
-                let formatted_string_1 = stack_format_it(
-                    "{}{}{}{:<3}{}", // "{}{}{}{:<3}{}",
-                    &[&BOLD, &RED, &BG_WHITE, &raw_repr, &RESET],
-                    "NNNNN",
-                );
-                raw_line.push_str(&formatted_string_1);
-            } else {
-                // raw_line.push_str(&format!("{:<3}", raw_repr));
-                let formatted_string_2 = stack_format_it("{:<3}", &[&raw_repr], "N");
-                raw_line.push_str(&formatted_string_2);
-            }
-
-            // === INTERPRETED LINE (same as hex mode) ===
-            let display_char = byte_to_display_char(byte);
-
-            if i == cursor_col {
-                // interpreted_line.push_str(&format!(
-                //     "{}{}{}{}{}  ",
-                //     BOLD, RED, BG_WHITE, display_char, RESET
-                // ));
-
-                let formatted_string_3 = stack_format_it(
-                    "{}{}{}{}{}  ",
-                    &[&BOLD, &RED, &BG_WHITE, &display_char.to_string(), &RESET],
-                    "NNNNN",
-                );
-
-                interpreted_line.push_str(&formatted_string_3);
-            } else {
-                interpreted_line.push_str(&format!("{}  ", display_char));
-                // interpreted_line.push_str(&stack_format_it(
-                //     "{}  ",
-                //     &[&display_char.to_string()],
-                //     "N   ",
-                // ));
-            }
-        } else {
-            // Past EOF
-            raw_line.push_str("   ");
-            interpreted_line.push_str("   ");
-        }
-    }
-
-    // let result = format!("{}\n{}\n", raw_line.trim_end(), interpreted_line.trim_end());
-
-    let result = stack_format_it(
-        "{}\n{}\n",
-        &[&raw_line.trim_end(), &interpreted_line.trim_end()],
-        "^\n^\n",
-    );
-
-    Ok(result)
-}
-
-/// Formats info bar for raw string mode
-///
-/// # Format
-/// ```text
-/// RAW byte 156 of 1024 doc.txt > cmd_
-/// ```
-fn format_raw_info_bar(state: &EditorState) -> Result<String> {
-    let filename = state
-        .read_copy_path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-
-    // Get file size (same as hex mode)
-    let file_size = if let Some(path) = &state.read_copy_path {
-        std::fs::metadata(path)
-            .map(|m| m.len() as usize)
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
-    // Ok(format!(
-    //     "RAW byte {} of {} {} > ",
-    //     state.hex_cursor.byte_offset_linear_file_absolute_position, file_size, filename
-    // ))
-
-    Ok(stack_format_it(
-        "RAW byte {} of {} {} > ",
-        &[
-            &state
-                .hex_cursor
-                .byte_offset_linear_file_absolute_position
-                .to_string(),
-            &file_size.to_string(),
-            &filename,
-        ],
-        "RAW byte __ of _ _ > ",
-    ))
-}
-
-//  =====================
-//  Sashimi Raw TUI Ramen end
-//  =====================
-//
 /// Finds the next newline byte position after current cursor
 ///
 /// # Purpose
@@ -20332,11 +21735,11 @@ fn format_raw_info_bar(state: &EditorState) -> Result<String> {
 /// * `Err(e)` - File read error
 ///
 /// # Search Strategy
-/// Reads file in 256-byte chunks to avoid loading entire file.
+/// Reads file in N-byte chunks to avoid loading entire file.
 /// Bounded by file size to prevent infinite loops.
 ///
 /// # Memory Safety
-/// - Pre-allocated 256-byte buffer (no dynamic allocation)
+/// - Pre-allocated N-byte buffer (no dynamic allocation)
 /// - Bounded iteration (stops at EOF)
 /// - Returns position, not reference (no lifetime issues)
 fn find_next_newline(
@@ -20344,7 +21747,7 @@ fn find_next_newline(
     start_offset: usize,
     file_size: usize,
 ) -> io::Result<Option<usize>> {
-    const SEARCH_CHUNK_SIZE: usize = 256;
+    const SEARCH_CHUNK_SIZE: usize = 32;
     let mut buffer = [0u8; SEARCH_CHUNK_SIZE];
 
     let mut file = File::open(file_path)?;
@@ -20404,15 +21807,15 @@ fn find_next_newline(
 /// * `Err(e)` - File read error
 ///
 /// # Search Strategy
-/// Reads file in 256-byte chunks backward from cursor position.
+/// Reads file in N-byte chunks backward from cursor position.
 /// Stops at byte 0 (file start).
 ///
 /// # Memory Safety
-/// - Pre-allocated 256-byte buffer
+/// - Pre-allocated N-byte buffer
 /// - Bounded iteration (stops at offset 0)
 /// - Underflow protection (checked subtraction)
 fn find_previous_newline(file_path: &PathBuf, start_offset: usize) -> io::Result<Option<usize>> {
-    const SEARCH_CHUNK_SIZE: usize = 256;
+    const SEARCH_CHUNK_SIZE: usize = 32;
     let mut buffer = [0u8; SEARCH_CHUNK_SIZE];
 
     if start_offset == 0 {
@@ -20561,25 +21964,6 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
         std::str::from_utf8(&lines_editor_state.info_bar_message_buffer[..message_len])
             .unwrap_or(""); // Empty string if invalid UTF-8
 
-    // Build info bar
-    // // Show byte position as 1-indexed for human readability
-    // let info_bar = format!(
-    //     "{}HEX byte {}{}{} of {}{}{} {}, Edit:Enter Hex|Insrt:NN-i|GoTo:gN {} {}> ",
-    //     YELLOW,
-    //     RED,
-    //     lines_editor_state
-    //         .hex_cursor
-    //         .byte_offset_linear_file_absolute_position
-    //         + 1, // Human-friendly: 1-indexed
-    //     YELLOW,
-    //     RED,
-    //     file_size,
-    //     YELLOW,
-    //     filename,
-    //     message_for_infobar,
-    //     RESET,
-    // );
-
     let string_lines = &lines_editor_state
         .hex_cursor
         .byte_offset_linear_file_absolute_position
@@ -20648,7 +22032,7 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
 /// in each row is checked for symbol/keyword highlighting during rendering.
 ///
 /// # Cursor Column Adjustment
-/// state.cursor.tui_col is in full-row coordinates (including line number
+/// state.cursor.tui_visual_col is in full-row coordinates (including line number
 /// prefix characters like "42 "). render_utf8txt_row_with_cursor() receives
 /// only the content portion of each row (prefix stripped), so the cursor
 /// column must be adjusted by subtracting line_num_width. Saturating
@@ -20669,6 +22053,10 @@ fn format_hex_info_bar(lines_editor_state: &EditorState) -> Result<String> {
 /// * `Ok(())` - Successfully rendered all three sections
 /// * `Err(LinesError)` - Display operation failed (write error, window_map
 ///                        error, or selection calculation error)
+///
+/// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+/// Computes `content_cursor_col = cursor.tui_visual_col - line_num_width`
+/// (#5 full → #5 content-relative) before calling render_utf8txt_row_with_cursor.
 ///
 /// # Error Handling
 /// All errors from sub-functions are propagated via `?`. No silent failures.
@@ -20773,18 +22161,19 @@ pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
                     // ---------------------------------------------------------
                     // CURSOR COLUMN ADJUSTMENT
                     // ---------------------------------------------------------
-                    // state.cursor.tui_col is in full-row coordinates
+                    // state.cursor.tui_visual_col is in full-row coordinates
                     // (including line number prefix characters).
                     //
                     // render_utf8txt_row_with_cursor receives the content
                     // portion only (prefix stripped), so the cursor column
                     // must be adjusted by subtracting line_num_width.
                     //
-                    // saturating_sub prevents underflow if cursor.tui_col
+                    // saturating_sub prevents underflow if cursor.tui_visual_col
                     // is somehow less than line_num_width (cursor in the
                     // line number prefix area — should not happen in normal
                     // operation, but handled defensively).
-                    let content_cursor_col = state.cursor.tui_col.saturating_sub(line_num_width);
+                    let content_cursor_col =
+                        state.cursor.tui_visual_col.saturating_sub(line_num_width);
 
                     // ---------------------------------------------------------
                     // WRITE CONTENT WITH HIGHLIGHTING (direct to stdout)
@@ -20864,89 +22253,67 @@ pub fn render_tui_utf8txt(state: &EditorState) -> Result<()> {
 /// and syntax highlighting — zero heap allocation.
 ///
 /// # Purpose (Project Context)
-/// This is the character-by-character rendering function for the TUI editor's
-/// content area. It processes a single display row and writes ANSI-styled
-/// characters directly to stdout as it goes. No intermediate String is built.
+/// Character-by-character renderer for the TUI content area. It writes
+/// ANSI-styled bytes directly to stdout as it walks the row; no intermediate
+/// String is built. It applies, in strict priority:
+///   PRIORITY 1: Cursor (BOLD + RED + WHITE_BG)
+///   PRIORITY 2: Visual selection (BOLD + YELLOW + CYAN_BG)
+///   PRIORITY 3: Syntax highlighting (cyan symbols, yellow keywords)
+///   PRIORITY 4: Tab glyph (blue arrow)
+///   PRIORITY 5: Plain character (default green)
 ///
-/// The function applies three layers of highlighting with strict priority:
-///   PRIORITY 1: Cursor (BOLD + RED + WHITE_BG) — always wins
-///   PRIORITY 2: Visual selection (BOLD + YELLOW + CYAN_BG) — if in visual mode
-///   PRIORITY 3: Syntax highlighting (cyan for symbols, yellow for keywords)
-///   PRIORITY 4: Plain character — no styling
+/// # Byte / Visual coordinate tracking (Option A)
+/// `cursor.tui_visual_col` is a VISUAL column — a count of terminal CELLS — under the
+/// project's Option A decision. A double-width character (CJK/emoji) occupies
+/// TWO cells but is ONE character. The caller passes `cursor_col` already
+/// adjusted to a VISUAL content column (full visual `tui_visual_col` minus the
+/// line-number prefix width). This function therefore maintains:
 ///
-/// # Multi-byte UTF-8 and the Byte-vs-Character Index Problem
+///   - `byte_pos`:   byte offset into `row_content`; advances 1-4 bytes per
+///                   character. Used for slicing, syntax prefix matching, and
+///                   writing bytes.
+///   - `visual_col`: VISUAL column (cells) consumed so far; advances by the
+///                   character's display width (1 for ASCII/normal, 2 for
+///                   double-width). Compared against `cursor_col` to place the
+///                   cursor block, exactly mirroring how
+///                   get_row_col_file_position walks visual width.
 ///
-/// ## Critical Invariant
-/// `cursor.tui_col` is a CHARACTER column position, not a byte offset.
-/// When we removed Vec<char>, we lost the simple `for col in 0..chars.len()`
-/// iteration where `col` automatically tracked character index.
+/// The cursor block is drawn on the character whose visual span
+/// `[visual_col, visual_col + width)` CONTAINS `cursor_col` (snap-to-containing;
+/// the same rule the lookup uses, so block placement and file position agree).
 ///
-/// We now iterate over `row_content` byte-by-byte using UTF-8 boundary
-/// detection and maintain TWO separate counters:
-///
-///   - `byte_pos`:  Byte offset into `row_content`. Used for slicing, for
-///                  syntax highlight prefix matching, and for writing bytes.
-///                  Advances by 1-4 bytes per character.
-///
-///   - `char_index`: Character column position. Increments by exactly 1 per
-///                   complete UTF-8 character, regardless of byte width.
-///                   Compared against `cursor_col` for cursor highlighting.
-///
-/// ## Why This Matters (Concrete Example)
-/// ```text
-/// row_content bytes: [h] [e] [l] [l] [o] [ ] [E4 B8 96] [20]
-///                     0   1   2   3   4   5   6  7   8     9   <- byte_pos
-/// character index:    0   1   2   3   4   5   6              7  <- char_index
-///
-/// cursor_col = 6 → cursor is on '世' (3-byte char at byte_pos 6).
-/// If we compared cursor_col against byte_pos, it would accidentally match
-/// byte 6 here — but on a different line where multi-byte chars appear
-/// earlier, byte_pos and char_index diverge and the cursor would land
-/// on the wrong character.
-/// ```
-///
-/// This is the same byte-vs-character discipline used in
-/// process_line_with_offset() during its skip and write phases.
-///
-/// # Syntax Highlighting Integration
-/// When `is_plain_text` is false (file is not .txt/.log):
-///   - buffy_get_syntax_highlight() is called with `byte_pos` to check
-///     for keyword or symbol matches
-///   - SyntaxSymbol: single character written in cyan
-///   - DefinitionWord: keyword_byte_len bytes written in yellow, then
-///     byte_pos and char_index advance past the entire keyword
-///   - The cursor position is NEVER syntax-highlighted (cursor priority)
-///   - Characters inside the keyword span that overlap the cursor still
-///     get cursor highlighting for that one character
+/// # Why visual, not character
+/// With character counting, a `cursor_col` of (say) 71 on a line whose first 69
+/// visible characters span 72 visual cells (three double-width chars) never
+/// matches any character index and falls through to the end-of-line block,
+/// painting the cursor past the line. Walking visual width fixes this at the
+/// source and keeps the block in lockstep with the resolved file byte.
 ///
 /// # Direct-Write Pattern (No Heap)
-/// This function writes ANSI escape codes and character bytes directly to
-/// stdout using stdout.write_all(). No String accumulation, no Vec<char>,
-/// no format!() macro. This is the pattern Buffy is designed for.
+/// Writes ANSI codes and character bytes via stdout.write_all(). No String
+/// accumulation, no Vec<char>, no format!() macro.
 ///
-/// The caller (render_tui_utf8txt) prints the line number prefix BEFORE
-/// calling this function, then calls buffy_println for the newline AFTER.
-/// This function writes only the content portion of the row.
+/// # Coordinate Spaces (see the module "Coordinate Spaces" reference)
+/// - In  `row_index`  : #6 TUI display row
+/// - In  `cursor_col` : #5 VISUAL cell column, CONTENT-RELATIVE (caller already
+///                      subtracted the prefix width). The loop accumulates #5
+///                      visual cells and places the cursor where they match.
 ///
 /// # Arguments
-/// * `state`          - Editor state (mode, cursor position, window_map)
+/// * `state`          - Editor state (mode, cursor position)
 /// * `row_index`      - Display row being rendered (0-indexed within window)
-/// * `row_content`    - The text content for this row (content portion only,
-///                      line number prefix already excluded by caller)
-/// * `cursor_col`     - Cursor column adjusted for content portion (caller
-///                      subtracts line_num_width from state.cursor.tui_col)
-/// * `is_plain_text`  - If true, skip syntax highlighting entirely.
-///                      Computed once by caller via buffy_is_plain_text_extension()
+/// * `row_content`    - Content portion of the row (line-number prefix already
+///                      excluded by the caller)
+/// * `cursor_col`     - VISUAL content column (caller subtracts the prefix
+///                      width from the visual `state.cursor.tui_visual_col`)
+/// * `is_plain_text`  - If true, skip syntax highlighting entirely
 ///
 /// # Returns
 /// * `Ok(())` - Row content written to stdout successfully
-/// * `Err(LinesError)` - If window_map lookup fails, selection check fails,
-///                        or stdout write fails
+/// * `Err(LinesError)` - On lookup, selection, or stdout write failure
 ///
 /// # Error Handling
-/// All write failures and window_map errors are propagated. No silent failures.
-/// stdout.write_all() errors are converted to LinesError::DisplayError.
-/// This function never panics in production.
+/// All write and lookup failures are propagated; never panics in production.
 fn render_utf8txt_row_with_cursor(
     state: &EditorState,
     row_index: usize,
@@ -20964,61 +22331,46 @@ fn render_utf8txt_row_with_cursor(
     let cursor_on_this_row = row_index == state.cursor.tui_row;
 
     // =========================================================================
-    // TOTAL CHARACTER COUNT (for cursor-at-end-of-line detection)
+    // TOTAL VISUAL WIDTH (for cursor-at/past-end-of-line detection)
     // =========================================================================
-    // We need to know the total number of characters in the row to detect
-    // when the cursor is at/past the end. We count characters by scanning
-    // UTF-8 lead bytes. This is O(n) but avoids Vec<char> allocation.
-    // Done once before the main loop.
-    let total_chars = row_content.chars().count();
+    // cursor_col is a VISUAL content column, so end-of-line detection and the
+    // clamp below are measured in VISUAL cells (double-width chars count 2).
+    let mut total_visual_width: usize = 0;
+    for ch in row_content.chars() {
+        total_visual_width += if double_width::is_double_width(ch) {
+            2
+        } else {
+            1
+        };
+    }
 
-    // Defensive: prevent cursor beyond line length (same as original)
-    let effective_cursor_col = cursor_col.min(total_chars);
+    // Defensive clamp: cursor cannot be drawn beyond the row's visual extent.
+    let effective_cursor_col = cursor_col.min(total_visual_width);
 
     // =========================================================================
-    // MAIN LOOP: Iterate by UTF-8 character boundaries
-    //
-    // TWO COUNTERS (see doc comment for full explanation):
-    //   byte_pos   — byte offset into row_bytes, advances by char byte length
-    //   char_index — character column, advances by 1 per UTF-8 character
-    //
-    // For cursor comparison: char_index == effective_cursor_col
-    // For syntax matching:   byte_pos passed to buffy_get_syntax_highlight()
-    // For writing bytes:     &row_bytes[byte_pos..byte_pos + char_byte_len]
+    // MAIN LOOP: iterate UTF-8 character boundaries, tracking byte_pos and the
+    // VISUAL column. (No character-index counter is needed: cursor placement is
+    // purely visual under Option A.)
     // =========================================================================
     let mut byte_pos: usize = 0;
-    let mut char_index: usize = 0;
+    let mut visual_col: usize = 0;
 
-    // Safety bound: prevent infinite loops on malformed input.
-    // row_len is the byte length; we can never have more characters than bytes.
+    // Safety bound: never more characters than bytes.
     let max_iterations = row_len + 1;
     let mut iterations: usize = 0;
 
     while byte_pos < row_len {
-        // =====================================================================
-        // ITERATION GUARD
-        // =====================================================================
         iterations += 1;
         if iterations > max_iterations {
-            // Defensive: should never happen with well-formed UTF-8.
-            // In production, break and return what we have rather than panic.
             #[cfg(debug_assertions)]
             eprintln!(
-                "render_utf8txt_row_with_cursor: iteration limit reached at byte_pos={}, char_index={}",
-                byte_pos, char_index
+                "render_utf8txt_row_with_cursor: iteration limit reached at byte_pos={}, visual_col={}",
+                byte_pos, visual_col
             );
             break;
         }
 
-        // =====================================================================
-        // DETERMINE CHARACTER BYTE LENGTH
-        // =====================================================================
-        // UTF-8 encoding: lead byte tells us how many bytes this character is.
-        //   0xxxxxxx → 1 byte  (ASCII)
-        //   110xxxxx → 2 bytes
-        //   1110xxxx → 3 bytes
-        //   11110xxx → 4 bytes
-        //   Anything else → malformed, treat as 1 byte defensively.
+        // ---- character byte length from the UTF-8 lead byte ----
         let char_byte_len = if byte_pos < row_len {
             let lead = row_bytes[byte_pos];
             if lead < 0x80 {
@@ -21030,18 +22382,15 @@ fn render_utf8txt_row_with_cursor(
             } else if lead < 0xF8 {
                 4
             } else {
-                // Malformed lead byte. Advance 1 byte to avoid infinite loop.
-                1
+                1 // malformed lead byte; advance 1 to avoid an infinite loop
             }
         } else {
-            break; // past end, should not reach here due to while condition
+            break;
         };
 
-        // Defensive: ensure we do not read past end of row_bytes
+        // ---- bounds: do not read past the end of the row ----
         let char_end = byte_pos + char_byte_len;
         let char_end = if char_end > row_len {
-            // Incomplete multi-byte character at end of string.
-            // Write a replacement character and break.
             #[cfg(debug_assertions)]
             eprintln!(
                 "render_utf8txt_row_with_cursor: incomplete UTF-8 at byte_pos={}, need {} bytes, have {}",
@@ -21063,13 +22412,32 @@ fn render_utf8txt_row_with_cursor(
 
         let char_bytes = &row_bytes[byte_pos..char_end];
 
+        // ---- VISUAL width of THIS character (1 or 2 cells) ----
+        let display_width = if char_byte_len == 1 {
+            1
+        } else {
+            match std::str::from_utf8(char_bytes) {
+                Ok(s) => match s.chars().next() {
+                    Some(ch) => {
+                        if double_width::is_double_width(ch) {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                    None => 1,
+                },
+                Err(_) => 1,
+            }
+        };
+
         // =====================================================================
-        // PRIORITY 1: CURSOR HIGHLIGHTING
+        // PRIORITY 1: CURSOR — visual span-contains (snap-to-containing)
         // =====================================================================
-        // cursor.tui_col is a CHARACTER index. We compare against char_index.
-        // If cursor is on this character, write with cursor styling and skip
-        // all other highlighting.
-        if cursor_on_this_row && char_index == effective_cursor_col {
+        if cursor_on_this_row
+            && effective_cursor_col >= visual_col
+            && effective_cursor_col < visual_col + display_width
+        {
             stdout.write_all(BOLD_U8).map_err(|e| {
                 LinesError::DisplayError(stack_format_it(
                     "rURWC cursor write: {}",
@@ -21107,54 +22475,21 @@ fn render_utf8txt_row_with_cursor(
             })?;
 
             byte_pos = char_end;
-            char_index += 1;
+            visual_col += display_width;
             continue;
         }
 
         // =====================================================================
-        // PRIORITY 2: VISUAL SELECTION HIGHLIGHTING
+        // PRIORITY 2: VISUAL SELECTION
         // =====================================================================
         if state.mode == EditorMode::VisualSelectMode {
-            // get_row_col_file_position uses char_index (column) for lookup.
-            // The window_map was built with character columns, not byte offsets.
-            // We need to add line_num_width back because the window_map was
-            // built with the full row coordinates including line number prefix.
-            //
-            // IMPORTANT: The caller passes us content-only (line number prefix
-            // stripped), and passes cursor_col already adjusted. But the
-            // window_map stores positions in full-row coordinates. We need the
-            // line_num_width to reconstruct the full-row column for the lookup.
-            //
-            // However, looking at the original code: the original function
-            // received the full row_str including line number, and iterated
-            // over all characters. The caller then sliced the OUTPUT string
-            // with [line_num_width..]. Now we receive only the content portion
-            // but must look up positions in the full-row window_map.
-            //
-            // We pass row_index and the FULL column (char_index + line_num_width)
-            // to the window_map lookup. But we do not have line_num_width here.
-            //
-            // SOLUTION: We look up using the char_index offset that the
-            // window_map actually stores. The caller can tell us the column
-            // offset to add. For now, we rely on the fact that the window_map
-            // columns start at col_start (which is the line_num_width).
-            // We need to receive this offset. But to minimise signature changes
-            // in this step, we can compute it from state.
-            //
-            // Actually, reviewing render_tui_utf8txt more carefully:
-            // The original code passed full row_str, and the window_map was
-            // indexed with full-row columns. The caller sliced the RESULT.
-            // Now we need to map char_index back to the window_map column.
-            //
-            // We compute line_num_width the same way the caller does, and
-            // add it to char_index for the window_map lookup.
-
             let line_num_width = calculate_line_number_width(
                 state.line_count_at_top_of_window,
                 state.cursor.tui_row,
                 state.effective_rows,
             );
-            let map_col = char_index + line_num_width;
+            // get_row_col_file_position expects a VISUAL column (Option A).
+            let map_col = visual_col + line_num_width;
 
             let file_pos_option = state.get_row_col_file_position(row_index, map_col)?;
 
@@ -21203,7 +22538,7 @@ fn render_utf8txt_row_with_cursor(
                     })?;
 
                     byte_pos = char_end;
-                    char_index += 1;
+                    visual_col += display_width;
                     continue;
                 }
             }
@@ -21212,15 +22547,12 @@ fn render_utf8txt_row_with_cursor(
         // =====================================================================
         // PRIORITY 3: SYNTAX HIGHLIGHTING
         // =====================================================================
-        // Only when the file is not plain text (.txt, .log).
-        // buffy_get_syntax_highlight() receives byte_pos because it needs
-        // to do prefix matching (keyword detection) from that position.
         if !is_plain_text {
             let highlight = buffy_get_syntax_highlight(byte_pos, row_content);
 
             match highlight {
                 SyntaxHighlight::SyntaxSymbol => {
-                    // Single character in colour. Write ANSI, char, reset.
+                    // Single symbol character in colour.
                     stdout.write_all(SYMBOL_COLOUR).map_err(|e| {
                         LinesError::DisplayError(stack_format_it(
                             "rURWC syn write: {}",
@@ -21244,40 +22576,40 @@ fn render_utf8txt_row_with_cursor(
                     })?;
 
                     byte_pos = char_end;
-                    char_index += 1;
+                    visual_col += display_width;
                     continue;
                 }
 
                 SyntaxHighlight::DefinitionWord { keyword_byte_len } => {
-                    // Multi-character keyword in yellow.
-                    // Write the entire keyword span as one coloured block,
-                    // BUT: if the cursor is inside this keyword span, we must
-                    // write character-by-character so the cursor character gets
-                    // cursor highlighting instead.
-                    //
-                    // Determine how many CHARACTERS are in the keyword.
-                    // All current keywords are ASCII, so byte_len == char_count.
-                    // But for safety, we count properly.
-                    let keyword_end_byte = byte_pos + keyword_byte_len;
-                    let keyword_end_byte = keyword_end_byte.min(row_len); // bounds safety
+                    // Multi-character keyword in yellow. Computed spans are in
+                    // VISUAL cells so the cursor-overlap test agrees with the
+                    // visual cursor column.
+                    let keyword_end_byte = (byte_pos + keyword_byte_len).min(row_len);
+                    let keyword_slice = &row_content[byte_pos..keyword_end_byte];
 
-                    // Check: does the cursor land inside this keyword span?
-                    // If so, fall through to character-by-character rendering
-                    // so cursor priority is respected.
+                    // Visual width of the keyword span (keywords are ASCII, so
+                    // this equals the character count, but we sum widths
+                    // if that ever changes).
+                    let mut keyword_visual_width: usize = 0;
+                    for ch in keyword_slice.chars() {
+                        keyword_visual_width += if double_width::is_double_width(ch) {
+                            2
+                        } else {
+                            1
+                        };
+                    }
+
+                    // Does the visual cursor column fall inside this keyword?
                     let cursor_in_keyword = if cursor_on_this_row {
-                        // Count characters in the keyword span to know
-                        // what char_index range it covers.
-                        let keyword_slice = &row_content[byte_pos..keyword_end_byte];
-                        let keyword_char_count = keyword_slice.chars().count();
-                        let keyword_char_end = char_index + keyword_char_count;
-                        effective_cursor_col >= char_index
-                            && effective_cursor_col < keyword_char_end
+                        let keyword_visual_end = visual_col + keyword_visual_width;
+                        effective_cursor_col >= visual_col
+                            && effective_cursor_col < keyword_visual_end
                     } else {
                         false
                     };
 
                     if !cursor_in_keyword {
-                        // No cursor conflict: write entire keyword in yellow.
+                        // No cursor conflict: write the whole keyword in yellow.
                         let keyword_bytes = &row_bytes[byte_pos..keyword_end_byte];
 
                         stdout.write_all(DEFINITION_COLOUR).map_err(|e| {
@@ -21302,18 +22634,14 @@ fn render_utf8txt_row_with_cursor(
                             ))
                         })?;
 
-                        // Advance byte_pos and char_index past the keyword.
-                        let keyword_slice = &row_content[byte_pos..keyword_end_byte];
-                        let keyword_char_count = keyword_slice.chars().count();
                         byte_pos = keyword_end_byte;
-                        char_index += keyword_char_count;
+                        visual_col += keyword_visual_width;
                         continue;
                     }
-                    // If cursor IS inside keyword, fall through to write
-                    // this single character normally — the next loop iteration
-                    // for the cursor character will hit PRIORITY 1 above.
-                    // For this current character (which is the first char of
-                    // the keyword, and is NOT the cursor), write it in yellow.
+
+                    // Cursor IS inside the keyword: write only this first
+                    // character (in yellow); a later iteration lands the cursor
+                    // character on PRIORITY 1.
                     stdout.write_all(YELLOW_U8).map_err(|e| {
                         LinesError::DisplayError(stack_format_it(
                             "rURWC kw partial: {}",
@@ -21337,34 +22665,52 @@ fn render_utf8txt_row_with_cursor(
                     })?;
 
                     byte_pos = char_end;
-                    char_index += 1;
+                    visual_col += display_width;
                     continue;
                 }
 
                 SyntaxHighlight::None => {
-                    // Fall through to PRIORITY 4 below.
+                    // Fall through to PRIORITY 4 / 5 below.
                 }
             }
         }
 
-        // // =====================================================================
-        // // PRIORITY 4: PLAIN CHARACTER — no styling
-        // // =====================================================================
-        // stdout.write_all(char_bytes).map_err(|e| {
-        //     LinesError::DisplayError(stack_format_it(
-        //         "rURWC plain write: {}",
-        //         &[&e.to_string()],
-        //         "rURWC plain write",
-        //     ))
-        // })?;
+        // =====================================================================
+        // PRIORITY 4: TAB CHARACTER — blue visible glyph (single cell)
+        // =====================================================================
+        // Rendered as a blue → glyph (TAB_GLYPH), which is one visual cell, so
+        // visual_col advances by display_width (== 1 for the single-byte tab).
+        if char_bytes == b"\t" {
+            stdout.write_all(TAB_COLOUR).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC tab write: {}",
+                    &[&e.to_string()],
+                    "rURWC tab write",
+                ))
+            })?;
+            stdout.write_all(TAB_GLYPH).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC tab write: {}",
+                    &[&e.to_string()],
+                    "rURWC tab write",
+                ))
+            })?;
+            stdout.write_all(RESET_U8).map_err(|e| {
+                LinesError::DisplayError(stack_format_it(
+                    "rURWC tab write: {}",
+                    &[&e.to_string()],
+                    "rURWC tab write",
+                ))
+            })?;
+
+            byte_pos = char_end;
+            visual_col += display_width;
+            continue;
+        }
 
         // =====================================================================
-        // PRIORITY 4: PLAIN CHARACTER — default green text
+        // PRIORITY 5: PLAIN CHARACTER — DEFAULT_TEXT_COLOUR (green)
         // =====================================================================
-        // Green is the default colour for all unstyled content characters.
-        // Cursor (priority 1), selection (priority 2), and syntax highlighting
-        // (priority 3) each apply their own colours and reset afterwards.
-        // Plain characters get green as the baseline readable colour.
         stdout.write_all(DEFAULT_TEXT_COLOUR).map_err(|e| {
             LinesError::DisplayError(stack_format_it(
                 "rURWC plain write: {}",
@@ -21388,16 +22734,16 @@ fn render_utf8txt_row_with_cursor(
         })?;
 
         byte_pos = char_end;
-        char_index += 1;
+        visual_col += display_width;
     }
 
     // =========================================================================
-    // CURSOR AT/PAST END OF LINE
+    // CURSOR AT/PAST END OF LINE (visual)
     // =========================================================================
-    // When the cursor column is at or beyond the last character, show a
-    // cursor block at the end position. This allows the user to position
-    // the cursor after the last character for appending.
-    if cursor_on_this_row && effective_cursor_col >= total_chars {
+    // When the cursor's visual column is at or beyond the row's total visual
+    // width, draw the block at the end so the user can append after the last
+    // character. Compared in VISUAL cells (matches Option A).
+    if cursor_on_this_row && effective_cursor_col >= total_visual_width {
         stdout.write_all(BOLD_U8).map_err(|e| {
             LinesError::DisplayError(stack_format_it(
                 "rURWC eol cursor: {}",
@@ -21474,7 +22820,7 @@ fn render_utf8txt_row_with_cursor(
 /// # Crash Recovery Use Case
 /// When recovering from a crash or interrupted session:
 /// ```rust
-/// // User provides the session directory they want to recover
+///  // User provides the session directory they want to recover
 /// let recovery_path = PathBuf::from("lines_data/sessions/20250103_143022");
 /// initialize_session_directory(&mut state, timestamp, Some(recovery_path))?;
 /// ```
@@ -21737,7 +23083,7 @@ pub fn initialize_session_directory(
 /// ```rust
 /// let timestamp = "2025_01_15_14_30_45".to_string();
 /// let session_path = simple_make_lines_editor_session_directory(timestamp)?;
-/// // session_path is now: "/path/to/exe/lines_data/sessions/2025_01_15_14_30_45"
+///  // session_path is now: "/path/to/exe/lines_data/sessions/2025_01_15_14_30_45"
 /// ```
 pub fn simple_make_lines_editor_session_directory(
     session_time_stamp: String,
@@ -21801,7 +23147,7 @@ pub fn simple_make_lines_editor_session_directory(
 
     // Check if directory already exists (idempotent)
     if session_path.exists() {
-        // Defensive: Verify it's actually a directory
+        // Defensive: Verify it is a directory
         if !session_path.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -21899,9 +23245,12 @@ pub fn lines_full_file_editor(
 
     // Resolve target file path (all path handling logic extracted)
     let target_path = resolve_target_file_path(original_file_path)?;
-    // // Diagnostic
-    // println!("\n=== Opening Lines Editor ==="); // TODO remove/commentout debug print
-    // println!("File: {}", target_path.display());
+
+    #[cfg(debug_assertions)]
+    {
+        println!("\n=== Opening Lines Editor ===");
+        println!("File: {}", target_path.display());
+    }
 
     // Create file if it doesn't exist
     if !target_path.exists() {
@@ -21987,7 +23336,7 @@ pub fn lines_full_file_editor(
 /// Ensures a file is in a state the line editor can open for editing.
 ///
 /// # Purpose / Project Context
-/// The line editor's loading logic cannot correctly open a completely
+/// The line editor's loading logic cannot open a completely
 /// empty (zero-byte) file (e.g. one created by `touch`). To handle this
 /// edge case without changing the editor's loading invariants, any
 /// existing zero-byte regular file has a single newline appended so it
@@ -22069,16 +23418,16 @@ fn ensure_file_is_editor_ready(target_path: &Path) -> Result<bool> {
 /// # Edge Cases
 /// - Zero-byte existing files (e.g. created by `touch`) are normalized
 ///   to contain a single newline before opening, because the line-loader
-///   cannot correctly open a truly empty file.
+///   cannot open a truly empty file.
 ///
 pub fn lines_fullfile_editor_core(
     original_file_path: Option<PathBuf>,
     starting_line: Option<usize>,
     use_this_session: Option<PathBuf>,
 ) -> Result<bool> {
-    //  ///////////////////////////////////////
+    //  =======================================
     //  Initialization & Bootstrap Lines Editor
-    //  ///////////////////////////////////////
+    //  =======================================
 
     // Resolve target file path (all path handling logic extracted)
     let target_path = resolve_target_file_path(original_file_path)?;
@@ -22145,9 +23494,9 @@ pub fn lines_fullfile_editor_core(
             }
         };
 
-    //  ////////////////////////
+    //  ========================
     //  Set Up & Build The State
-    //  ////////////////////////
+    //  ========================
 
     let mut lines_editor_state = EditorState::new();
     lines_editor_state.original_file_path = Some(target_path.clone());
@@ -22169,8 +23518,8 @@ pub fn lines_fullfile_editor_core(
     let read_copy_path =
         create_a_readcopy_of_file(&target_path, session_dir, session_time_stamp2.to_string())?;
 
-    // // Diagnostic
-    // println!("Read-copy: {}", read_copy_path.display());
+    #[cfg(debug_assertions)]
+    println!("Read-copy: {}", read_copy_path.display());
 
     // Initialize window position
     lines_editor_state.line_count_at_top_of_window = 0;
@@ -22179,7 +23528,7 @@ pub fn lines_fullfile_editor_core(
 
     // Bootstrap initial cursor position, start of file, after "l "
     lines_editor_state.cursor.tui_row = 0;
-    lines_editor_state.cursor.tui_col = 3; // Bootstrap Bumb: start after padded line nunber (zero-index 3)
+    lines_editor_state.cursor.tui_visual_col = 3; // Bootstrap Bump: start after padded line nunber (zero-index 3)
 
     // IF cli argument to goto/start-at line:
     // e.g. lines many_lines_v1.txt:500
@@ -22197,8 +23546,7 @@ pub fn lines_fullfile_editor_core(
                     lines_editor_state.effective_rows,
                 );
                 // println!("{line_num_width}{target_line}");
-                lines_editor_state.cursor.tui_col = line_num_width; // Skip over line number display
-                lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
+                lines_editor_state.cursor.tui_visual_col = line_num_width; // Skip over line number display
                 lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
 
                 lines_editor_state.line_count_at_top_of_window = target_line;
@@ -22220,26 +23568,22 @@ pub fn lines_fullfile_editor_core(
         .clone()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "No read copy path"))?;
 
-    // // diagnostic
-    // // Now we can mutably borrow lines_editor_state
-    // let lines_processed = build_windowmap_nowrap(&mut lines_editor_state, &read_copy)?;
-    // println!("Loaded {} lines", lines_processed); // TODO remove/commentout debug line
-
     // Now we can mutably borrow lines_editor_state
     let _ = build_windowmap_nowrap(&mut lines_editor_state, &read_copy)?;
 
     // Main editor loop
     let mut keep_editor_loop_running = true;
 
-    //  ////////////////
+    //  ================
     //  Set Up Main Loop
-    //  ////////////////
+    //  ================
 
     // set up pre-allocated input buffere, short for commands
     // and Bucket Brigade! for text input:
     let mut command_buffer = [0u8; WHOLE_COMMAND_BUFFER_SIZE];
 
-    // TODO: use/reuse general 256 buffer
+    // TODO: use/reuse general 256 buffer?
+    // or have buffers in-function and remove 'general' buffers from state?
     let mut text_buffer = [0u8; TEXT_BUCKET_BRIGADE_CHUNKING_BUFFER_SIZE];
     let stdin = io::stdin();
     let mut stdin_handle = stdin.lock(); // Lock stdin once for entire session
@@ -22247,13 +23591,9 @@ pub fn lines_fullfile_editor_core(
     // Defensive: Limit loop iterations to prevent infinite loops
     let mut iteration_count = 0;
 
-    // // boot strap Render TUI (convert LinesError to io::Error)
-    // render_tui_utf8txt(&lines_editor_state)
-    //     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Display error: {}", e)))?;
-
-    //  ///////////////////////////////
+    //  ===============================
     //  Main Loop for Full Lines Editor
-    //  ///////////////////////////////
+    //  ===============================
     while keep_editor_loop_running && iteration_count < limits::MAIN_EDITOR_LOOP_COMMANDS {
         iteration_count += 1;
 
@@ -22276,13 +23616,12 @@ pub fn lines_fullfile_editor_core(
         );
 
         // Check if cursor is in line number area (not in file-window) AND no horizontal offset
-        if lines_editor_state.cursor.tui_col < line_num_width
+        if lines_editor_state.cursor.tui_visual_col < line_num_width
             && lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset == 0
         {
             // on line 0? (top) is cursor off the reservation? If so... Bump it Right!
             if lines_editor_state.cursor.tui_row == 0 {
-                lines_editor_state.cursor.tui_col = line_num_width;
-                lines_editor_state.in_row_abs_horizontal_0_index_cursor_position = line_num_width;
+                lines_editor_state.cursor.tui_visual_col = line_num_width;
                 lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
 
                 build_windowmap_nowrap(&mut lines_editor_state, &read_copy)?;
@@ -22302,8 +23641,8 @@ pub fn lines_fullfile_editor_core(
                     );
 
                     // Ensure cursor is at least past line numbers
-                    if lines_editor_state.cursor.tui_col < line_num_width {
-                        lines_editor_state.cursor.tui_col = line_num_width;
+                    if lines_editor_state.cursor.tui_visual_col < line_num_width {
+                        lines_editor_state.cursor.tui_visual_col = line_num_width;
                     }
                 }
 
@@ -22316,16 +23655,6 @@ pub fn lines_fullfile_editor_core(
             //  HEX Render a Flesh TUI
             //  ======================
             render_tui_hex(&lines_editor_state).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    stack_format_it("Display error: {}", &[&e.to_string()], "Display error"),
-                )
-            })?;
-        } else if lines_editor_state.mode == EditorMode::RawMode {
-            //  =====================
-            //  Sashimi Raw TUI Ramen
-            //  =====================
-            render_tui_raw(&lines_editor_state).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::Other,
                     stack_format_it("Display error: {}", &[&e.to_string()], "Display error"),
@@ -22350,6 +23679,20 @@ pub fn lines_fullfile_editor_core(
             //  ===========
             keep_editor_loop_running = lines_editor_state
                 .handle_utf8txt_insert_mode_input(&mut stdin_handle, &mut text_buffer)?;
+        } else if lines_editor_state.mode == EditorMode::KeystrokeInputMode {
+            //  ====================
+            //  Keystroke Input Mode
+            //  ====================
+            // The ONLY raw-terminal path in the editor. The session method owns
+            // the RawTerminal for its entire (RAII) lifetime, runs its own read
+            // loop, renders inside that loop, and recovers to Normal mode on ESC,
+            // EOF, or read error. It returns Ok(true) so the main loop continues
+            // (keystroke-input mode has no quit command).
+            //
+            // `read_copy` is cloned once at main-loop setup; we pass a borrow so
+            // the path is not re-cloned per keystroke.
+            keep_editor_loop_running =
+                lines_editor_state.handle_keystroke_input_session(&read_copy)?;
         } else if lines_editor_state.mode == EditorMode::PastyMode {
             //  ==========
             //  Pasty Mode
@@ -22357,12 +23700,6 @@ pub fn lines_fullfile_editor_core(
             keep_editor_loop_running =
                 lines_editor_state.pasty_mode(&mut stdin_handle, &mut text_buffer)?;
         } else if lines_editor_state.mode == EditorMode::HexMode {
-            //  ===============
-            //  Hex Editor Mode
-            //  ===============
-            keep_editor_loop_running = lines_editor_state
-                .handle_parse_hex_mode_input_and_commands(&mut stdin_handle, &mut command_buffer)?;
-        } else if lines_editor_state.mode == EditorMode::RawMode {
             //  ===============
             //  Hex Editor Mode
             //  ===============
@@ -22376,7 +23713,7 @@ pub fn lines_fullfile_editor_core(
             // After movement, update END position to new cursor location
             if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
                 lines_editor_state.cursor.tui_row,
-                lines_editor_state.cursor.tui_col,
+                lines_editor_state.cursor.tui_visual_col,
             ) {
                 lines_editor_state.file_position_of_vis_select_end =
                     file_pos.byte_offset_linear_file_absolute_position;
@@ -22410,7 +23747,7 @@ pub fn lines_fullfile_editor_core(
     Ok(true)
 }
 
-// Keep This
+// ** Keep This **
 //  /// This is a template for calling the lines module
 //  /// Main entry point - routes between memo mode and full editor mode
 //  ///
@@ -22436,7 +23773,7 @@ pub fn lines_fullfile_editor_core(
 //     // Check if we're in home directory
 //     let in_home = is_in_home_directory()?;
 
-//     // // Diagnostics
+//     //  // Diagnostics
 //     // println!("=== Lines Text Editor ===");
 //     // println!("Current directory: {}", env::current_dir()?.display());
 //     // if in_home {

@@ -1,4 +1,4 @@
-//! buffy.rs - Zero-heap formatting for TUI applications
+//! buffy_format_write_module.rs - Zero-heap formatting for TUI applications
 //! https://github.com/lineality/buffy_stack_format_write_module
 //!
 //! ## HEAP ALLOCATION: NONE
@@ -167,9 +167,9 @@ pub enum BuffyFormatArg<'a> {
     // U16Hex(u16),
     // U32Hex(u32),
 
-    // // Other types
-    // Bool(bool),
-    // Char(char),
+    // // // Other types
+    // // Bool(bool),
+    // // Char(char),
     // Path(&'a Path),
 
     // Styled variants (adds ANSI codes)
@@ -524,6 +524,7 @@ fn apply_alignment<'a>(value: &str, spec: FormatSpec, buf: &'a mut [u8]) -> Opti
 // DIRECT TERMINAL OUTPUT - TRUE ZERO HEAP
 // =============================================================================
 
+// Q: could 'args' be an 'option'?
 /// Writes formatted output directly to stdout without any intermediate allocation.
 ///
 /// ## Project Context
@@ -654,70 +655,69 @@ pub fn buffy_print(template: &str, args: &[BuffyFormatArg]) -> io::Result<()> {
                         })?;
                         (s, false, BuffyStyles::default())
                     }
-                    // BuffyFormatArg::I8(n) => {
-                    //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::I16(n) => {
-                    //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::I32(n) => {
-                    //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::I64(n) => {
-                    //     let s = format_i64_to_buffer(*n, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::Isize(n) => {
-                    //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::U8Hex(n) => {
-                    //     let s = format_u8_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::U16Hex(n) => {
-                    //     let s = format_u16_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::U32Hex(n) => {
-                    //     let s = format_u32_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
-                    //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-                    // BuffyFormatArg::Bool(b) => (
-                    //     if *b { "true" } else { "false" },
-                    //     false,
-                    //     BuffyStyles::default(),
-                    // ),
-                    // BuffyFormatArg::Char(c) => {
-                    //     let mut char_buf = [0u8; 4];
-                    //     let char_str = c.encode_utf8(&mut char_buf);
-                    //     let len = char_str.len();
-                    //     num_buf[..len].copy_from_slice(char_str.as_bytes());
-                    //     let s = std::str::from_utf8(&num_buf[..len]).map_err(|_| {
-                    //         io::Error::new(io::ErrorKind::Other, "Char conversion failed")
-                    //     })?;
-                    //     (s, false, BuffyStyles::default())
-                    // }
-
+                    // // BuffyFormatArg::I8(n) => {
+                    // //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::I16(n) => {
+                    // //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::I32(n) => {
+                    // //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::I64(n) => {
+                    // //     let s = format_i64_to_buffer(*n, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::Isize(n) => {
+                    // //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::U8Hex(n) => {
+                    // //     let s = format_u8_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::U16Hex(n) => {
+                    // //     let s = format_u16_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::U32Hex(n) => {
+                    // //     let s = format_u32_hex_to_buffer(*n, &mut num_buf).ok_or_else(|| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Hex conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
+                    // // BuffyFormatArg::Bool(b) => (
+                    // //     if *b { "true" } else { "false" },
+                    // //     false,
+                    // //     BuffyStyles::default(),
+                    // // ),
+                    // // BuffyFormatArg::Char(c) => {
+                    // //     let mut char_buf = [0u8; 4];
+                    // //     let char_str = c.encode_utf8(&mut char_buf);
+                    // //     let len = char_str.len();
+                    // //     num_buf[..len].copy_from_slice(char_str.as_bytes());
+                    // //     let s = std::str::from_utf8(&num_buf[..len]).map_err(|_| {
+                    // //         io::Error::new(io::ErrorKind::Other, "Char conversion failed")
+                    // //     })?;
+                    // //     (s, false, BuffyStyles::default())
+                    // // }
                     // BuffyFormatArg::Path(p) => {
                     //     let s = p.to_str().ok_or_else(|| {
                     //         io::Error::new(io::ErrorKind::Other, "Path conversion failed")

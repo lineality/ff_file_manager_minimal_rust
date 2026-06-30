@@ -15026,6 +15026,10 @@ const FF_SOURCE_FILES: &[SourcedFile] = &[
         "src/toggle_comment_indent_module.rs",
         include_str!("toggle_comment_indent_module.rs"),
     ),
+    SourcedFile::new(
+        "src/raw_terminal_x86_module.rs",
+        include_str!("raw_terminal_x86_module.rs"),
+    ),
     SourcedFile::new("test.csv", include_str!("../test.csv")),
     SourcedFile::new(".gitignore", include_str!("../.gitignore")),
 ];
