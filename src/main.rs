@@ -15,6 +15,8 @@ mod buffy_format_write_module;
 mod buttons_reversible_edit_changelog_module;
 mod lines_editor_module;
 mod toggle_comment_indent_module;
+// only for linux x86-64
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod raw_terminal_x86_module;
 
 // Share Source
