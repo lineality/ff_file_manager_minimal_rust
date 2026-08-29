@@ -13417,40 +13417,6 @@ fn determine_starting_location_from_path(path_arg: Option<String>) -> Result<Sta
     #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Absolute path: {}", absolute_path.display());
 
-    // // =================================================
-    // // Case 3: Check if Path Exists
-    // // =================================================
-    // if !absolute_path.exists() {
-    //     // Path doesn't exist - fall back to current directory
-    //     println!(
-    //         "Warning: Path '{}' does not exist. attempting to create blank file.",
-    //         absolute_path.display()
-    //     );
-
-    //     #[cfg(debug_assertions)]
-    //     eprintln!("[DEBUG] Path does not exist, falling back to current directory");
-
-    //     // Get current directory as fallback
-    //     let fallback_dir = match std::env::current_dir() {
-    //         Ok(dir) => dir,
-    //         Err(e) => {
-    //             // Cannot get current directory - critical failure
-    //             #[cfg(debug_assertions)]
-    //             eprintln!(
-    //                 "[DEBUG] Failed to get current directory for fallback: {}",
-    //                 e
-    //             );
-
-    //             return Err(FileFantasticError::Io(e));
-    //         }
-    //     };
-
-    //     return Ok(StartingLocation {
-    //         file_to_open: None,
-    //         directory_to_browse: fallback_dir,
-    //     });
-    // }
-
     // ==============================================================================
     // Case 3: Check if Path Exists (Create Blank File and path if not yet existing)
     // ==============================================================================
