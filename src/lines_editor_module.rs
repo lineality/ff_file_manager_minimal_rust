@@ -2,6 +2,10 @@
 //! lines is minimal text editor
 //! test files in: src/tests.rs
 //!
+//! Note: The current version of this code predates and so does not follow
+//! the Mode & Case Handling policy guidelines below; fixing that problem
+//! is a high(est) priority TODO item.
+//!
 //! Originally lines used a byte-to-tui lookup table to interface TUI
 //! and user actions and the file bytes. Now that lookup functionality is done
 //! using a virtual-lookup-table calculated on the fly to conserve memory.
@@ -186,314 +190,238 @@ full IDE competing with Zed, Helix, vsCode, etc.
 - Where possible, as in legacy-mini-lines-editor, do not leave a file 'open' to read/write/append. Read what you need, when you need to, then stop reading the file, close out the read/write process so that the file is not locked or conflicted for another application or process (outside or inside of Lines).
 
 
+#### rust_lang_rules
+(Production-Rust rules of thumb)
 
-# 🦀 Rust rules 🦀:
-(production-Rust rules)
+#### Also see [Mode & Case-Handling](https://github.com/lineality/modes_and_case_handling/blob/main/mode_case_handling_framework_summary.md)
 
-# 🦀 Rust rules 🦀:
+# 🦀 Rust Guidelines 🦀:
 - Always best practice.
-- Always extensive doc strings: what the code is doing with project context
+- Never ~unsafe code.
+- Always extensive doc strings: what the code is doing with project-context.
 - Always clear comments.
-- Always cargo tests (where possible).
-- Never remove (still-current) documentation.
-- Always clear, meaningful, unique names (e.g. variables, functions).
-- Always absolute file paths.
-- Always error handling.
-- Never unsafe code.
-- Never use unwrap (in production builds).
+- Include cargo tests (where possible).
+- Functions should return result (in real life everything will fail at some point).
+- Never remove (current) documentation.
+- Always clear, meaningful, globally unique names (e.g. variables, functions, etc.): Do not give two things one name, do not give one thing two names.
+- Always absolute file paths
+- Always error handling
+- '?' should be avoided where it would obscure an error
+- Never use unwrap (in Production-Release builds / mode; use in Test Mode, cargo-tests, is obviously valid).
+- Always [handle](https://github.com/lineality/modes_and_case_handling) modes (Test Mode | Debug Mode | Production-Release Mode) and cases/errors appropriately, case by case, for that project. (There is no one-size-fits-all lazy-ideology.)
+- Always follow boy-scout values
+- Single-Flat: Default to a single-flat-file module x.rs. The crate src/ contains two files: main.rs and x.rs. main.rs uses "mod x; use x::FUNCTIONNAME;" to run the module. The single-flat-file module x.rs (where x = the name of the module) is portable to be added to other crates and projects).
+- Default to Vanilla-Rust: No third party crates.
+- Take performance and security into consideration when designing parts and architectures.
+- Specify development-phase and use-type context (and related design-priorities): POC, MVP-1, use-once, long term production, etc.
 
-Theory and real life are completely different in production code.
-Production code must be designed for bitflips, hardware failures, OS errors, etc.  Not pure platonic nirvana.
-E.g. According to Linus Torvalds, many or most windows blue screen of death issues in 1990-2010 happened because code did not account for real-world physical hard drive behaviors (including memory errors). According to Steve Gibson (and maybe Designing Data-Intensive Applications: by Martin Kleppmann) many network and database issues are caused by hard-radiation ("cosmic-ray") bitflips.
-
-Power failures happen. Hardware failures happen. Cyberattacks happen. Misbehaving applications happen. Rare edge cases happen. Race conditions happen. Undefined behavior happens. Most code does not have guardrails like either Rust or NASA's 'Power of Ten rules'. Etc.
-
-Much code is only for R&D and internal one-off use, and that is fine. Printing 'hello world' to test should not require elaborate production-hardening. Not all code is or needs to be "production" code. But production code must be smart.
-
-In production: Every line of code will fail eventually. Not 'if': every line of code will fail eventually. Production code is written to handle the failures when, (not 'if,' when) they happen. There is no 'should not fail.' There is no 'can not fail.' Every function will fail. Every call to every function will malfunction. Everything (in production) must be checked and handled so that when (not 'if,' when) these expected errors happen the process does not misbehave, crash, abort, or escalate malfunction, etc.
-
-Empirical processes are more "statistical," less tautological; and "statistical" quickly reaches into the unknown and the undefined.
-
-### Rules of Thumb (there will be exceptions and edge cases):
-
-- Classic ~quote from Sid Meyer's Civilization Game: "The bureaucracy has expanded to meet the needs of the expanding bureaucracy." Bloat and project collapse due to nihilist mismanagement and bad project skills is not new to computer science.
-
-#### Rules Require Context:
-- Rules such as 'Don't Repeat Yourself' or 'Separation of Concerns' require a context to be coherent and a compelling reason: Do not repeat yourself IF there is a compelling reason in a clear context. Does aerospace engineering have a blind policy of zero redundancy? No, it does not. Context matters.
-
-
-#### Flat is better than nested. (Just like in the zen of python.)
-- Always consider the flat option first.
-- Be wary of ever-more nested structs that claim to infinitely 'separate concerns' for the sake of 'separating concerns.'
-
-
-#### 'Get [what is] needed, when [it is] needed.':
-- Do not load more into state than you need.
-- Do not store more information than you need.
-- Do not use more storage capacity than you need.
-- Do not keep a hold/handle on a file longer than is needed (e.g. forever).
-
-
-#### Grace Hopper ~"The most damaging phrase in the language is 'we've always done it this way.' The second most damaging is 'storage is cheap.'"
-- Be as caring and vigilant about memory-economics as Grace Hopper (who famously walked around with a piece of wire 30 cm long — "a nanosecond" — to make engineers physically feel the cost of waste). Before suggesting the size for a variable (such as apathetically using more memory than is needed) imagine you are suggesting this to Grace Hopper to her face. Only use as much memory as you are absolutely required to use.
-
-- Load what is needed when it is needed: Do not ever load a whole file or line, rarely load a whole anything. Increment and load only what is required pragmatically. Do not fill 'state' with anything that is not both necessary and actually used. Do not insecurity output information broadly in the case of production errors and exceptions (testing and debugging.
-
-- Always use defensive best practice.
-
-- Smoothly handle everything: Every part of every function will eventually fail, if only due to hardware failures or bit-flip noise (both of which are common in reality). As Linus Torvalds has explained, at the root of many 'blue screen of death' incessant window crashes in year's past were hardware irregularities that were not 'handled' by software. Production functions are not pure logic bubbles, they are physical engines that must account for all physically-possible (not just ideally-logically pure) outcomes. If a function gets a result from another function that is (for whatever reason, however logically impossible) malformed and broken, this needs to be handled, e.g. with the classic "let it fail and try again" resiliency model. Every return should be checked for what can be checked, with issues handled (structs and enums can be useful here to define what a healthy return value is allowed to be).
-
-Always error and exception handling: Every part of code, every process, function, and operation will fail at some point, if only because of cosmic-ray bit-flips (which are common), hardware failures, power-supply failures, adversarial attacks, etc. There must always be fail-safe error handling where production-release-build code handles issues and moves on without panic-crashing ever. Every failure must be handled smoothly: let it fail and move on. This does not mean that no function can return an error, nor does this mean that errors cannot be logged or reported. Case by case, a process can be retried or skipped, but the overall program must smoothly continue.
-
-## "Do not stop" in production: Case Handling
-Somehow there seems to be no clear vocabulary for 'Do not stop.' In production build code, when you come to something to handle, handle it:
-- Handle and move on: Do not halt the program.
-- Handle and move on: Do not terminate the program.
-- Handle and move on: Do not exit the program.
-- Handle and move on: Do not crash the program.
-- Handle and move on: Do not panic the program.
-- Handle and move on: Do not coredump the program.
-- Handle and move on: Do not finish the program.
-- Handle and move on: Do not spiral into undefined behavior of the program.
-- Handle and move on: Do not stop the program.
-
-## Project-Level Context For Functions, Comments, & Doc-Strings
-Comments and docs for functions and groups of functions must include project level information: To paraphrase Jack Welch, "The most dangerous thing in the world is a flawless operation that should never have been done in the first place." For projects, functions are not pure platonic abstractions; the project has a need that the function is or is not meeting. It happens constantly that a function does 'the wrong thing' well and so this 'bug' is never detected when functions are examined in isolation. Project-level (strategic level, architecture level) documentation and logic-level (tactical level) documentation are two different things that must both exist such that discrepancies must be identifiable; Project-level documentation, logic-level documentation, and the code, must align and align with user-needs, real conditions, the results of tests, and future conditions.
-
-Safety, reliability, maintainability, fail-safe, communication-documentation, are the goals: not ideology, aesthetics, popularity, momentum-tradition, bad habits, convenience, nihilism, lazyness, lack of impulse control, cooties, etc.
-
-## No third party libraries (or very very strictly avoid third party libraries where possible).
-
-## Scale: Code should be future-proof and scale well. The Y2K bug was not a wonderful feature, it was a horrendous mistake. Scale and size should be handled in a modular no-load way, not arbitrarily capped so that everything breaks.
-
-## Power-of-10-style Rules of Thumb
-We can derive a list of '10 Rust Production Rules' updated for general systems programming in 2026 (derived) from NASA's 2006 'Power of 10' rules that were originally narrowly framed for c for embedded-systems.
-
-These are ideals to be followed where possible and sensible, not absolute pedantic rules:
-
-1. no unsafe stuff:
+# 🦀 10 Rust Rules 🦀:
+1. Avoid Risky Methodologies:
 - no recursion
 - no goto
-- no pointers
+- no fancy pointer use
 - no preprocessor branching
-(Term collision: Technically an 'unsafe code' block in Rust may be required for cases such as naked/assembly code or to interact with a Posix-OS, as in the case of raw-terminals. While use of jargon-'unsafe' blocks should be avoided where possible, the term 'unsafe' does not mean that a specific best-practice rule was violated.)
+('unsafe' code blocks in Rust may be unavoidable, but using '#![forbid(unsafe_code)]' is a good starting default)
 
-2. Loops: either firmly bounded or unbounded:
-- Upper bound on all normal-loops (to make sure they do **not** keep looping)
-- Failsafe for all always-loops to make sure they **do** keep looping (e.g. additional restart layer)
+2. Loops: either firmly bounded or unbounded w/ recovery
 
-3. Pre-allocate all memory (no dynamic memory allocation)
-- Production code should minimize or eliminate use of heap (e.g. very terse error messages that do not leak any user-data)
-- Debug and testing often make sense to use heap and this code is not in production-binaries (e.g. detailed error messages)
-- Clearly separate lazy-convention from real-need. With tools such as "Buffy'
-github.com/lineality/buffy_stack_format_write_module, it is not necessary to use heap for string formatting.
+3. Attempt to Pre-allocate all memory (stack, not heap)
+- case by case, avoid heap in production-release-mode where sound
 
-4. Clear Function Scope and Data Ownership:
-Part of having a function be 'focused' means knowing if the function is in scope. Functions should be neither swiss-army-knife functions that do too many things, nor scope-less micro-functions that may be doing something that should not be done. Many functions should have a narrow focus and a short length, but definition of actual-project scope functionality must be explicit. Replacing one long clear in-scope function with 50 scope-agnostic generic sub-functions with no clear way of telling if they are in scope or how they interact (e.g. hidden indirect recursion) is dangerous. Rust's ownership and borrowing rules focus on Data ownership and hidden dependencies, making it even less appropriate to scatter borrowing and ownership over a spray of microfunctions purely for the ideology of turning every sub-operation into a microfunction just for the sake of doing so. (See more in rule 9.)
+4. Clear Function Scope and Data Ownership
 
-5. 'Case Handling' & Defensive Programming: debug-assert, test-assert, prod safely check & handle, not 'assert!' panic in production
-
-Note: Terminology varies across "error" / "fail" / "exception" / "catch" / "case" et al. The standard terminology is 'error handling' but 'case handling' or 'issue handling' may be a more accurate description, especially where 'error' refers to the output when unable to handle a case (which becomes semantically paradoxical). The goal is that a program will not terminate / halt / end / shut down / stop, etc., or crash / fail / panick / coredump / do undefined-behavior, etc. when 'expected' cases occur. Here production and debugging/testing starkly diverge: during testing you **DO** want/need to see how (and where in the code) the program may 'fail' and where and when cases are encountered. In testing you need to stop with extensive details. In debugging you want to show extensive issue-details. But in production you need to never stop and you need to keep logs memory-terse and privacy-safe.
-The proverbial satellite must never fall out of the sky, ever, regardless of how pedantically beautiful the error-message in the ball of flames may have been.
-
-#### Six aspects of case-handlng (Rule 5 of revised 'power of 10' for Rust)
-For production-release code:
-
-1 of 6: Check and handle without stop/panic/halt in production
-
-2 of 6: return result (such as Result<T, E>) and smoothly handle "errors" (not halt-panic stopping the application): no assert!() outside of test-only code
-Return Result<T, E>, with case/error/exception handling, so long as that is caught somewhere. Only in cases where there is no way (or no where) to handle the error-output should the function always return OK(), failing completely silently (sometimes internal-to-function error logging is best). Allow-to-fail and handle is not the same as no-handling. This is case-by case.
-
-3 of 6: test assert: use #[cfg(test)] assert!() to test production binaries (not in prod builds, not in debug builds)
-
-4 of 6: debug assert: use debug_assert! with  #[cfg(all(debug_assertions, not(test)))] to run tests in debug builds (not in prod, not in test)
-
-5 of 6: Note: #[cfg(debug_assertions)] and debug_assert! ARE active in test builds
-
-6 of 6: Use defensive programming with recovery of all issues at all times
-- use cargo tests
-- use debug_asserts
-- do not leave test-panic assertions in production code
-- use no-panic error/case handling in production code
-- use Option
-- use enums and structs
-- check bounds
-- check returns
-- note: a test-flagged assert can test a production release build (whereas debug_assert cannot); cargo test --release
-```
-#[cfg(test)]
-assert!(
-```
-
-e.g.
-# "Assert & Catch-Handle" 3-part System for organizing production behavior, debug behavior, and cargo-test behavior:
-
-A three-part rule of thumb:
-
-1 of 3: For Debug assertions: Only in debug builds, NOT in tests - use: #[cfg(all(debug_assertions, not(test)))]
-
-2 of 3:. For Test assertions: use in test functions themselves, not in the function body (easy to conflict with debug/prod handling)
-E.g.
-When we run a cargo test:
-- The #[cfg(test)] assert compiles and is active
-- the cargo-test calls string_concat_list_function()
-- an assert! in the abc_function (not in the test) panics immediately inside the abc_function
-- abc_function never reaches the production error handling
-- so abc_function never returns an Err(...)
-- so the cargo-test 'fails' with a panic, not with a cargo-test error result
-
-3 of 3:. Production catches: Always present, return production-safe no-heap terse errors (no panic, no open-ended data exfiltration), with unique error prefixes to identify the function, e.g. 'SCLF error: arg empty' for string_concat_list_function()
-
-Terminology: for consistency, "assert" will be used to mean inducing panic, which is the goal only for cargo-test and debug-builds (not production).
-
-For production, the term "required-condition" will be used (e.g. instead of invariant), to avoid the circular terminology vortex that the original 'Power of 10' is not clear on: ' "assert" handing in production without "asserting" because "asserts" are removed in production... but something is still "asserted" without "assert"ing..." etc.
-
-e.g.
-"required-condition" — each rule itself, e.g. len <= 8, Independent of build mode
-
-"requirement-check" — the code that tests a required-condition
-
-"reaction-to-check" — what happens when a check fails. This varies by tier:
-
-Test: panic (assert!) (heap)
-Debug: panic (debug_assert!), may also eprintln! (heap)
-Production: return terse error (no panic, no print) (no heap)
-
-Note: Buffy may be useful in production error string formatting https://github.com/lineality/buffy_stack_format_write_module
-
-// template/example for check/assert format
-//    =================================================
-// // Debug-Assert, Test-Asset, Production-Catch-Handle
-//    =================================================
-// This is not included in production builds
-// debug_assert: IS also active during test-builds
-// use #[cfg(not(test))] to run in debug-build only: will panic
-#[cfg(all(debug_assertions, not(test)))]
-debug_assert!(
-    INFOBAR_MESSAGE_BUFFER_SIZE > 0,
-    "Info bar buffer must have non-zero capacity"
-);
-
-// this is included in debug builds AND in test builds
-#[cfg(debug_assertions)]
-{
-xyz
-}
-
-// Production safe output example (Buffy is a no-heap alternative)
-Err(_e) => {
-    #[cfg(debug_assertions)]
-    eprintln!("function-acronym: process-name: {}", _e);
-
-    // safe log
-    buffy_println!("function-acronym: process-name: failed", &[])?;
-}
-
-// Note: This is located only in cargo test functions.
-// This is not included in production builds.
-// assert: only when running cargo test: will panic
-#[cfg(test)]
-assert!(
-    INFOBAR_MESSAGE_BUFFER_SIZE > 0,
-    "Info bar buffer must have non-zero capacity"
-);
-// Catch & Handle without panic in production
-// This IS included in production to safe-catch
-if !INFOBAR_MESSAGE_BUFFER_SIZE == 0 {
-    // state.set_info_bar_message("Config error");
-    return Err(LinesError::GeneralAssertionCatchViolation(
-        "zero buffer size error".into(),
-    ));
-}
-
-Depending on the test, you may need a test-assert to be in a cargo-test function and not in the main function.
-
-Warning: Do not collide or mix up test-asserts and debug asserts, or forget that debug code also runs in test builds by default.;
-use #[cfg(all(debug_assertions, not(test)))] for debug build only (not test build).
-use #[cfg(test)] assert!(  for test build only, not debug).
-Give descriptive non-colliding names to cargo-tests and test sets.
-
-Note: production-use characters and strings can be formatted, written, printed using modules such as Buffy
-https://github.com/lineality/buffy_stack_format_write_module
-instead of using standard Rust macros such as format! print! write! that use heap-memory.
-
-Note: Error messages must be unique per function (e.g. name of function (or abbreviation) in the error message). Colliding generic error messages that cannot be traced to a specific function are a significant liability.
-
-
-Avoid heap for error messages and for all things:
-Is heap used for error messages because that is THE best way, the most secure, the most efficient, proper separation of debug testing vs. secure production code?
-Or is heap used because of oversights and apathy: "it's future dev's problem, let's party."
-
-We can use heap in debug/test builds only.
-
-Production software must not insecurely output debug diagnostics.
-Debug information must not be included in production builds: "developers accidentally left development code in the software" is a classic error (not a desired design spec) that routinely leads to security and other issues. That is NOT supposed to happen. It is not coherent to insist that open ended heap output 'must' or 'should' be in a production build.
-
-This is central to the question about testing vs. a pedantic ban on conditional compilation; not putting full traceback insecurity into production code is not a different operational process logic tree for process operations.
-
-Just like with the pedantic "all loops being bounded" rule, there is a fundamental exception with conditional compilations: code that must NEVER be in production-builds must ALWAYS be excluded using conditional-compilation flags. This is not an OS or algo-tree conditional compilation, or a hardware conditional compilation; This is an 'unsafe-testing-only' vs. 'safe-production-code' condition. This includes several types of items, such as panic-inducing 'assert' statements (as opposed to proverbial-assert checks that do not panic-halt), and error-message data: Error messages and error outcomes in 'production' 'release' (real-use, not debug/testing) must not ever contain any information that could be a security vulnerability or attack surface. Failing to remove debugging inspection is a major category of security and hygiene problems.
-
-Security: Error messages in production must NOT contain:
-- File paths (can reveal system structure)
-- File contents
-- environment variables
-- user, file, state, data
-- pii data
-- internal implementation details
-- etc.
-
-All debug-prints not for production must be tagged with:
-```
-#[cfg(debug_assertions)]
-```
-
-Production output following an error / exception / case must be managed and defined, not not open to whatever an api or OS-call wants to dump out.
-The three tiers can be handled with a Fieldless enum type system and exit-codes for behavior such as retry-ing in some cases.
-
-(see more below)
-
-
-
-
-
+5. Mode & Case Handling, & Defensive-Programming:
+- Modes: test-mode, debug-mode, production-release-mode;
+- continual state-recovery (without panic/halt) in production-release-mode
+- See Example/Default Framework: [github.com/lineality/modes_and_case_handling](https://github.com/lineality/modes_and_case_handling)
 
 6. Manage ownership and borrowing
-- Rust is designed to greatly assist here (vs. c).
 
-7. Manage return values:
-- use null-void return values
-- check non-void-null returns
-- see above for designing and checking return values to handle cases of invalid other return-value cases.
-- always have functions return a 'result' so errors and cases can be handled
+7. Manage return values
 
-8. Manage conditional compilation: Navigate debugging and testing on the one hand and not-dangerous conditional-compilation on the other hand:
-- Here 'conditional compilation' is interpreted as significant changes to the overall 'tree' of operation depending on build settings/conditions, such as using different modules and basal functions. E.g. "GDPR compliance mode compilation"
-- Any LLVM type compilation or build-flag will modify compilation details, but not the target tree logic of what the software does (arguably).
-- 2025+ "compilation" and "conditions" cannot be simplistically compared with single-architecture 1970 pdp-11-only C or similar embedded device compilation.
+8. Manage conditional compilation
 
 9. Communicate:
 - Use doc strings; use comments.
-- Document use-cases, edge-cases, and policies (These are project specific and cannot be telepathed from generic micro-function code. When a Mars satellite failed because one team used SI-metric units and another team did not, that problem could not have been detected by looking at, and auditing, any individual function in isolation without documentation. Breaking a process into innumerable undocumented micro-functions can make scope and policy impossible to track. To paraphrase Jack Welch: "The most dangerous thing in the world is a flawless operation that should never have been done in the first place.")
-- Rather than using '?' for terse function calling, when possible have detailed error handling.
-- Rather than having a result hidden in let _ =, allow that result to be shown in debugging
+- Document use-cases, edge-cases, policies, intent: features vs. bugs, etc.
+- Rather than let _ =, allow that result to be shown in debugging
+- log errors (MVP: append log file in executable-parent dir)
 
-10. Use state-less operations when possible:
-- a seemingly invisibly small increase in state often completely destroys projects
-- expanding state destroys projects with unmaintainable over-reach
+10. Use state-less operations when possible
 
-
-Also: As per Mara Bos's 'Rust Atomics and Locks' (O'Reilly) note the specific use-case and needs for threads, parallelism, concurrency, atomics, async, etc. Distributed processing varies significantly per project, and implementations of production functions, algorithms, and data structures, are rarely the same as abstract text-book examples.
-🦀Vigilance🦀: Properly written code supports users, developers, and the people who depend upon maintainable software. Maintainable software supports the future for us all.
-
-#### Links:
+#### References & Links:
 - https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code
 - https://spinroot.com/gerard/pdf/P10.pdf
 - https://spinroot.com/static/index.html
 - https://web.eecs.umich.edu/~imarkov/10rules.pdf
-- https://www.youtube.com/watch?v=JWKadu0ks20
 - https://en.wikipedia.org/wiki/Static_program_analysis
 - https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/
+- https://www.oreilly.com/library/view/rust-atomics-and/9781098119430/
+- Books by https://en.wikipedia.org/wiki/P._J._Plauger
 
+#### mode_case_handling_framework_summary
+
+
+
+# Mode & Case Handling Bullet Points Summary
+## Framework: Three Modes & Rules
+
+### Three Modes of Operation:
+1. Production-Release Mode:
+- Never panics, halts, or leaks data.
+- Uses 2-byte error codes (no heap, no strings, no PII).
+- Smoothly handles all cases via "Let It Fail & Recover" (with optional logging).
+- Uses a Three-Level Recovery Hierarchy
+
+2. Debug Mode:
+- Similar to production but logs verbose diagnostics (heap allowed).
+- Uses `eprintln!` for errors and `debug_assert!` for internal invariants (gated to avoid running in test/production).
+- Optional debug printing/logging for inspection.
+
+3. Test Mode:
+- Uses `assert!` in test functions.
+- Deliberately crashes/panics to generate stack traces for debugging.
+
+
+
+### Rules:
+
+1. All functions return `Result<T, YourProjectError>`. The error payload is always the 2-byte `YourProjectError` enum. All operations are expected to eventually fail in some way; all such failures must be smoothly handled.
+
+2. Production-Release Mode (Result-Error case-handling):
+- never panics
+- no heap in error-code-return from functions
+- no print or log of that code by the function before the code is returned
+
+3. Separate Debug-Mode Assertions from Cargo-Tests:
+- `debug_assert!` must be gated with `#[cfg(all(debug_assertions, not(test)))]` to exclude from test mode and production mode builds.
+
+4. Use Gated Verbose Debug-Mode Diagnostics:
+- Use `eprintln!` (gated with `#[cfg(debug_assertions)]`) for debug-only output. Heap is allowed/needed here.
+
+5. Test-Mode Isolation:
+- Test code must be gated with `#[cfg(test)]`.
+- Avoid using test-mode tests inside functions for stable code.
+
+6. Use a Fieldless Enum error-code system.
+
+7. Use Enforced-Custom-Types for Value-Integrity.
+
+8. Use a Three-Level Recovery Hierarchy for recovery and state.
+
+
+### Enforced-Custom-Types & Value-Integrity:
+- Use `struct`/`enum`/`impl` to enforce value boundaries for inputs and intermediate values. This ensures invalid states (including bit-flips, corruption) are caught and handled as errors, not passed silently.
+- required: add a validity-recheck into the .get() method
+- Optionally use a .validity_recheck() method
+- While a custom type in Rust can enforce and validate that a value is within the definition boundaries, this check only happens once when the constructor is run ( .new() ), assuming that the constructor was correctly written to carry out that check correctly. If memory-corruption happens after that initial check there are no automatic checks that will catch that the value is now invalid (e.g. as the value is returned from and accepted by another function). Additional .validity_recheck() methods can be made and used to manually check at specific points.
+- Using custom types helps to manage compatibility within the design (e.g. narrowing scope of function inputs)
+- vanilla custom types (without additional validity-checks) guard against design errors (coding-mistakes) and 'expected' errors.
+- additional validity-rechecks can add guards against some electrical, hardware, and adversarial based errors, or 'unexpected errors.'
+- Getting and mutation/updating use methods that must be manually designed to check & enforce boundary checks and validity.
+#### Public & Private
+- note: the individual rules for structs, enums, impls, and their combinations, vary.
+- A struct CAN be safely pub (so other modules can use the type name in signatures).
+- The struct's inner fields should NOT be pub (so other modules cannot bypass checks).
+- Example of safety for combinations: if an enum variant carries data then do not put raw unbounded primitives inside that; rather, put a bounded struct inside.
+
+### Three-Level Recovery Hierarchy ("Let It Fail & Recover")
+Production-release failures should fit one of three bounded recovery tiers:
+- Recovery Tier 1: Micro-Retry (Local) — If err.is_retryable() is true, a caller repeats the bounded operation (with backoff/sleep).
+- Recovery Tier 2: Step Fallback / Safe Degradation (Subsystem) — This is at a level above which any retry-errors would be thrown. If non-retryable, or retry attempts are exhausted, the subsystem safely aborts the current command, and handles what to do next. This is highly case dependent, and might include trying another function, reverting to a previous state, exiting silently, etc. Some internal state may need to be reset. Ultimately move on with or without logging the case or "error."
+- Recovery Tier 3: Macro Re-initialization — An outer loop reinitializes state and continues execution without halting. The largest case for Tier 3 reboots the entire program.
+
+#### Recovery & State-Recovery:
+Recovery tiers represent functional layers of 'state' in terms of 'recovery levels' to plan for, e.g. what to do when some state-values may not exist. Tier 1 covers the state in question. Tiers 2 and 3 range from small to large 'reboot/retry' scales up to the whole program. Full system restart will likely often have at least some state that it can be restarted with (resulting in no noticeable interruption), sometimes implying that state should be managed outside of retry-loops, to retain intact values.
+
+
+### Error Handling System
+- Single Fieldless Enum:
+  A global `YourProjectError` enum (e.g., `#[repr(u16)]`) defines all error codes.
+  Properties:
+  - No heap (2-byte `Copy` values).
+  - No `String` or `io::Error` payloads (prevents PII leaks).
+  - Exhaustive `match` for retryability (`is_retryable()` method).
+  - Append-only codes: Never reuse or renumber.
+
+- Error Code Table Rules:
+  1. Codes are unique and permanent (e.g., `Fs32tFromStrInputTooLong = 101`).
+  2. Reserve blocks per module/feature (e.g., 100–199 for `FixedSize32Timestamp`).
+  3. Variant names: `AcronymFunctionCondition` (e.g., `IoPermissionDenied`).
+  4. Document codes in the enum’s doc comment.
+
+- Display for Debug Only:
+  `Display` impl (for human-readable text) is compiled only for debug/test builds.
+
+#### Error Sites & Propagation:
+- Unique codes permit use of '?' because the unique code of the root-cause error is preserved (not obscured) by propagating the error.
+- If an error site is of note, that site needs to throw a specific error code.
+- This acts as a proxy for manually checking for most internal-invariant type issues.
+
+
+### Two Detection Patterns
+1. If-Detection-Pattern:
+   For direct condition checks (e.g., `if len > 32`).
+   - Debug: `debug_assert!` (internal invariants only) + `eprintln!`.
+   - Production: Return terse error code.
+
+2. Match-A-Function-Call-Pattern:
+   For handling `Result` from fallible calls (e.g., `std::str::from_utf8`).
+   - Debug: `debug_assert!(false, ...)` (for internal invariants) + `eprintln!`.
+   - Production: Drop callee’s error (to avoid heap/PII), return project error code.
+
+
+## Key Principles
+- No Heap in Production: Ban `String`, `format!`, `Box<dyn Error>`, etc.
+- No Panics in Production: Use `checked_add`, `.get()`, etc., to avoid silent wraps/panics.
+- Defensive Programming:
+  - Input Validation: Expected issues (e.g., bad user input) → return error code + debug `eprintln!`.
+  - Internal Invariant: "Should-not-happen" checks (e.g., bit-flips) → `debug_assert!` + production catch.
+- Retry Logic: Defined per error code (not ranges) in `is_retryable()`.
+
+
+### Example Code
+#### Error Enum
+```rust
+#[repr(u16)]
+pub enum YourProjectError {
+    IoNotFound = 50,
+    Fs32tFromStrInputTooLong = 101,
+    RetryMaxAttemptsZero = 200,
+}
+```
+
+#### If-Detection-Pattern
+```rust
+if !condition {
+    #[cfg(debug_assertions)]
+    eprintln!("ACRO-101: detail: {}", value);
+    return Err(YourProjectError::AcroFnCondition);
+}
+```
+
+#### Match-A-Function-Call-Pattern
+```rust
+match fallible_call(input) {
+    Ok(v) => Ok(v),
+    Err(_detail) => {
+        #[cfg(debug_assertions)]
+        eprintln!("ACRO-101: {}", _detail);
+        Err(YourProjectError::AcroFnCondition)
+    }
+}
+```
+
+### Banned in Production
+- `unwrap`/`expect`/`panic!`
+- Heap allocations (`String`, `format!`, `Box<dyn Error>`)
+- Error messages with PII (file/dir paths, user data, etc.)
+- Unchecked Arithmetic: Arithmetic operators that can panic in production (use `checked_add`, etc.)
+
+
+#### Suggestions (TODO: under construction; move to rules, for manageable use of codes?)
+- Allow effective "blocks" of codes for functions, to allow coherent numbering and easy incrementing in case two developers collide. e.g. if the last two digits are internal to a function, u16 would allow for 654 functions to each have 99 internal errors (or depending on average function size, ten per function may be enough on average).
+- alt phrasing: allow 10 or 100 error-codes per function to manage allocations and changes to codes
 
 
 */
@@ -1397,6 +1325,21 @@ const FILE_TUI_WINDOW_MAP_BUFFER_SIZE: usize = 64; // 2**13=8192
 const WHOLE_COMMAND_BUFFER_SIZE: usize = 16; //
 
 const MAX_DISPLAY_BUFFER_BYTES: usize = 182;
+
+// ============================================
+// OS sepcific buffer+enter ESC and DEL strings
+// ============================================
+#[cfg(target_os = "windows")]
+const DELETE_KEY_STR: &str = "DEL";
+
+#[cfg(not(target_os = "windows"))]
+const DELETE_KEY_STR: &str = "\x1b[3~";
+
+#[cfg(target_os = "windows")]
+const ESC_KEY_STR: &str = "ESC";
+
+#[cfg(not(target_os = "windows"))]
+const ESC_KEY_STR: &str = "\x1b";
 
 // for iterating chunks of text to be inserted into file
 /// Two-Purpose Buffer (alternate plan is )
@@ -2703,6 +2646,8 @@ const SAVE_AS_COPY_RETRY_DELAY_MS: u64 = 200;
 // ============================================================================
 
 // TODO: Why does this 'mod' exist? Why not use normal constants??
+// Notes: since moving from a fixed window map to an on-the-fly window map
+//        some limitations may not be needed (or needed to be as limited)
 /// Defensive programming limits to prevent infinite loops and resource exhaustion
 /// Following NASA Power of 10 rules: all loops must have explicit upper bounds
 pub mod limits {
@@ -2713,7 +2658,7 @@ pub mod limits {
     /// Maximum bytes to scan when seeking to a line number
     /// Prevents infinite loops on corrupted files or extremely large files
     /// 10 million bytes = ~10MB, reasonable for text files
-    pub const FILE_SEEK_BYTES: usize = 10_000_000;
+    pub const FILE_SEEK_BYTES: usize = usize::MAX;
 
     /// Maximum lines to process when building window display
     /// Should match or exceed MAX_TUI_ROWS (45) with generous margin
@@ -2730,7 +2675,7 @@ pub mod limits {
 
     /// Maximum cursor movement iterations in a single command
     /// Allows "1000j" type commands while preventing integer overflow issues
-    pub const CURSOR_MOVEMENT_STEPS: usize = 1_000_000;
+    pub const CURSOR_MOVEMENT_STEPS: usize = usize::MAX;
 
     /// Maximum iterations in main editor loop
     /// Effectively unlimited (100k commands per session is very generous)
@@ -4419,6 +4364,12 @@ pub struct EditorState {
     pub file_position_of_topline_start: u64,
     // start end for visual-mode selection
     pub file_position_of_vis_select_start: u64,
+
+    // // For curstor restore (e.g. after vis del)
+    // pub line_number_vis_select_start: usize,
+    // pub byte_in_line_vis_select_start: usize,
+    // pub line_number_vis_select_end: usize,
+    // pub byte_in_line_vis_select_end: usize,
     pub file_position_of_vis_select_end: u64,
 
     /// TODO making this bigger/ribbon?
@@ -4498,6 +4449,12 @@ impl EditorState {
 
             // Clipboard/Pasty
             file_position_of_vis_select_start: 0,
+
+            // // experimental
+            // line_number_vis_select_start: 0,
+            // byte_in_line_vis_select_start: 0,
+            // line_number_vis_select_end: 0,
+            // byte_in_line_vis_select_end: 0,
             file_position_of_vis_select_end: 0,
 
             tui_window_horizontal_utf8txt_line_char_offset: 0,
@@ -4869,7 +4826,7 @@ impl EditorState {
 
         // 2. Explicit commands (take absolute priority)
 
-        if trimmed == "b" || trimmed == "q" || trimmed == "n" || trimmed == "\x1b" {
+        if trimmed == "b" || trimmed == "q" || trimmed == "n" || trimmed == ESC_KEY_STR {
             return Ok(PastyInputPathOrCommand::Back);
         }
 
@@ -7034,7 +6991,7 @@ impl EditorState {
             }
 
             // === MODE SWITCHING ===
-            "n" | "\x1b" | "q" | "b" => {
+            "n" | ESC_KEY_STR | "q" | "b" => {
                 // Exit to normal mode
                 keep_editor_loop_running = execute_command(self, Command::EnterNormalMode)?;
             }
@@ -7907,9 +7864,9 @@ impl EditorState {
         // Check for exit insert mode commands
         // Only escape key to leave insert mode
         // possible to turn off all ascii keys
-        if trimmed == "\x1b" {
+        if trimmed == ESC_KEY_STR {
             keep_editor_loop_running = execute_command(self, Command::EnterNormalMode)?;
-        } else if trimmed == "\x1b[3~" {
+        } else if trimmed == DELETE_KEY_STR {
             // This is delete-key
             // Do nothing if delete key entered...
             keep_editor_loop_running = execute_command(self, Command::DeleteBackspace)?;
@@ -8189,12 +8146,12 @@ impl EditorState {
         // In insert mode, most keys are text, not commands
         if current_mode == EditorMode::Insert {
             // Check for escape sequences to exit insert mode
-            if trimmed == "\x1b" {
+            if trimmed == ESC_KEY_STR {
                 return Command::EnterNormalMode;
             }
 
             // delete key
-            if trimmed == "\x1b[3~" {
+            if trimmed == DELETE_KEY_STR {
                 return Command::None;
             }
             // Everything else is text input (handled separately)
@@ -8491,7 +8448,7 @@ impl EditorState {
                 "p" | "pasty" => Command::EnterPastyClipboardMode,
                 "hex" | "bytes" | "byte" => Command::EnterHexEditMode,
                 "d" => Command::DeleteLine,
-                "\x1b[3~" => Command::DeleteBackspace, // delete key -> \x1b[3~
+                DELETE_KEY_STR => Command::DeleteBackspace, // delete key -> \x1b[3~
                 _ => Command::None,
             }
         } else if current_mode == EditorMode::VisualSelectMode {
@@ -8527,11 +8484,11 @@ impl EditorState {
                 "q" => Command::Quit,
                 "c" | "y" => Command::Copyank,
                 "s" | "ww" => Command::SaveFileStandard,
-                "n" | "\x1b" => Command::EnterNormalMode,
+                "n" | ESC_KEY_STR => Command::EnterNormalMode,
                 "wq" | "sq" => Command::SaveAndQuit,
                 // "d" => Command::DeleteBackspace, // minimal, works
                 "d" => Command::DeleteRange,
-                "\x1b[3~" => Command::DeleteBackspace, // delete key -> \x1b[3~
+                DELETE_KEY_STR => Command::DeleteBackspace, // delete key -> \x1b[3~
 
                 "v" | "p" | "pasty" => Command::EnterPastyClipboardMode,
                 "hex" | "bytes" | "byte" => Command::EnterHexEditMode,
@@ -8961,56 +8918,55 @@ fn is_leap_year(year: u64) -> bool {
 // /// ```
 // pub fn memo_mode_mini_editor_loop(original_file_path: &Path) -> Result<()> {
 //     // Pre-allocated buffer for bucket brigade stdin reading
-//     const STDIN_CHUNK_SIZE: usize = 4;
-//     const MAX_CHUNKS: usize = 1_000_000; // Safety limit to prevent infinite loops
-
+//     const STDIN_CHUNK_SIZE: usize = 16;
+//
 //     let mut stdin_chunk_buffer = [0u8; STDIN_CHUNK_SIZE];
-
+//
 //     let stdin = io::stdin();
 //     let mut stdin_handle = stdin.lock(); // Lock stdin once for entire session
-
+//
 //     // Create file with simple timestamp header if it doesn't exist
 //     if !original_file_path.exists() {
 //         let timestamp = create_readable_archive_timestamp(SystemTime::now());
-
+//
 //         // Create file with timestamp header
 //         let mut file = OpenOptions::new()
 //             .create(true)
 //             .write(true)
 //             .open(original_file_path)?;
-
+//
 //         file.write_all(timestamp.as_bytes())?;
 //         file.write_all(b"\n")?; // Blank line after header
 //         file.flush()?;
 //     }
-
+//
 //     // Open file in append mode once (keeps handle open for session)
 //     let mut file = OpenOptions::new()
 //         .create(true)
 //         .append(true)
 //         .open(original_file_path)?;
-
+//
 //     // Bootstrap: Display initial TUI
 //     build_memo_mode_tui(original_file_path)?;
-
+//
 //     let mut chunk_counter = 0;
-
+//
 //     // Main editor loop
 //     loop {
 //         // Defensive: prevent infinite loop
 //         chunk_counter += 1;
-//         if chunk_counter > MAX_CHUNKS {
+//         if chunk_counter > limits::MAX_CHUNKS {
 //             return Err(LinesError::Io(io::Error::new(
 //                 io::ErrorKind::Other,
 //                 "Maximum iteration limit exceeded",
 //             )));
 //         }
-
+//
 //         // Clear buffer before reading (defensive: prevent data leakage)
 //         for i in 0..STDIN_CHUNK_SIZE {
 //             stdin_chunk_buffer[i] = 0;
 //         }
-
+//
 //         // Read next chunk from stdin
 //         let bytes_read = match stdin_handle.read(&mut stdin_chunk_buffer) {
 //             Ok(n) => n,
@@ -9019,7 +8975,7 @@ fn is_leap_year(year: u64) -> bool {
 //                 continue;
 //             }
 //         };
-
+//
 //         // =================================================
 //         // Debug-Assert, Test-Asset, Production-Catch-Handle
 //         // =================================================
@@ -9048,39 +9004,39 @@ fn is_leap_year(year: u64) -> bool {
 //                 "bytes_read <= STDIN_CHUNK_SIZE".into(),
 //             ));
 //         }
-
+//
 //         // Check for exit command before writing to file
 //         // Only check if valid UTF-8 (don't fail on binary data)
 //         if let Ok(text_input_str) = std::str::from_utf8(&stdin_chunk_buffer[..bytes_read]) {
 //             let trimmed = text_input_str.trim();
-
+//
 //             // Exit commands: q, quit, exit, exit()
 //             if trimmed == "q" || trimmed == "quit" || trimmed == "exit" || trimmed == "exit()" {
 //                 println!("Exiting editor...");
 //                 break;
 //             }
 //         }
-
+//
 //         // Write chunk directly to file (bucket brigade pattern)
 //         let bytes_written = file.write(&stdin_chunk_buffer[..bytes_read])?;
-
+//
 //         // Defensive assertion: all bytes should be written
 //         assert_eq!(
 //             bytes_written, bytes_read,
 //             "File write incomplete: wrote {} of {} bytes",
 //             bytes_written, bytes_read
 //         );
-
+//
 //         // Flush to disk immediately (durability)
 //         file.flush()?;
-
+//
 //         // Refresh TUI after append
 //         build_memo_mode_tui(original_file_path)?;
 //     }
-
+//
 //     // Final flush before exit
 //     file.flush()?;
-
+//
 //     Ok(())
 // }
 
@@ -9195,7 +9151,7 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 
     Ok(())
 }
-
+//
 // /// Builds and displays the memo mode TUI (Text User Interface)
 // ///
 // /// # Arguments
@@ -9245,59 +9201,59 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 //     // Pre-allocated buffer for reading file tail
 //     const TAIL_BUFFER_SIZE: usize = 512;
 //     let mut tail_buffer = [0u8; TAIL_BUFFER_SIZE];
-
+//
 //     // Clear screen
 //     print!("\x1B[2J\x1B[1;1H");
-
+//
 //     // Display header
 //     println!("lines text editor: Type 'q' to (q)uit");
 //     println!("file path -> {}", file_path.display());
 //     println!(); // Blank line after header
-
+//
 //     // Open file (read-only)
 //     let mut file = File::open(file_path)?;
-
+//
 //     // Get file size
 //     let file_size = file.metadata()?.len();
-
+//
 //     // Handle empty file
 //     if file_size == 0 {
 //         println!("> ");
 //         io::stdout().flush()?;
 //         return Ok(());
 //     }
-
+//
 //     // Calculate how many bytes to read (512 or less if file is smaller)
 //     let bytes_to_read = if file_size < TAIL_BUFFER_SIZE as u64 {
 //         file_size as usize
 //     } else {
 //         TAIL_BUFFER_SIZE
 //     };
-
+//
 //     // Seek to position: file_size - bytes_to_read
 //     let seek_position = file_size - bytes_to_read as u64;
 //     file.seek(SeekFrom::Start(seek_position))?;
-
+//
 //     // Clear buffer (defensive)
 //     for i in 0..TAIL_BUFFER_SIZE {
 //         tail_buffer[i] = 0;
 //     }
-
+//
 //     // Read the tail portion
 //     let bytes_read = file.read(&mut tail_buffer[..bytes_to_read])?;
-
+//
 //     // Defensive assertion
 //     assert_eq!(
 //         bytes_read, bytes_to_read,
 //         "File read incomplete: expected {}, got {}",
 //         bytes_to_read, bytes_read
 //     );
-
+//
 //     // Scan forward and record newline positions
 //     const MAX_NEWLINES: usize = 100; // Upper bound for line counting
 //     let mut newline_positions = [0usize; MAX_NEWLINES];
 //     let mut newline_count = 0;
-
+//
 //     for i in 0..bytes_read {
 //         if tail_buffer[i] == b'\n' {
 //             if newline_count < MAX_NEWLINES {
@@ -9306,7 +9262,7 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 //             }
 //         }
 //     }
-
+//
 //     // Determine display start position
 //     let display_start = if newline_count >= 10 {
 //         // Find the position after the (newline_count - 10)th newline
@@ -9317,25 +9273,25 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 //         // Less than 10 lines, show entire buffer
 //         0
 //     };
-
+//
 //     // Convert buffer slice to string (lossy conversion for invalid UTF-8)
 //     let display_text = String::from_utf8_lossy(&tail_buffer[display_start..bytes_read]);
-
+//
 //     // Display the content
 //     print!("{}", display_text);
-
+//
 //     // Ensure there's a newline before prompt if content doesn't end with one
 //     if !tail_buffer[..bytes_read].ends_with(&[b'\n']) {
 //         println!();
 //     }
-
+//
 //     // Display prompt
 //     print!("> ");
 //     io::stdout().flush()?;
-
+//
 //     Ok(())
 // }
-
+//
 // /// Gets or creates the default file path for the line editor.
 // /// If a custom filename is provided, appends the date to it.
 // ///
@@ -9360,18 +9316,18 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 //                 ),
 //             )
 //         })?;
-
+//
 //     // Build the base directory path
 //     let mut base_path = PathBuf::from(home);
 //     base_path.push("Documents");
 //     base_path.push("lines_editor");
-
+//
 //     // Create all directories in the path if they don't exist
 //     fs::create_dir_all(&base_path)?;
-
+//
 //     // Get timestamp for filename
 //     let timestamp = get_short_underscore_timestamp()?;
-
+//
 //     // Create filename based on whether custom_name is provided
 //     let filename = match custom_name {
 //         // Some(name) => format!("{}_{}.txt", name, timestamp),
@@ -9379,7 +9335,7 @@ pub fn pasty_paste_mode<R: BufRead>(absolute_path: &Path, stdin_handle: &mut R) 
 //         Some(name) => stack_format_it("{}_{}.txt", &[&name, &timestamp.to_string()], "N_N.txt"),
 //         None => stack_format_it("{}.txt", &[&timestamp.to_string()], "N_N.txt"),
 //     };
-
+//
 //     // Join the base path with the filename
 //     Ok(base_path.join(filename))
 // }
@@ -10749,7 +10705,7 @@ impl std::fmt::Display for FileOperationStatus {
 /// # #[derive(Debug)] enum LinesError { Io(io::Error) }
 /// # impl From<io::Error> for LinesError { fn from(e: io::Error) -> Self { LinesError::Io(e) } }
 /// # #[derive(Debug, PartialEq)] enum FileOperationStatus { Copied, AlreadyExisted, OriginalNotFound }
-/// # fn save_file_as_newfile_with_newname(
+/// # fn saveas_file_as_newfile_with_newname(
 /// #     _original: &Path,
 /// #     _new: &Path,
 /// # ) -> Result<(FileOperationStatus, &'static str), LinesError> {
@@ -10799,7 +10755,7 @@ impl std::fmt::Display for FileOperationStatus {
 /// Function is thread-safe in that it doesn't use shared mutable state.
 /// However, concurrent access to same files from multiple threads/processes
 /// may cause file locking issues. Caller responsible for coordination.
-pub fn save_file_as_newfile_with_newname(
+pub fn saveas_file_as_newfile_with_newname(
     original_file_path: &Path,
     new_file_path_name: &Path,
 ) -> Result<(FileOperationStatus, &'static str)> {
@@ -11576,7 +11532,7 @@ mod save_backup_tests {
     // ==================================================================
 
     #[test]
-    fn save_file_success_updates_original_and_clears_modified_flag() {
+    fn savefile_success_updates_original_and_clears_modified_flag() {
         let test_dir = create_unique_test_directory("save_success");
         let original_file = test_dir.join("document.txt");
         let read_copy_file = test_dir.join("document.txt.readcopy");
@@ -11593,7 +11549,7 @@ mod save_backup_tests {
     }
 
     #[test]
-    fn save_file_success_removes_its_backup() {
+    fn savefile_success_removes_its_backup() {
         // Under cargo test the centralized archive is target/debug/deps/archive.
         // We can't easily assert "no backup anywhere" without knowing which
         // location was chosen, so we assert the strongest checkable claim:
@@ -11623,7 +11579,7 @@ mod save_backup_tests {
     }
 
     #[test]
-    fn save_file_new_file_saves_without_backup() {
+    fn savefile_new_file_saves_without_backup() {
         // Original does not exist yet: no backup is made, save just writes it.
         let test_dir = create_unique_test_directory("save_new_file");
         let original_file = test_dir.join("brand_new.txt");
@@ -11640,7 +11596,7 @@ mod save_backup_tests {
     }
 
     #[test]
-    fn save_file_failure_restores_original_and_retains_backup() {
+    fn savefile_failure_restores_original_and_retains_backup() {
         // Force the save copy to fail deterministically: the read-copy path
         // points at a file we delete AFTER constructing the state but BEFORE
         // calling save_file. Backup creation succeeds (original exists),
@@ -11739,7 +11695,7 @@ mod save_backup_tests {
     // ==================================================================
 
     #[test]
-    fn save_file_rejects_missing_original_path() {
+    fn savefile_rejects_missing_original_path() {
         let test_dir = create_unique_test_directory("save_no_original");
         let read_copy_file = test_dir.join("orphan.readcopy");
         fs::write(&read_copy_file, b"content").unwrap();
@@ -11761,7 +11717,7 @@ mod save_backup_tests {
     }
 
     #[test]
-    fn save_file_rejects_missing_read_copy_path() {
+    fn savefile_rejects_missing_read_copy_path() {
         let test_dir = create_unique_test_directory("save_no_readcopy");
         let original_file = test_dir.join("document.txt");
         fs::write(&original_file, b"content").unwrap();
@@ -12102,7 +12058,7 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 
     Ok(char_length)
 }
-
+//
 // /// Determines if the current working directory is the user's home directory
 // ///
 // /// # Purpose
@@ -12125,17 +12081,17 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 //     // Get current working directory
 //     let cwd = env::current_dir()
 //         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cannot determine current directory"))?;
-
+//
 //     // Get home directory
 //     let home = get_home_directory()?;
-
+//
 //     // Compare canonical paths to handle symlinks
 //     let canonical_cwd = fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
 //     let canonical_home = fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
-
+//
 //     Ok(canonical_cwd == canonical_home)
 // }
-
+//
 // /// Gets the user's home directory path
 // ///
 // /// # Purpose
@@ -12155,11 +12111,11 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 // fn get_home_directory() -> io::Result<PathBuf> {
 //     // Try primary home variable for platform
 //     let home_result = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
-
+//
 //     match home_result {
 //         Ok(home_str) => {
 //             let home_path = PathBuf::from(home_str);
-
+//
 //             // Defensive: Verify the directory exists
 //             if !home_path.exists() {
 //                 return Err(io::Error::new(
@@ -12167,7 +12123,7 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 //                     "Home directory does not exist",
 //                 ));
 //             }
-
+//
 //             // Defensive: Verify it's a directory
 //             if !home_path.is_dir() {
 //                 return Err(io::Error::new(
@@ -12175,7 +12131,7 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 //                     "Home path is not a directory",
 //                 ));
 //             }
-
+//
 //             Ok(home_path)
 //         }
 //         Err(_) => {
@@ -12187,7 +12143,7 @@ fn get_utf8_char_byte_length_from_buffer(buffer: &[u8], index: usize) -> Result<
 //                     return Ok(possible_home);
 //                 }
 //             }
-
+//
 //             Err(io::Error::new(
 //                 io::ErrorKind::NotFound,
 //                 "Cannot determine home directory: neither HOME nor USERPROFILE set",
@@ -13133,6 +13089,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
            - Look at char UNDER/AT cursor (at current byte-set)
            - If syntax char or EOF → STOP
            - If not-syntax → iterate and repeat
+           - EXCEPT: if syntax char is space/tab AND the char one ahead is also
+             space/tab, this is mid-gap, not a stop → iterate and repeat
 
          */
         // Moves cursor forward to next syntax character (Helix-style 'w' command)
@@ -13142,13 +13100,18 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         // then repeatedly checks if on syntax character. Stops when landing ON a syntax
         // character (space, tab, newline, or punctuation) or EOF.
         //
+        // A run of spaces/tabs is ONE gap, so it is ONE stop: the cursor lands on the
+        // last whitespace byte of the run, not on every whitespace byte in it.
+        //
         // # Algorithm
         // For each count iteration:
         // 1. Move cursor forward 1 position (call MoveRight(1))
         // 2. Loop:
-        //    - Get byte at current cursor position from file
+        //    - Get byte at current cursor position from file, and the byte one ahead
         //    - Check if byte is syntax character or EOF
         //    - If syntax or EOF → STOP (cursor positioned on it)
+        //      unless byte and byte-one-ahead are both space/tab, which means the
+        //      cursor is mid-gap → Move forward 1 position and loop back
         //    - If not syntax → Move forward 1 position and loop back
         //
         // # Arguments
@@ -13159,6 +13122,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         // - MoveRight handles all scrolling (horizontal and vertical)
         // - MoveRight handles newline crossing via existing logic
         // - This function just provides the "stop at syntax" logic
+        // - The byte one ahead is the cursor's linear file offset + 1, so it comes
+        //   from the same seek and the same read, into a 2-byte buffer
         //
         // # Return Value
         // * `Ok(true)` - Movement completed, editor loop continues
@@ -13169,6 +13134,11 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         // - Reaches EOF: stops at EOF position
         // - Long line requiring horizontal scroll: MoveRight handles it
         // - Line crossing: MoveRight's newline detection handles it
+        // - Run of N spaces: one stop, on the Nth space, not N stops
+        // - Newline is deliberately not collapsed: line ends stay their own stop,
+        //   so 'w' never leaps across blank lines in a single press
+        // - Last byte of file: read returns 1 byte, byte-one-ahead reported as EOF
+        // - WORD_MOVE_MAX_ITERATIONS bounds the loop, whitespace skipping included
         //
         // # Example
         // File: "hello world"
@@ -13179,6 +13149,15 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         // 4. Not syntax, MoveRight(1) → cursor on 'o'
         // 5. Not syntax, MoveRight(1) → cursor on space
         // 6. IS syntax → STOP
+        //
+        // # Example (whitespace run)
+        // File: "hello    world"   (four spaces)
+        // Cursor at 'o' (last letter of "hello")
+        // 1. MoveRight(1) → cursor on space 1, next byte is space → mid-gap
+        // 2. MoveRight(1) → cursor on space 2, next byte is space → mid-gap
+        // 3. MoveRight(1) → cursor on space 3, next byte is space → mid-gap
+        // 4. MoveRight(1) → cursor on space 4, next byte is 'w'
+        // 5. IS syntax, not mid-gap → STOP
         Command::MoveWordForward(count) => {
             for _ in 0..count {
                 // Step 1: Move forward 1 position
@@ -13197,27 +13176,39 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     }
                     iteration += 1;
 
-                    // Get byte at current cursor position
-                    let current_byte = match lines_editor_state.get_row_col_file_position(
-                        lines_editor_state.cursor.tui_row,
-                        lines_editor_state.cursor.tui_visual_col,
-                    ) {
+                    // Get byte at current cursor position, and the byte one ahead
+                    let (current_byte, next_byte) = match lines_editor_state
+                        .get_row_col_file_position(
+                            lines_editor_state.cursor.tui_row,
+                            lines_editor_state.cursor.tui_visual_col,
+                        ) {
                         Ok(Some(pos)) => {
-                            let mut byte_buf = [0u8; 1];
+                            let mut byte_buf = [0u8; 2];
                             let mut f = File::open(&base_edit_filepath)?;
                             f.seek(io::SeekFrom::Start(
                                 pos.byte_offset_linear_file_absolute_position,
                             ))?;
                             match f.read(&mut byte_buf) {
-                                Ok(1) => byte_buf[0],
-                                _ => 0, // EOF
+                                Ok(2) => (byte_buf[0], byte_buf[1]),
+                                Ok(1) => (byte_buf[0], 0), // last byte of file
+                                _ => (0, 0),               // EOF
                             }
                         }
-                        _ => 0,
+                        _ => (0, 0),
                     };
 
                     // Check if syntax or EOF
                     match is_syntax_char(current_byte) {
+                        // Mid-gap: inside a run of spaces/tabs, not a stop.
+                        // The last whitespace byte of the run fails this guard
+                        // and falls to the plain Ok(true) arm below, so the
+                        // cursor still stops ON a syntax char, once per gap.
+                        Ok(true)
+                            if matches!(current_byte, b' ' | b'\t')
+                                && matches!(next_byte, b' ' | b'\t') =>
+                        {
+                            execute_command(lines_editor_state, Command::MoveRight(1))?;
+                        }
                         Ok(true) => break,               // STOP - on syntax
                         _ if current_byte == 0 => break, // STOP - at EOF
                         _ => {
@@ -13318,6 +13309,120 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             Ok(true)
         }
+
+        /*'b' rules: Helix-type, move to just AFTER previous 'space or symbol'
+        1. Move cursor back 2 positions
+        2. Loop:
+           - Look at char BEFORE cursor (peek backward, current byte-set minus 1)
+           - If that char is syntax, or start-of-file → STOP
+           - If not-syntax → iterate and repeat
+           - EXCEPT: if that char is space/tab AND the char UNDER the cursor is
+             also space/tab, the cursor is standing inside a gap, not at the far
+             edge of one, so this is not a stop → iterate and repeat
+
+         */
+        // Moves cursor backward to just after previous syntax character (Helix-style 'b')
+        //
+        // # Purpose
+        // Implements 'b' command for word navigation. Moves cursor back two positions,
+        // then repeatedly peeks at the byte BEFORE the cursor. Stops when the byte before
+        // the cursor is a syntax character (space, tab, newline, or punctuation) or when
+        // the cursor reaches start of file.
+        //
+        // Note the asymmetry with MoveWordForward: 'w' stops ON a syntax character,
+        // 'b' stops on the character immediately AFTER one, i.e. at a word start.
+        //
+        // A run of spaces/tabs is never a resting place: if the cursor lands inside one
+        // it keeps going, through the gap and back through the word before it, stopping
+        // at that word's start. So a gap of N spaces costs zero stops, not N.
+        //
+        // # Why The Mid-Gap Test Looks At The Byte UNDER The Cursor
+        // The stop position for 'b' is a word start, and a word start's preceding byte
+        // is the LAST whitespace byte of the gap. On an indented line the byte before
+        // that one is whitespace too. So a mid-gap test that peeked two bytes backward
+        // would fire at the word start itself and skip the word. Testing the byte under
+        // the cursor instead asks the correct question: "am I standing in the gap?"
+        //
+        // # Algorithm
+        // For each count iteration:
+        // 1. Move cursor back 2 positions (call MoveLeft(1) twice)
+        //    Assumption: current position might be syntax, skip past it
+        // 2. Loop:
+        //    - Get current cursor byte offset in file
+        //    - If offset is 0 → STOP (start of file, cannot go back further)
+        //    - Read byte at offset-1 (prev) and byte at offset (under cursor)
+        //    - If prev is syntax → STOP (cursor sits just after it)
+        //      unless prev and the byte under the cursor are both space/tab, which
+        //      means the cursor is inside a gap → Move back 1 position and loop back
+        //    - If prev is not syntax → Move back 1 position and loop back
+        //
+        // # Arguments
+        // * `count` - Number of word starts to move back to (usually 1)
+        //
+        // # How It Works
+        // - Uses existing MoveLeft command for each backward step
+        // - MoveLeft handles all scrolling (horizontal and vertical)
+        // - MoveLeft handles newline crossing via existing logic
+        // - This function just provides the "stop after syntax" logic
+        // - Both peeked bytes are contiguous (offset-1, offset), so they come from the
+        //   same seek and the same read, into a 2-byte buffer
+        //
+        // # Return Value
+        // * `Ok(true)` - Movement completed, editor loop continues
+        // * `Err(LinesError)` - File open failed
+        //
+        // # Edge Cases
+        // - Cursor at or near start of file: loop breaks on offset 0, cursor stays put
+        // - Cursor at offset 1: the 2-byte read starts at offset 0, still valid
+        // - Cursor at EOF: read returns 1 byte, byte-under-cursor reported as sentinel 0,
+        //   which is not whitespace, so the normal stop rule applies
+        // - Indentation: leading whitespace is a gap like any other, so 'b' from inside
+        //   a word lands on that word's first character, indented or not
+        // - Cursor standing in leading indentation: moving back exits the gap onto the
+        //   newline of the previous line, which is syntax but not space/tab, so the
+        //   guard cannot fire and the cursor stops at column 0 of the current line
+        // - Newline is deliberately not collapsed: line ends stay their own stop,
+        //   so 'b' never leaps across blank lines in a single press
+        // - Position lookup failure, seek failure, read error: stop where we are,
+        //   cursor is left in a valid position rather than the command erroring out
+        // - Hitting WORD_MOVE_MAX_ITERATIONS stops silently here, unlike
+        //   MoveWordForward which posts a "long word limit" info bar message
+        // - Multi-byte UTF-8: continuation bytes are >= 0x80, never space or tab,
+        //   so the mid-gap guard can never misfire on them
+        //
+        // # Example
+        // File: "hello world"
+        // Byte offsets: h=0 e=1 l=2 l=3 o=4 space=5 w=6 o=7 r=8 l=9 d=10
+        // Cursor on 'd' (offset 10)
+        // 1. MoveLeft(1) twice → cursor on 'r' (offset 8)
+        // 2. prev (offset 7) is 'o', not syntax → MoveLeft(1) → offset 7
+        // 3. prev (offset 6) is 'w', not syntax → MoveLeft(1) → offset 6
+        // 4. prev (offset 5) IS syntax (space), byte under cursor is 'w' → STOP
+        // Cursor rests on 'w', the start of the word
+        //
+        // # Example (indented line, the case that exposed the old bug)
+        // File line: "    for i in list_1:"
+        // Byte offsets: spaces=0,1,2,3  f=4 o=5 r=6 space=7 i=8
+        // Cursor on 'i' (offset 8)
+        // 1. MoveLeft(1) twice → cursor on 'r' (offset 6)
+        // 2. prev (offset 5) is 'o', not syntax → MoveLeft(1) → offset 5
+        // 3. prev (offset 4) is 'f', not syntax → MoveLeft(1) → offset 4
+        // 4. prev (offset 3) IS syntax (space), byte under cursor is 'f',
+        //    not whitespace, so not mid-gap → STOP
+        // Cursor rests on 'f', the start of "for"
+        //
+        // # Example (whitespace run)
+        // File: "hello    world"   (four spaces)
+        // Byte offsets: h=0..o=4, spaces=5,6,7,8, w=9
+        // Cursor on 'w' (offset 9)
+        // 1. MoveLeft(1) twice → cursor on space 3 (offset 7)
+        // 2. prev (offset 6) is space AND byte under cursor is space → in the gap
+        //    → MoveLeft(1) → offset 6
+        // 3. prev (offset 5) is space AND byte under cursor is space → in the gap
+        //    → MoveLeft(1) → offset 5
+        // 4. prev (offset 4) is 'o', not syntax → MoveLeft(1) → offset 4
+        // 5. walks back through "hello" and breaks at offset 0, start of file
+        // Cursor rests on 'h', the start of the previous word, never in the gap
         Command::MoveWordBack(count) => {
             for _ in 0..count {
                 // ===================================================================
@@ -13360,6 +13465,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
                     // ===================================================================
                     // PEEK BACKWARD: Look at PREVIOUS byte (before current position)
+                    // and the byte UNDER the cursor, so a gap of spaces can be detected
                     // ===================================================================
 
                     let prev_byte_pos = current_pos.saturating_sub(1);
@@ -13372,10 +13478,11 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                         break; // Seek failed, probably at start of file
                     }
 
-                    // Read previous byte
-                    let mut byte_buf = [0u8; 1];
-                    let prev_byte = match f.read(&mut byte_buf) {
-                        Ok(1) => byte_buf[0],
+                    // Read previous byte, and the byte under the cursor
+                    let mut byte_buf = [0u8; 2];
+                    let (prev_byte, byte_under_cursor) = match f.read(&mut byte_buf) {
+                        Ok(2) => (byte_buf[0], byte_buf[1]),
+                        Ok(1) => (byte_buf[0], 0), // cursor is at EOF
                         Ok(0) => {
                             // Unexpected EOF
                             break;
@@ -13388,6 +13495,18 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                     // ===================================================================
 
                     match is_syntax_char(prev_byte) {
+                        // In-gap: the cursor is standing inside a run of spaces/tabs,
+                        // which is not a resting place. Keep going left. Once the cursor
+                        // leaves the gap, prev is a word byte and the Ok(false) arm walks
+                        // back to that word's start. A word start itself never matches
+                        // this guard, because the byte under the cursor is the word's
+                        // first character, not whitespace.
+                        Ok(true)
+                            if matches!(prev_byte, b' ' | b'\t')
+                                && matches!(byte_under_cursor, b' ' | b'\t') =>
+                        {
+                            execute_command(lines_editor_state, Command::MoveLeft(1))?;
+                        }
                         Ok(true) => {
                             // Previous byte IS syntax → STOP HERE
                             // Cursor is positioned AFTER the syntax character
@@ -13408,6 +13527,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             Ok(true)
         }
+
         Command::GotoLine(line_number) => {
             /*
             This goes to the beginning of a line.
@@ -13497,6 +13617,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             }
         }
 
+        /*
+        // clean simple default version, works
         Command::GotoFileLastLine => {
             // Count lines in file
             let (total_lines, _) = count_lines_in_file(&base_edit_filepath)?;
@@ -13511,6 +13633,61 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             execute_command(lines_editor_state, Command::GotoLine(total_lines))?;
 
             Ok(true)
+        }
+        */
+        // experimental: last line on last TUI line version
+        Command::GotoFileLastLine => {
+            // Count total lines in file (1-indexed count)
+            let (total_lines, _) = count_lines_in_file(&base_edit_filepath)?;
+
+            // If file is empty, stay at current position
+            if total_lines == 0 {
+                let _ = lines_editor_state.set_info_bar_message("File is empty");
+                return Ok(true);
+            }
+
+            // Convert to 0-indexed line number of the last line
+            let last_line_idx = total_lines.saturating_sub(1);
+
+            // Calculate bottom-most row index and ideal top line
+            let bottom_row = lines_editor_state.effective_rows.saturating_sub(1);
+            let target_top_line = last_line_idx.saturating_sub(bottom_row);
+
+            #[cfg(debug_assertions)]
+            lines_editor_state
+                .debug_inspect_position("execute_command() Command::GotoFileLastLine");
+
+            // Seek to the byte position where target_top_line starts
+            match seek_to_line_number(&mut File::open(&base_edit_filepath)?, target_top_line) {
+                Ok(byte_pos) => {
+                    lines_editor_state.line_count_at_top_of_window = target_top_line;
+                    lines_editor_state.file_position_of_topline_start = byte_pos;
+
+                    // Position cursor row on the last line inside the viewport
+                    let actual_row_for_last_line = last_line_idx.saturating_sub(target_top_line);
+                    lines_editor_state.cursor.tui_row = actual_row_for_last_line;
+
+                    // Position cursor at line start after the line-number gutter
+                    let line_num_width = calculate_line_number_width(
+                        lines_editor_state.line_count_at_top_of_window,
+                        lines_editor_state.cursor.tui_row,
+                        lines_editor_state.effective_rows,
+                    );
+                    lines_editor_state.cursor.tui_visual_col = line_num_width;
+                    lines_editor_state.tui_window_horizontal_utf8txt_line_char_offset = 0;
+
+                    // Rebuild window layout map
+                    build_windowmap_nowrap(lines_editor_state, &base_edit_filepath)?;
+
+                    let _ = lines_editor_state.set_info_bar_message("Jumped to end of file");
+                    Ok(true)
+                }
+                Err(_) => {
+                    let _ =
+                        lines_editor_state.set_info_bar_message("Failed to seek to end of file");
+                    Ok(true)
+                }
+            }
         }
 
         Command::GotoLineStart => {
@@ -13548,6 +13725,13 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
             // =================================================
+            /*
+            A. Deletes contents of line if not empty
+            B. If empty, deletes line itself.
+
+            Note: by design,
+            this does not support windows CRLF (\r\n),
+            */
             let _: bool = match button_safe_clear_all_redo_logs(&base_edit_filepath) {
                 Ok(success) => success,
                 Err(_e) => {
@@ -13572,6 +13756,76 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             Ok(true)
         }
 
+        // under costruction
+        // needs 'top vs. bottom' checking for 'top;
+        // being sometimes end of vis-window
+        // and cases:
+        // 1. in tui (below works at least sometimes)
+        // 2. scroll up above TUI
+        // 3. scroll down below TUI
+        // // TODO: This only works for within TUI
+        // Command::DeleteRange => {
+        //     let _: bool = match button_safe_clear_all_redo_logs(&base_edit_filepath) {
+        //         Ok(success) => success,
+        //         Err(_e) => {
+        //             #[cfg(debug_assertions)]
+        //             eprintln!("Error clearing redo logs: {:?}", _e);
+        //             log_error("Cannot clear redo logs", Some("DeleteRange"));
+        //             let _ = lines_editor_state.set_info_bar_message("Redo-clear failed");
+        //             false
+        //         }
+        //     };
+
+        //     // 1. Save the target line and the TUI row we were currently sitting on
+        //     let target_line = lines_editor_state.line_number_vis_select_start;
+        //     let target_byte_in_line = lines_editor_state.byte_in_line_vis_select_start;
+        //     let saved_tui_row = lines_editor_state.cursor.tui_row;
+
+        //     // 2. Delete the range
+        //     delete_position_range_noload(lines_editor_state, &edit_file_path)?;
+
+        //     build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
+
+        //     // 3. STEP 1: GO TO LINE (using your trusted existing command)
+        //     execute_command(lines_editor_state, Command::GotoLine(target_line + 1))?;
+
+        //     // 4. STEP 2: FRAME-SHIFT
+        //     // GotoLine puts the target line at TUI row 0.
+        //     // To frame-shift it back to `saved_tui_row`, we shift the window up
+        //     // by `saved_tui_row` lines, and set our cursor row to match.
+        //     if lines_editor_state.line_count_at_top_of_window >= saved_tui_row {
+        //         lines_editor_state.line_count_at_top_of_window -= saved_tui_row;
+        //     } else {
+        //         lines_editor_state.line_count_at_top_of_window = 0;
+        //     }
+        //     lines_editor_state.cursor.tui_row = saved_tui_row;
+
+        //     // Rebuild map so the frame shift is painted correctly
+        //     build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
+
+        //     // 5. Move right to the exact byte offset N
+        //     execute_command(lines_editor_state, Command::GotoLineStart)?;
+        //     if target_byte_in_line > 0 {
+        //         execute_command(lines_editor_state, Command::MoveRight(target_byte_in_line))?;
+        //     }
+
+        //     // 6. Update selection markers
+        //     if let Ok(Some(file_pos)) = lines_editor_state.get_row_col_file_position(
+        //         lines_editor_state.cursor.tui_row,
+        //         lines_editor_state.cursor.tui_visual_col,
+        //     ) {
+        //         lines_editor_state.line_number_vis_select_start = file_pos.line_number;
+        //         lines_editor_state.byte_in_line_vis_select_start = file_pos.byte_in_line;
+        //         lines_editor_state.file_position_of_vis_select_start =
+        //             file_pos.byte_offset_linear_file_absolute_position;
+        //         lines_editor_state.file_position_of_vis_select_end =
+        //             file_pos.byte_offset_linear_file_absolute_position;
+        //     }
+
+        //     Ok(true)
+        // }
+
+        // Old simple works
         Command::DeleteRange => {
             // =================================================
             // Clear Redo Stack Before Editing: Insert or Delete
@@ -13597,6 +13851,8 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
             };
 
             // v2: delete selection and reset selection-range to current location
+            // delete_position_range_noload() uses Command::GotoLineStart)
+            // to reset the cursor to the start of the line (simple, works)
             delete_position_range_noload(lines_editor_state, &edit_file_path)?;
 
             // Set cursor position to file_position_of_vis_select_start
@@ -13605,6 +13861,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 lines_editor_state.cursor.tui_row,
                 lines_editor_state.cursor.tui_visual_col,
             ) {
+                // // experimental, needs end-2 also
+                // lines_editor_state.line_number_vis_select_start = file_pos.line_number;
+                // lines_editor_state.byte_in_line_vis_select_start = file_pos.byte_in_line;
+
                 // Set/Reset BOTH start and end to same position initially
                 lines_editor_state.file_position_of_vis_select_start =
                     file_pos.byte_offset_linear_file_absolute_position;
@@ -13770,6 +14030,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 lines_editor_state.cursor.tui_row,
                 lines_editor_state.cursor.tui_visual_col,
             ) {
+                // // experimental, needs end-2 also
+                // lines_editor_state.line_number_vis_select_start = file_pos.line_number;
+                // lines_editor_state.byte_in_line_vis_select_start = file_pos.byte_in_line;
+
                 // Set/Reset BOTH start and end to same position initially
                 lines_editor_state.file_position_of_vis_select_start =
                     file_pos.byte_offset_linear_file_absolute_position;
@@ -14061,8 +14325,64 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
                 }
             };
 
-            // println!("line_number {line_number}");
             unindent_line_bytewise(&edit_file_path.display().to_string(), line_number)?;
+
+            // // /*
+            // // more elaborate lookup
+            // // to see if cursor is at zero (e.g. scrolling down from start)
+            // //
+            // // */
+            // build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
+            // let (in_line_byte_usize, _file_position_string) = match lines_editor_state
+            //     .get_row_col_file_position(
+            //         lines_editor_state.cursor.tui_row,
+            //         lines_editor_state.cursor.tui_visual_col,
+            //     ) {
+            //     Ok(Some(row_col_file_pos)) => (
+            //         row_col_file_pos.byte_in_line,
+            //         row_col_file_pos
+            //             .byte_offset_linear_file_absolute_position
+            //             .to_string(),
+            //     ),
+            //     _ => (0, "n/a".to_string()),
+            // };
+
+            // // Simple cheat to detect if cursor is at 'start' of line (given number prefix)
+            // let in_line_byte_zero_bool = match in_line_byte_usize {
+            //     0 => true,
+            //     _ => false,
+            // };
+
+            // // // Simple cheat to detect if cursor is
+            // // // at 'start' of line (given number prefix)
+            // // let cursor_is_past_line_start = match lines_editor_state.cursor.tui_visual_col {
+            // //     3 | 4 | 5 => true,
+            // //     _ => false,
+            // // };
+
+            // // // TODO: newly added, still testing
+            // // // println!(
+            // // //     "lines_editor_state.cursor.tui_visual_col {}",
+            // // //     lines_editor_state.cursor.tui_visual_col
+            // // // );
+            // println!("in_line_byte_usize {}", in_line_byte_usize);
+
+            // // // println!("cursor_is_past_line_start {}", cursor_is_past_line_start);
+            // println!("in_line_byte_zero_bool {}", in_line_byte_zero_bool);
+
+            // // // for simple cheat appraoch:
+            // // // if !cursor_is_past_line_start {
+            // // //     execute_command(lines_editor_state, Command::MoveLeft(4))?;
+            // // // }
+
+            // // If not at start of line already, move cursor back as you unindent
+            // if !in_line_byte_zero_bool {
+            //     execute_command(lines_editor_state, Command::MoveLeft(4))?;
+            // }
+
+            // Simplest
+            execute_command(lines_editor_state, Command::MoveLeft(4))?;
+
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
@@ -14090,6 +14410,10 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
 
             // println!("line_number {line_number}");
             indent_line_bytewise(&edit_file_path.display().to_string(), line_number)?;
+
+            // When using the ']' indent operation, move the cursor 4 positions to the right
+            execute_command(lines_editor_state, Command::MoveRight(4))?;
+
             build_windowmap_nowrap(lines_editor_state, &edit_file_path)?;
             Ok(true)
         }
@@ -14150,7 +14474,7 @@ pub fn execute_command(lines_editor_state: &mut EditorState, command: Command) -
         Command::SaveAs(save_as_path) => {
             // Execute save-as operation
             // Note: save_as_path is PathBuf, we need &Path
-            match save_file_as_newfile_with_newname(&edit_file_path, &save_as_path) {
+            match saveas_file_as_newfile_with_newname(&edit_file_path, &save_as_path) {
                 // Success: file copied
                 Ok((FileOperationStatus::Copied, _)) => {
                     let info_message = "File Saved As.";
@@ -15184,7 +15508,7 @@ fn find_line_start(file_path: &Path, from_byte: u64) -> io::Result<u64> {
 /// - Walk back up to 3 more bytes checking for UTF-8 start byte
 /// - UTF-8 start bytes: 0b0xxxxxxx or 0b11xxxxxx
 /// - Continuation bytes: 0b10xxxxxx
-fn find_previous_utf8_boundary(file_path: &Path, cursor_byte: u64) -> io::Result<u64> {
+pub fn find_previous_utf8_boundary(file_path: &Path, cursor_byte: u64) -> io::Result<u64> {
     if cursor_byte == 0 {
         return Ok(0);
     }
@@ -15610,10 +15934,39 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
         row_col_file_pos.byte_offset_linear_file_absolute_position,
     )?;
 
-    // Step 3: Include the newline character if present
-    let delete_end = if line_end_has_newline(file_path, line_end)? {
+    // // Step 3: Include the newline character if present
+    // let delete_end = if line_end_has_newline(file_path, line_end)? {
+    //     line_end + 1
+    // } else {
+    //     line_end
+    // };
+
+    // =========================================================================
+    // Step 3: Determine deletion boundary
+    // ========================================================================
+    /*
+    If non-standard for an editor, the idea is this.
+    Deleting a line often means deleting the contents to replace it,
+    not removing the newline itself.
+    This allows both routes.
+    */
+
+    // If start == end, there are 0 text characters between them (the line is empty).
+    let is_line_empty = line_start == line_end;
+
+    let delete_end = if is_line_empty && line_end_has_newline(file_path, line_end)? {
+        // ---------------------------------------------------------------------
+        // FUNCTIONALITY A: The line is empty.
+        // We add +1 so the deletion range includes the '\n' byte,
+        // which completely removes this empty line from the file.
+        // ---------------------------------------------------------------------
         line_end + 1
     } else {
+        // ---------------------------------------------------------------------
+        // FUNCTIONALITY B: The line has content.
+        // We stop at `line_end` (before the '\n').
+        // This deletes the text from line_start..line_end, leaving '\n' intact.
+        // ---------------------------------------------------------------------
         line_end
     };
 
@@ -15801,11 +16154,10 @@ fn delete_current_line_noload(state: &mut EditorState, file_path: &Path) -> Resu
         let mut carry_over_count: usize = 0;
         let mut logging_error_count: usize = 0;
         const MAX_LOGGING_ERRORS: usize = 100;
-        const MAX_CHUNKS: usize = 16_777_216;
 
         // Logging loop (same pattern as file insertion)
         loop {
-            if logging_chunk_counter >= MAX_CHUNKS {
+            if logging_chunk_counter >= limits::MAX_CHUNKS {
                 #[cfg(debug_assertions)]
                 log_error(
                     "Logging iteration exceeded MAX_CHUNKS",
@@ -17113,7 +17465,7 @@ fn delete_byte_range_chunked(file_path: &Path, start_byte: u64, end_byte: u64) -
 
     // TODO: determining ideal default buffer & chunk size
     // Pre-allocated N-bytes buffer
-    const DBRC_CHUNK_SIZE: usize = 4;
+    const DBRC_CHUNK_SIZE: usize = 16;
     let mut buffer = [0u8; DBRC_CHUNK_SIZE];
 
     let mut source = File::open(file_path)?;
@@ -18129,7 +18481,7 @@ pub fn insert_file_at_cursor(state: &mut EditorState, source_file_path: &Path) -
     // ============================================
     // Counters and constants for the insertion loop
 
-    const IFAC_CHUNK_SIZE: usize = 8;
+    const IFAC_CHUNK_SIZE: usize = 16;
 
     let mut chunk_counter: usize = 0;
     let mut total_bytes_written: u64 = 0;
@@ -21485,7 +21837,7 @@ pub fn create_a_readcopy_of_file(
     const FILENAME_DISPLAY_SIZE: usize = 32;
 
     // Input buffer for stdin read (single digit + newline)
-    const USER_INPUT_BUFFER_SIZE: usize = 4;
+    const USER_INPUT_BUFFER_SIZE: usize = 16;
 
     // Defensive: Validate inputs
     if !original_path.exists() {
@@ -21784,22 +22136,29 @@ fn create_new_draft_copy(
 
     Ok(draft_path)
 }
-
+//
 // /// Prints help message to stdout
 // ///
 // /// # Purpose
 // /// Displays usage information and available commands.
 // /// Called when user runs `lines --help`.
 // pub fn print_help() {
+//     println!(" _ _");
+//     println!("| (_)_ __   __   __");
+//     println!("| | | '_ \\ /_ \\/ _/");
+//     println!("| | | | | |   _\\_ \\");
+//     println!("|_|_|_| |_|\\__/\\__/");
+//     println!("");
 //     println!("About Lines Editor: (note: ctrl+s can block terminal, ctrl+z unblocks)");
-//     println!("USAGE:");
+//     println!("USAGE: (When in home/dir, defaults to memo-mode");
+//     println!("    lines               # Creates memo in /Documents in append-mode");
 //     println!("    lines [FILE]");
-//     println!("    lines FILE:LINE          # Open at : specific line");
+//     println!("    lines FILE:LINE     # Open at : specific line");
 //     println!("OPTIONS:");
-//     println!("    --help, -h      Show this help message");
+//     println!("    --help,    -h   Show this help message");
 //     println!("    --version, -v   Show version information");
 //     println!("HELP MENU:");
-//     println!("    help            For a help menue with sections.)");
+//     println!("    help            Command in Normal mode, for help menue w/ sections.)");
 //     println!("QUIT & SAVE:");
 //     println!("                    If you 'quit' without saving, your work is gone.)");
 //     println!("                    If session ends without 'quit' then a backup exists.");
@@ -21823,7 +22182,7 @@ fn create_new_draft_copy(
 //     println!("    Visual Mode  'd' deletes whole selection, not surrounding spaces/items");
 //     println!("                   then the cursor returns to line start, to re-sync");
 //     println!("    Visual & Normal: delete-key: deletes a single char backspace-style");
-
+//
 //     println!("Resize-Tui: (Works with Enter-Key-to-Repeat");
 //     println!("    wide+           +1 wider");
 //     println!("    wide-           -1 wide");

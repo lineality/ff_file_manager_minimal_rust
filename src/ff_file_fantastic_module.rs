@@ -6587,32 +6587,32 @@ fn format_tui_adjustments(
     (tall_display, wide_display)
 }
 
-static LINE_COUNT_LOOKUP: OnceLock<HashMap<&'static str, ()>> = OnceLock::new();
-
-fn get_line_count_options() -> &'static HashMap<&'static str, ()> {
-    LINE_COUNT_LOOKUP.get_or_init(|| {
-        HashMap::from([
-            ("--line-count", ()),
-            ("--row-count", ()),
-            ("--line-counts", ()),
-            ("--row-counts", ()),
-            ("--linecounts", ()),
-            ("--rowcounts", ()),
-            ("--lines-count", ()),
-            ("--rows-count", ()),
-            ("--count-rows", ()),
-            ("--count-lines", ()),
-            ("--linescounts", ()),
-            ("--rowscounts", ()),
-            ("--linecount", ()),
-            ("--rowcount", ()),
-            ("--linescount", ()),
-            ("--rowscount", ()),
-            ("--countrows", ()),
-            ("--countlines", ()),
-        ])
-    })
-}
+// static LINE_COUNT_LOOKUP: OnceLock<HashMap<&'static str, ()>> = OnceLock::new();
+//
+// fn get_line_count_options() -> &'static HashMap<&'static str, ()> {
+//     LINE_COUNT_LOOKUP.get_or_init(|| {
+//         HashMap::from([
+//             ("--line-count", ()),
+//             ("--row-count", ()),
+//             ("--line-counts", ()),
+//             ("--row-counts", ()),
+//             ("--linecounts", ()),
+//             ("--rowcounts", ()),
+//             ("--lines-count", ()),
+//             ("--rows-count", ()),
+//             ("--count-rows", ()),
+//             ("--count-lines", ()),
+//             ("--linescounts", ()),
+//             ("--rowscounts", ()),
+//             ("--linecount", ()),
+//             ("--rowcount", ()),
+//             ("--linescount", ()),
+//             ("--rowscount", ()),
+//             ("--countrows", ()),
+//             ("--countlines", ()),
+//         ])
+//     })
+// }
 
 /// Processes user input and returns the corresponding NavigationAction
 ///
@@ -6696,6 +6696,7 @@ fn process_user_input(
             "m" => return Ok(NavigationAction::Sort('m')),
             "d" => return Ok(NavigationAction::Filter('d')), // Show directories only
             "f" => return Ok(NavigationAction::Filter('f')), // Show files only
+            "r" => return Ok(NavigationAction::GoToFileLineCountMode), // Show text-file line-counts
 
             "a" => return Ok(NavigationAction::ArchiveModeShortcut),
             "v" | "c" | "y" | "p" | "g" => return Ok(NavigationAction::GetSendMode),
@@ -6709,9 +6710,9 @@ fn process_user_input(
         "hsplit" | "-hsplit" => return Ok(NavigationAction::HsplitTmux),
         "--help" => return Ok(NavigationAction::GoToHelpMenuMode),
         "--source" => return Ok(NavigationAction::GoToSouceCode),
-        scurvy_curr if get_line_count_options().contains_key(scurvy_curr) => {
-            return Ok(NavigationAction::GoToFileLineCountMode);
-        }
+        // scurvy_curr if get_line_count_options().contains_key(scurvy_curr) => {
+        //     return Ok(NavigationAction::GoToFileLineCountMode);
+        // }
         _ => {}
     }
 
@@ -10025,8 +10026,10 @@ fn format_navigation_legend() -> Result<String> {
     let mut legend = String::with_capacity(300);
 
     // Build the legend string with error handling for format operations
+    //  "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}",
+
     let formatted = format!(
-        "{}{}q{}uit {}b{}ack|{}t{}erm|{}d{}ir {}f{}ile|{}n{}ame {}s{}ize {}m{}od|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>search|{}enter{}>reset{}",
+        "{}{}q{}uit {}b{}ack|{}t{}rm|{}d{}ir {}f{}ile|{}n{}ame {}s{}iz {}m{}od {}r{}ow|{}g{}et-send file {}v{},{}y{},{}p{}|{}str{}>serch|{}entr{}>reset{}",
         YELLOW, // Overall legend color
         RED,
         YELLOW, // RED q + YELLOW uit
@@ -10044,6 +10047,8 @@ fn format_navigation_legend() -> Result<String> {
         YELLOW, // RED s + YELLOW ize
         RED,
         YELLOW, // RED m + YELLOW od
+        RED,
+        YELLOW, // RED r + YELLOW ow
         RED,
         YELLOW, // RED g + YELLOW et
         RED,
@@ -14236,7 +14241,7 @@ const HELP_SECTION_QUICK_START: &str = r#"
    1. Launch ff in/to any directory
    2. Navigate TO files/directories with selection numbers
    3. Navigate backwards to parent directory with 'b'
-   4. Sort with 'n' (name), 's' (size), 'm' (modified)
+   4. Sort with 'n'(name), 's'(size), 'm'(modified), 'r'(row count)
    5. Filter with 'd' (dirs only), 'f' (files only)
    6. Search by typing a search term (and hitting enter)
    7. 'q' to quit"#;
@@ -14295,16 +14300,17 @@ const HELP_SECTION_NAVIGATION: &str = r#"
 const HELP_SECTION_SORTING_FILTERING: &str = r#"
  ═══ SORTING & FILTERING ═══    Press Enter to return to help menu...
 
-One thing that makes raw terminal 'ls' tricky is when there are a
-lot of items and you are looking for... the most recent, or want to
-see only files. With ff you can have these file-manager features
-in your native terminal. Getting a reverse 'modified' 'size' 'name'
-sort is easy: toggle! (And use --count-rows to view/sort data-lines!)
+Raw terminal 'ls' is tricky is when you are looking for the most recent,
+or want to see only, files. With ff you can have these file-manager
+features in a terminal. Getting a reverse 'modified' 'size' 'name sort
+is easy: toggle! (Same for Row/line count mode for plaintext files)
 
- SORTING COMMANDS:       [row-count: (n)ame sort, (c)ount sort)]
+ SORTING COMMANDS:
    n                     Sort by name (toggle ascending/descending)
    s                     Sort by size (toggle ascending/descending)
    m                     Sort by last-modified date-time (toggle asc/desc)
+   r                     Sort by row/line count: (n)ame, (c)ount, (h)eader
+                         'header' row included/excluded (plain text only)
 
  FILTERING COMMANDS:     [row-count: (h) to remove headers from counts]
    d                     Show only directories
