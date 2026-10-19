@@ -655,6 +655,7 @@ pub fn buffy_print(template: &str, args: &[BuffyFormatArg]) -> io::Result<()> {
                         })?;
                         (s, false, BuffyStyles::default())
                     }
+                    //
                     // // BuffyFormatArg::I8(n) => {
                     // //     let s = format_i64_to_buffer(*n as i64, &mut num_buf).ok_or_else(|| {
                     // //         io::Error::new(io::ErrorKind::Other, "Number conversion failed")
@@ -1564,6 +1565,14 @@ pub fn buffy_get_syntax_highlight(byte_pos: usize, row_content: &str) -> SyntaxH
         "match ", //
         "if ",    //
         "loop ",  //
+        // Odin & Zig
+        "switch ",
+        "or_return ",
+        "or_else ",
+        "defer ",
+        "errdefer ",
+        "using ",
+        "var ",
     ];
 
     // Slice the row content from the current byte position forward.
@@ -1592,7 +1601,7 @@ pub fn buffy_get_syntax_highlight(byte_pos: usize, row_content: &str) -> SyntaxH
     // -------------------------------------------------------------------------
     const SYNTAX_SYMBOLS: &[char] = &[
         '(', ')', '[', ']', '{', '}', '<', '>', '=', ':', ';', '\\', '&', '!', '#', '/', '*', ',',
-        '`',
+        '`', '.', '=', '^',
     ];
     // maybe/maybe-not: ", '
 
