@@ -10433,7 +10433,7 @@ fn display_directory_contents(
         } else {
             // Show size info even when only one page
             println!(
-                "\x1b[1m{}--- (Re)Size: {} {} ---   See files' row counts using:  --row-counts{}",
+                "\x1b[1m{}(Re)Size: {} {}    See files' row counts: r    Help: --help{}",
                 YELLOW, tall_display, wide_display, RESET
             );
         }
